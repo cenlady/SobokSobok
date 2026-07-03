@@ -1,0 +1,28 @@
+# IDE / Editor
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Virtual environments (루트에 생성할 경우를 대비)
+.venv/
+venv/
+env/
+.env/
+
+# Python cache (루트에서 스크립트 실행 시 대비)
+__pycache__/
+*.py[cod]
+
+# Logs
+*.log
+logs/
+

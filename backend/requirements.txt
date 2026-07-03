@@ -1,0 +1,41 @@
+# ============================================================
+#  requirements.txt
+#  설치: pip install -r requirements.txt
+# ============================================================
+
+# ── LLM 연동 ──────────────────────────────────────────────────
+openai                   # OpenAI GPT 모델
+google-genai         # Gemini 2.5 Flash (google-generativeai 대체)
+ollama                   # Ollama llama3.2 (로컬)
+python-dotenv       # .env 파일 로드
+
+# ── 웹 프레임워크 ──────────────────────────────────────────────
+fastapi
+uvicorn[standard]   # 핫리로드(watchfiles) + websockets 포함
+streamlit
+httpx                      # 비동기 HTTP 클라이언트 (SSE 수신)
+sqlmodel
+
+# ── RAG / 벡터 DB ─────────────────────────────────────────────
+psycopg2-binary
+pgvector                 # pgvector 파이썬 어댑터
+
+# ── MCP ───────────────────────────────────────────────────────
+mcp               # FastMCP + Streamable HTTP
+
+# ── Jupyter / Notebook ────────────────────────────────────────
+jupyter
+ipykernel                # VS Code Notebook 커널
+nbformat
+
+# ── 테스트 ────────────────────────────────────────────────────
+pytest
+pytest-asyncio
+pydantic                 # FastAPI 데이터 검증
+pydantic-settings        # .env 환경 변수 설정 로드
+
+
+# ── 유틸리티 ──────────────────────────────────────────────────
+pytz                     # 시간대 처리 (time_tool.py 예제)
+
+
