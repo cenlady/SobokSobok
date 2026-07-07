@@ -15,7 +15,7 @@ backend/   FastAPI + PostgreSQL + Docker crawler
 
 ```text
 api      FastAPI 백엔드 서버
-crawler  소상공인24 주기 크롤러
+crawler  소상공인24/SEMAS 주기 크롤러
 db       PostgreSQL + pgvector 데이터베이스, 호스트 포트 5431
 ```
 
@@ -70,6 +70,8 @@ DB_USER=edu
 DB_PASSWORD=<개인/팀 DB 비밀번호>
 LOCAL_DB_PORT=5431
 CRAWL_INTERVAL_SECONDS=86400
+SEMAS_SEED_URL=https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc
+SEMAS_REQUEST_DELAY_SECONDS=1.0
 ```
 
 `DB_HOST=db`는 `api`, `crawler` 컨테이너가 같은 Compose 네트워크 안의 `db` 서비스로 접속한다는 뜻입니다. DBeaver처럼 호스트 PC에서 접속할 때는 `localhost:5431`을 사용합니다.
@@ -135,9 +137,15 @@ http://localhost:8000/api/v1/policies/{pbanc_sn}
 http://localhost:8000/api/v1/policies/791
 ```
 
+SEMAS 지원사업 안내 페이지 API:
+
+```text
+http://localhost:8000/api/v1/policies/program-pages/?limit=10
+```
+
 ## 크롤러 실행
 
-`crawler` 서비스는 컨테이너가 실행되면 바로 1회 크롤링하고, 이후 하루에 한 번 반복 실행합니다.
+`crawler` 서비스는 컨테이너가 실행되면 바로 1회 크롤링하고, 이후 하루에 한 번 소상공인24 공고와 SEMAS 지원사업 안내 페이지를 함께 반복 수집합니다.
 
 주기 설정:
 
@@ -148,7 +156,14 @@ CRAWL_INTERVAL_SECONDS=86400
 크롤러만 1회 테스트:
 
 ```powershell
+# 소상공인24 공고
 docker compose run --rm crawler python -m app.jobs.crawl_sbiz24_once
+
+# SEMAS 지원사업 안내 페이지
+docker compose run --rm crawler python -m app.jobs.crawl_semas_once
+
+# 소상공인24와 SEMAS를 모두 실행하는 주기 크롤러 모듈
+docker compose run --rm crawler python -m app.jobs.crawl_policy_sources_loop
 ```
 
 크롤러 주기 실행 시작:
@@ -165,7 +180,7 @@ docker compose logs -f crawler
 
 ## 수집 대상
 
-소상공인24 통합공고 목록에서 아래 조건을 사용합니다.
+소상공인24 통합공고 목록은 아래 조건을 사용합니다.
 
 ```text
 지원대상: 소상공인
@@ -173,11 +188,14 @@ docker compose logs -f crawler
 신청가능: Y
 ```
 
+SEMAS는 `SEMAS_SEED_URL` 페이지에서 `/web/SUP01/...kmdc` 지원사업 링크를 모아 각 안내 페이지의 본문을 저장합니다.
+
 수집 데이터:
 
 ```text
 policy_announcements  공고 목록/상세 본문/원본 JSON/content_hash
 policy_attachments    첨부파일 메타데이터/저장 경로/file_hash
+policy_program_pages  SEMAS 지원사업 안내 페이지 본문/섹션/content_hash
 ```
 
 첨부파일은 DB에 bytes로 저장하지 않고, 디스크에 저장한 뒤 DB에는 경로와 해시만 저장합니다.
@@ -210,6 +228,7 @@ soboksobok
 -> Tables
 -> policy_announcements
 -> policy_attachments
+-> policy_program_pages
 ```
 
 확인용 SQL:
@@ -217,6 +236,7 @@ soboksobok
 ```sql
 SELECT COUNT(*) FROM policy_announcements;
 SELECT COUNT(*) FROM policy_attachments;
+SELECT COUNT(*) FROM policy_program_pages;
 
 SELECT pbanc_sn, title, apply_end, status, last_seen_at
 FROM policy_announcements
@@ -224,6 +244,12 @@ ORDER BY last_seen_at DESC
 LIMIT 10;
 ```
 
+```sql
+SELECT id, category, program_name, source_url, last_seen_at
+FROM policy_program_pages
+ORDER BY last_seen_at DESC
+LIMIT 10;
+```
 기존 `edupgvector` 컨테이너가 켜져 있어도 이 프로젝트는 `soboksobok_db`를 사용합니다. 기존 DB 컨테이너가 필요 없다면 Docker Desktop에서 별도로 중지해도 됩니다.
 
 DBeaver에서 테이블이 보이지 않으면 먼저 컨테이너 상태를 확인합니다.
