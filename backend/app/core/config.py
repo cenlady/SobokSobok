@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     SBIZ24_REQUEST_DELAY_SECONDS: float = 1.0
     SEMAS_SEED_URL: str = "https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc"
     SEMAS_REQUEST_DELAY_SECONDS: float = 1.0
+    GOV24_BASE_URL: str = "https://api.odcloud.kr/api"
+    GOV24_SERVICE_KEY: str | None = None
+    GOV24_SERVICE_LIST_USER_TYPE_LIKE: str | None = "소상공인"
+    GOV24_PAGE_START: int = 1
+    GOV24_PAGE_SIZE: int = 100
+    GOV24_MAX_PAGES: int = 200
+    GOV24_REQUEST_DELAY_SECONDS: float = 0.2
+    GOV24_ADVISORY_LOCK_ID: int = 2026070603
     ATTACHMENT_DIR: str = "./storage/attachments"
     CRAWLER_ADVISORY_LOCK_ID: int = 2026070601
     SEMAS_CRAWLER_ADVISORY_LOCK_ID: int = 2026070602
