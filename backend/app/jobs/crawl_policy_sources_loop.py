@@ -3,6 +3,7 @@ import time
 import traceback
 
 from app.core.config import settings
+from app.services.gov24_ingest import crawl_gov24_once
 from app.services.policy_ingest import crawl_sbiz24_once
 from app.services.semas_ingest import crawl_semas_program_pages_once
 
@@ -27,6 +28,8 @@ def _run_all_jobs() -> None:
         ("sbiz24", crawl_sbiz24_once),
         ("semas", crawl_semas_program_pages_once),
     ]
+    if settings.GOV24_SERVICE_KEY:
+        jobs.append(("gov24", crawl_gov24_once))
     for name, job in jobs:
         try:
             stats = job()
