@@ -5,13 +5,14 @@ from app.core.config import settings
 
 # For sqlite compatibility: connect_args={"check_same_thread": False} is required only for SQLite.
 connect_args = {}
-if settings.DATABASE_URL.startswith("sqlite"):
+database_url = settings.database_url
+if database_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    database_url,
     connect_args=connect_args,
-    echo=True  # Logs SQL queries for debugging
+    echo=settings.SQL_ECHO,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

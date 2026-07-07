@@ -1,106 +1,372 @@
-# 🍲 soboksobok Backend API Service
+# SobokSobok Backend
 
-FastAPI 기반의 **soboksobok** 백엔드 서비스입니다.  
-프로젝트 클론 후 로컬 개발 환경을 구축하고 실행하는 방법은 아래 가이드를 참고하세요.
+FastAPI 기반 백엔드입니다. 현재 백엔드는 정책 조회 API, 소상공인24 공고 크롤러, SEMAS 지원사업 안내 페이지 크롤러를 포함합니다.
 
----
+## 주요 구성
 
-## 🛠️ 개발 환경 요구사항
-* **Python** (버전 3.11 이상)
-* **Docker** 및 **Docker Compose** (PostgreSQL 데이터베이스 실행용)
-* **Anaconda (Conda)** 또는 **virtualenv** (가상환경 관리용)
-
----
-
-## 🚀 빠른 시작 가이드 (Quick Start)
-
-### 1. 로컬 PostgreSQL 데이터베이스 실행 (Docker)
-로컬 PC에 데이터베이스를 별도로 설치할 필요 없이 Docker Compose를 통해 띄울 수 있습니다.  
-프로젝트 루트 디렉토리(`SobokSobok/`)에서 다음 명령어를 실행합니다.
-
-```bash
-# Docker 컨테이너를 백그라운드에서 실행
-docker compose up -d
-```
-> [!NOTE]
-> 데이터베이스가 정상적으로 켜졌는지 확인하려면 `docker ps` 명령어를 입력해 보세요.
-
----
-
-### 2. 가상환경 설정 및 패키지 설치 (Anaconda 기준)
-백엔드 디렉토리(`backend/`)로 이동한 후, 독립된 가상환경을 생성하고 패키지들을 설치합니다.
-
-```bash
-# 백엔드 디렉토리로 이동
-cd backend
-
-# Python 3.11 기반의 Conda 가상환경 생성 (최초 1회)
-conda create -n soboksobok python=3.11 -y
-
-# 가상환경 활성화
-conda activate soboksobok
-
-# 필요한 패키지 일괄 설치
-pip install -r requirements.txt
+```text
+FastAPI                API 서버
+SQLAlchemy             PostgreSQL 연결/모델
+PostgreSQL             정책 공고/첨부파일 메타데이터 저장
+Docker crawler service 소상공인24/SEMAS 주기 크롤링
 ```
 
----
+## DB 연결 방식
 
-### 3. 환경 변수 설정 (`.env`)
-개발에 필요한 설정을 적용하기 위해 환경 변수 파일을 생성합니다.  
-`backend/` 폴더 내의 `.env.example` 복사본을 만들어 `.env` 파일로 사용합니다.
+기본 Docker 실행은 Compose 안의 `soboksobok_db` PostgreSQL + pgvector 컨테이너를 사용합니다. 호스트 PC에는 `5431` 포트로 노출됩니다.
 
-```bash
-# Windows (PowerShell)
+Docker 컨테이너 내부에서는 Compose 서비스 이름인 `db`로 접속합니다.
+
+```env
+DB_HOST="db"
+DB_PORT="5432"
+DB_NAME="soboksobok"
+DB_USER="edu"
+DB_PASSWORD="<개인/팀 DB 비밀번호>"
+```
+
+로컬 Python 실행에서는 호스트 포트로 노출된 compose DB에 접속합니다.
+
+```env
+DB_HOST="localhost"
+DB_PORT="5431"
+DB_NAME="soboksobok"
+DB_USER="edu"
+DB_PASSWORD="<개인/팀 DB 비밀번호>"
+```
+
+`DATABASE_URL`을 직접 설정하면 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`보다 우선합니다.
+
+```env
+DATABASE_URL="postgresql://edu:<password>@localhost:5431/soboksobok"
+```
+
+## 민감정보 관리
+
+실제 비밀번호와 시크릿은 Git에 커밋하지 않습니다.
+
+Docker Compose 실행용 환경변수는 프로젝트 루트의 `.env`에서 관리합니다.
+
+```powershell
+cd C:\education\SobokSobok
 Copy-Item .env.example .env
-
-# Mac / Linux
-cp .env.example .env
 ```
 
-* **`.env` 파일 기본 내용:**
-  ```ini
-  PROJECT_NAME="soboksobok"
-  API_V1_STR="/api/v1"
-  SECRET_KEY="super-secret-key-change-me-in-production"
-  DATABASE_URL="postgresql://postgres:postgrespassword@localhost:5432/soboksobok"
-  ```
-  *(로컬 Docker PostgreSQL 정보와 자동으로 일치하게 설정되어 있습니다.)*
+로컬 Python 실행용 환경변수는 `backend/.env`에서 관리할 수 있습니다.
 
----
+```powershell
+cd C:\education\SobokSobok\backend
+Copy-Item .env.example .env
+```
 
-### 4. 백엔드 서버 실행
-가상환경이 활성화된 상태에서 Uvicorn 개발 서버를 구동합니다.
+Docker Compose로 실행할 때는 프로젝트 루트의 `.env`가 기준입니다. `backend/.env`는 `uvicorn app.main:app --reload`처럼 백엔드를 로컬 Python으로 직접 실행할 때 사용합니다.
 
-```bash
-# 핫 리로드(Hot-reload) 모드로 서버 실행
+## Docker 실행
+
+프로젝트 루트에서 실행합니다.
+
+```powershell
+cd C:\education\SobokSobok
+docker compose up -d --build
+```
+
+상태 확인:
+
+```powershell
+docker compose ps
+```
+
+API 로그:
+
+```powershell
+docker compose logs -f api
+```
+
+크롤러 로그:
+
+```powershell
+docker compose logs -f crawler
+```
+
+종료:
+
+```powershell
+docker compose down
+```
+
+DB 볼륨까지 지우고 새 데이터베이스로 다시 시작:
+
+```powershell
+docker compose down -v --remove-orphans
+docker compose up -d --build
+```
+
+## 로컬 Python 실행
+
+백엔드 디렉토리에서 실행합니다.
+
+```powershell
+cd C:\education\SobokSobok\backend
+Copy-Item .env.example .env
+pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
-서버가 성공적으로 구동되면 터미널에 `INFO: Uvicorn running on http://127.0.0.1:8000` 문구가 출력됩니다.
 
----
+API 문서:
 
-## 📖 API 문서 확인 및 테스트
-FastAPI에서 기본적으로 제공하는 대화형 API 문서를 통해 API를 직접 호출하고 테스트해 볼 수 있습니다.
+```text
+http://localhost:8000/docs
+```
 
-* **Swagger UI:** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-* **ReDoc UI:** [http://127.0.0.1:8000/redoc](http://127.0.0.1:8000/redoc)
+## 크롤러
 
----
+크롤러 컨테이너는 같은 주기 안에서 소상공인24 공고와 SEMAS 지원사업 안내 페이지를 함께 수집합니다.
 
-## 📂 디렉토리 구조 설명
+```text
+CRAWL_INTERVAL_SECONDS=86400
+```
+
+즉 컨테이너가 켜지면 바로 1회 실행하고, 이후 하루에 한 번 반복 실행합니다.
+
+주기 실행 entrypoint:
+
+```text
+app.jobs.crawl_policy_sources_loop
+```
+
+1회 실행 entrypoint:
+
+```text
+app.jobs.crawl_sbiz24_once
+app.jobs.crawl_semas_once
+```
+
+소상공인24 1회 테스트:
+
+```powershell
+docker compose run --rm crawler python -m app.jobs.crawl_sbiz24_once
+```
+
+SEMAS 1회 테스트:
+
+```powershell
+docker compose run --rm crawler python -m app.jobs.crawl_semas_once
+```
+
+### 소상공인24 수집 조건
+
+```text
+지원대상: 소상공인
+분류: 공단지원사업
+신청가능: Y
+```
+
+### SEMAS 수집 방식
+
+SEMAS는 공고 API가 아니라 공단 홈페이지의 지원사업 안내 HTML 페이지를 수집합니다.
+
+기본 seed URL:
+
+```text
+https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc
+```
+
+seed 페이지에서 `/web/SUP01/...kmdc` 형태의 지원사업 링크를 모아 각 페이지의 본문(`div.contents`)을 저장합니다.
+
+## 중복 방지
+
+공고는 `pbanc_sn`을 기준으로 중복 저장을 막습니다.
+
+```text
+policy_announcements.pbanc_sn
+```
+
+첨부파일은 `file_id`를 기준으로 중복 저장을 막습니다.
+
+```text
+policy_attachments.file_id
+```
+
+본문 변경 여부는 `content_hash`로 추적합니다. 크롤러가 같은 공고를 다시 만나면 `pbanc_sn` 기준으로 기존 row를 갱신하고, 같은 첨부파일은 `file_id` 기준으로 재다운로드하지 않습니다.
+
+SEMAS 지원사업 안내 페이지는 `source_url`을 기준으로 중복 저장을 막습니다.
+
+```text
+policy_program_pages.source_url
+```
+
+## 저장 테이블
+
+```text
+policy_announcements
+- pbanc_sn
+- title
+- target
+- category
+- organization
+- apply_start
+- apply_end
+- status
+- detail_url
+- content_html
+- content_text
+- raw_list_json
+- raw_detail_json
+- content_hash
+- first_seen_at
+- last_seen_at
+- is_active
+
+policy_attachments
+- file_id
+- pbanc_sn
+- file_name
+- file_size
+- saved_path
+- file_hash
+- raw_file_json
+- created_at
+- downloaded_at
+```
+
+```text
+policy_program_pages
+- id
+- source
+- source_url
+- category
+- program_name
+- content_html
+- content_text
+- sections_json
+- raw_breadcrumbs_json
+- content_hash
+- first_seen_at
+- last_seen_at
+- is_active
+```
+
+첨부파일 실제 저장 위치:
+
+```text
+backend/storage/attachments/{pbanc_sn}/
+```
+
+첨부파일 bytes는 DB에 직접 넣지 않습니다. DB에는 `saved_path`, `file_hash`, 파일 메타데이터만 저장합니다.
+
+## 정책 API
+
+목록:
+
+```text
+GET /api/v1/policies/
+```
+
+상세:
+
+```text
+GET /api/v1/policies/{pbanc_sn}
+```
+
+SEMAS 지원사업 안내 페이지 목록:
+
+```text
+GET /api/v1/policies/program-pages/
+```
+
+상세는 `GET /api/v1/policies/program-pages/{page_id}`로 조회합니다.
+
+브라우저 예시:
+
+```text
+http://localhost:8000/api/v1/policies/?limit=10
+http://localhost:8000/api/v1/policies/791
+http://localhost:8000/api/v1/policies/program-pages/?limit=10
+```
+
+## 파일 구조
+
 ```text
 backend/
-├── app/
-│   ├── api/           # API 엔드포인트 및 라우터 설정 폴더
-│   │   ├── v1/        # v1 버전 API (auth.py, users.py)
-│   │   └── api.py     # 모든 라우터를 병합하는 파일
-│   ├── core/          # 데이터베이스 세션, 설정(Config) 등 핵심 공통 로직
-│   ├── models/        # DB 테이블 엔티티 클래스 정의 폴더
-│   ├── schemas/       # Pydantic 모델 (Request/Response DTO) 폴더
-│   ├── crud/          # DB CRUD 처리 파일 폴더
-│   └── main.py        # FastAPI 앱 생성 및 실행 엔트리포인트
-├── requirements.txt   # 백엔드 의존성 패키지 관리 파일
-├── .env               # 로컬 개발 환경 변수 (Git 무시됨)
-└── .env.example       # 팀 협업용 환경 변수 샘플 파일
+├── Dockerfile
+├── requirements.txt
+├── .env.example
+└── app/
+    ├── api/
+    │   ├── api.py
+    │   └── v1/
+    │       └── policies.py
+    ├── core/
+    │   ├── config.py
+    │   └── database.py
+    ├── crawlers/
+    │   ├── sbiz24_client.py
+    │   └── semas_client.py
+    ├── crud/
+    │   └── policy.py
+    ├── jobs/
+    │   ├── crawl_sbiz24_once.py
+    │   ├── crawl_policy_sources_loop.py
+    │   └── crawl_semas_once.py
+    ├── models/
+    │   └── policy.py
+    ├── schemas/
+    │   └── policy.py
+    ├── services/
+    │   ├── policy_ingest.py
+    │   └── semas_ingest.py
+    └── main.py
 ```
+
+## DBeaver에서 확인
+
+compose DB는 아래 설정으로 확인합니다.
+
+```text
+Host: localhost
+Port: 5431
+Database: soboksobok
+Username: edu
+Password: .env의 DB_PASSWORD 값
+```
+
+테이블 위치:
+
+```text
+soboksobok
+-> Schemas
+-> public
+-> Tables
+-> policy_announcements
+-> policy_attachments
+-> policy_program_pages
+```
+
+확인 SQL:
+
+```sql
+SELECT COUNT(*) FROM policy_announcements;
+SELECT COUNT(*) FROM policy_attachments;
+SELECT COUNT(*) FROM policy_program_pages;
+```
+
+`localhost:5431`은 compose의 `soboksobok_db` 컨테이너 내부 5432 포트에 매핑됩니다.
+
+연결이 실패하면 먼저 Docker 상태를 확인합니다.
+
+```powershell
+cd C:\education\SobokSobok
+docker compose ps
+```
+
+`soboksobok_db`가 실행 중이고 `0.0.0.0:5431->5432/tcp` 포트 매핑이 보여야 합니다. 테이블은 FastAPI 서버 시작 시 `Base.metadata.create_all(bind=engine)`로 생성됩니다.
+
+수집 데이터가 비어 있으면 필요한 출처별로 크롤러를 한 번 실행합니다.
+
+```powershell
+docker compose run --rm crawler python -m app.jobs.crawl_sbiz24_once
+docker compose run --rm crawler python -m app.jobs.crawl_semas_once
+docker compose run --rm crawler python -m app.jobs.crawl_policy_sources_loop
+```
+
+현재 DB 이미지는 pgvector를 지원하지만, 임베딩/벡터 검색용 테이블과 `CREATE EXTENSION vector` 적용은 아직 크롤러 저장 로직과 별도 단계입니다.

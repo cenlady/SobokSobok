@@ -1,18 +1,66 @@
-version: '3.8'
-
 services:
   db:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: soboksobok_db
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: soboksobok
+      POSTGRES_USER: ${DB_USER:-edu}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      POSTGRES_DB: ${DB_NAME:-soboksobok}
     ports:
-      - "5432:5432"
+      - "${LOCAL_DB_PORT:-5431}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    container_name: soboksobok_api
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-soboksobok}
+      DB_USER: ${DB_USER:-edu}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      ATTACHMENT_DIR: ${ATTACHMENT_DIR:-/app/storage/attachments}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+
+  crawler:
+    build:
+      context: ./backend
+    container_name: soboksobok_crawler
+    restart: unless-stopped
+    command: python -m app.jobs.crawl_policy_sources_loop
+    environment:
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-soboksobok}
+      DB_USER: ${DB_USER:-edu}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      CRAWL_INTERVAL_SECONDS: ${CRAWL_INTERVAL_SECONDS:-86400}
+      SBIZ24_PAGE_SIZE: ${SBIZ24_PAGE_SIZE:-100}
+      SBIZ24_REQUEST_DELAY_SECONDS: ${SBIZ24_REQUEST_DELAY_SECONDS:-1.0}
+      SEMAS_SEED_URL: ${SEMAS_SEED_URL:-https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc}
+      SEMAS_REQUEST_DELAY_SECONDS: ${SEMAS_REQUEST_DELAY_SECONDS:-1.0}
+      ATTACHMENT_DIR: ${ATTACHMENT_DIR:-/app/storage/attachments}
+    volumes:
+      - ./backend/storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   postgres_data:

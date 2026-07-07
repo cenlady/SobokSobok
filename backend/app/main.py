@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.database import Base, engine
 from app.api.api import api_router
+from app import models  # noqa: F401
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -22,6 +25,12 @@ if settings.BACKEND_CORS_ORIGINS:
 
 # 라우터 연결
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+
+@app.on_event("startup")
+def create_tables() -> None:
+    Base.metadata.create_all(bind=engine)
+
 
 @app.get("/", tags=["Root"])
 def root():
