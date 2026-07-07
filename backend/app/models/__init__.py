@@ -1,3 +1,3 @@
 # models package initialization
 
-from app.models.policy import PolicyAnnouncement, PolicyAttachment  # noqa: F401
+from app.models.policy import PolicyAnnouncement, PolicyAttachment, PolicyProgramPage  # noqa: F401

@@ -18,8 +18,11 @@ class Settings(BaseSettings):
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     SBIZ24_PAGE_SIZE: int = 100
     SBIZ24_REQUEST_DELAY_SECONDS: float = 1.0
+    SEMAS_SEED_URL: str = "https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc"
+    SEMAS_REQUEST_DELAY_SECONDS: float = 1.0
     ATTACHMENT_DIR: str = "./storage/attachments"
     CRAWLER_ADVISORY_LOCK_ID: int = 2026070601
+    SEMAS_CRAWLER_ADVISORY_LOCK_ID: int = 2026070602
 
     # CORS Origins
     BACKEND_CORS_ORIGINS: List[str] = [

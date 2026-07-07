@@ -29,6 +29,24 @@ class PolicyAnnouncementRead(BaseModel):
     content_hash: str
 
 
+class PolicyProgramPageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source: str
+    source_url: str
+    category: str | None = None
+    program_name: str
+    content_text: str | None = None
+    content_hash: str
+
+
+class PolicyProgramPageDetailRead(PolicyProgramPageRead):
+    content_html: str | None = None
+    sections_json: list[dict[str, str]] | None = None
+    raw_breadcrumbs_json: list[str] | None = None
+
+
 class PolicyAnnouncementDetailRead(PolicyAnnouncementRead):
     content_html: str | None = None
     attachments: list[PolicyAttachmentRead] = []

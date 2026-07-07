@@ -85,3 +85,30 @@ class PolicyAttachment(Base):
         "PolicyAnnouncement",
         back_populates="attachments",
     )
+
+
+class PolicyProgramPage(Base):
+    __tablename__ = "policy_program_pages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(50), nullable=False, default="semas", index=True)
+    source_url = Column(String(1000), nullable=False, unique=True, index=True)
+    category = Column(String(300), nullable=True, index=True)
+    program_name = Column(String(500), nullable=False, index=True)
+    content_html = Column(Text, nullable=True)
+    content_text = Column(Text, nullable=True)
+    sections_json = Column(JSON, nullable=True)
+    raw_breadcrumbs_json = Column(JSON, nullable=True)
+    content_hash = Column(String(64), nullable=False, index=True)
+    first_seen_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    last_seen_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    is_active = Column(Boolean, nullable=False, default=True)
