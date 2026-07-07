@@ -16,6 +16,8 @@ desktop.ini
 .venv/
 venv/
 env/
+.env
+backend/.env
 .env/
 
 # Python cache (루트에서 스크립트 실행 시 대비)
@@ -25,4 +27,8 @@ __pycache__/
 # Logs
 *.log
 logs/
+
+
+# Runtime storage
+backend/storage/
 
