@@ -32,3 +32,6 @@ logs/
 # Runtime storage
 backend/storage/
 
+# Frontend build cache
+.vite/
+
