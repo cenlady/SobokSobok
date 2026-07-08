@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint, Index
+from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint, Index, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -43,8 +43,8 @@ class NormalizedPolicy(Base):
     source_content_hash = Column(Text, nullable=True, comment="원본 데이터 해시")
     normalized_hash = Column(Text, nullable=True, comment="정규화 가공 데이터 해시")
     is_active = Column(Boolean, nullable=False, default=True, index=True, comment="노출 활성화 여부")
-    created_at = Column(DateTime, nullable=False, comment="생성일시")
-    updated_at = Column(DateTime, nullable=False, comment="수정일시")
+    created_at = Column(DateTime, nullable=False, server_default=func.now(), comment="생성일시")
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now(), comment="수정일시")
 
     __table_args__ = (
         UniqueConstraint("source", "source_pk", name="uk_normalized_policies_source"),
@@ -74,7 +74,7 @@ class AttachmentFile(Base):
     file_size = Column(BigInteger, nullable=True, comment="파일 크기 (Byte 단위)")
     extracted_text = Column(Text, nullable=True, comment="OCR 또는 텍스트 파서를 통해 추출된 파일 내용")
     extraction_status = Column(String(30), nullable=False, default="pending", comment="텍스트 추출 상태 (pending, success, failed)")
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     # Relationships
     policy_links = relationship("PolicyAttachmentLink", back_populates="file", cascade="all, delete-orphan")
@@ -93,7 +93,7 @@ class PolicyAttachmentLink(Base):
     source_file_id = Column(Text, nullable=True, comment="크롤링 소스 사이트 기준의 첨부파일 고유 키")
     original_file_name = Column(Text, nullable=True, comment="원본파일명")
     display_order = Column(Integer, nullable=False, default=0, comment="사용자 화면 노출 정렬 순서")
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("policy_id", "attachment_file_id", name="uk_policy_attachment_links"),
@@ -119,7 +119,7 @@ class PolicyDocument(Base):
     title = Column(Text, nullable=True, comment="해당 요건 문서 제목")
     text = Column(Text, nullable=False, comment="분할 요건 텍스트 원문")
     text_hash = Column(Text, nullable=False, comment="요건 텍스트 해시")
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("policy_id", "document_type", "text_hash", name="uk_policy_documents_hash"),

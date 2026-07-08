@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     DB_USER: str = "edu"
     DB_PASSWORD: str = ""
     SQL_ECHO: bool = False
-    
+
+    # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
+    # 예: OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
+    EMBEDDING_DIM: int = 1536
+
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     SBIZ24_PAGE_SIZE: int = 100
     SBIZ24_REQUEST_DELAY_SECONDS: float = 1.0

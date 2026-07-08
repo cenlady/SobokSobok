@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
+from app.core.config import settings
 from app.core.database import Base
 
 class ReviewVector(Base):
@@ -18,8 +19,8 @@ class ReviewVector(Base):
     policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, comment="정규화 공고 ID 참조")
     document_name = Column(String(255), nullable=False, comment="대조 대상 필수 구비 서류 명칭")
     
-    # pgvector 1536 차원 벡터 정의 (기본값)
-    embedding = Column(Vector(1536), nullable=False, comment="[pgvector] 1536차원 요건 대조 임베딩 벡터값")
+    # pgvector 임베딩 벡터 (차원은 settings.EMBEDDING_DIM으로 관리)
+    embedding = Column(Vector(settings.EMBEDDING_DIM), nullable=False, comment="[pgvector] 요건 대조 임베딩 벡터값")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

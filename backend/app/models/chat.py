@@ -1,9 +1,10 @@
 import uuid
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 
+from app.core.config import settings
 from app.core.database import Base
 
 class PolicyChunk(Base):
@@ -25,10 +26,10 @@ class PolicyChunk(Base):
     embedding_status = Column(String(30), nullable=False, default="pending", comment="임베딩 처리 상태 (pending, success, failed)")
     embedding_model = Column(Text, nullable=True, comment="임베딩에 사용한 인공지능 모델명")
     
-    # pgvector 1536 차원 벡터 정의 (기본값)
-    embedding = Column(Vector(1536), nullable=True, comment="[pgvector] 1536차원 청크 임베딩 벡터값")
+    # pgvector 임베딩 벡터 (차원은 settings.EMBEDDING_DIM으로 관리)
+    embedding = Column(Vector(settings.EMBEDDING_DIM), nullable=True, comment="[pgvector] 청크 임베딩 벡터값")
     
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
 
     __table_args__ = (
         UniqueConstraint("document_id", "chunk_hash", name="uk_policy_chunks_hash"),
