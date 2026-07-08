@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint
+from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -18,7 +18,7 @@ class NormalizedPolicy(Base):
     source = Column(String(30), nullable=False, comment="원천 사이트 분류 ('sojinong' | 'mois-openapi' 등)")
     source_pk = Column(String(200), nullable=False, comment="원천 사이트의 고유 키 (예: pbanc_sn 등)")
     canonical_key = Column(Text, nullable=False, comment="정책 식별용 표준 키")
-    duplicate_group_key = Column(Text, nullable=False, comment="중복 정책 그룹 바인딩 키")
+    duplicate_group_key = Column(Text, nullable=False, index=True, comment="중복 정책 그룹 바인딩 키")
     title = Column(Text, nullable=False, comment="지원사업명 (제목)")
     summary = Column(Text, nullable=True, comment="지원내용 한줄 요약")
     body = Column(Text, nullable=True, comment="지원내용 상세 본문 (임베딩 대상 원문)")
@@ -42,12 +42,14 @@ class NormalizedPolicy(Base):
     
     source_content_hash = Column(Text, nullable=True, comment="원본 데이터 해시")
     normalized_hash = Column(Text, nullable=True, comment="정규화 가공 데이터 해시")
-    is_active = Column(Boolean, nullable=False, default=True, comment="노출 활성화 여부")
+    is_active = Column(Boolean, nullable=False, default=True, index=True, comment="노출 활성화 여부")
     created_at = Column(DateTime, nullable=False, comment="생성일시")
     updated_at = Column(DateTime, nullable=False, comment="수정일시")
 
     __table_args__ = (
         UniqueConstraint("source", "source_pk", name="uk_normalized_policies_source"),
+        Index("idx_normalized_policies_region", "region_scope", "sido", "sigungu"),
+        Index("idx_normalized_policies_status_dates", "status", "apply_start", "apply_end"),
     )
 
     # Relationships
@@ -86,8 +88,8 @@ class PolicyAttachmentLink(Base):
     __tablename__ = "policy_attachment_links"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, comment="정규화 공고 UUID 참조")
-    attachment_file_id = Column(UUID(as_uuid=True), ForeignKey("attachment_files.id", ondelete="CASCADE"), nullable=False, comment="첨부파일 UUID 참조")
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, index=True, comment="정규화 공고 UUID 참조")
+    attachment_file_id = Column(UUID(as_uuid=True), ForeignKey("attachment_files.id", ondelete="CASCADE"), nullable=False, index=True, comment="첨부파일 UUID 참조")
     source_file_id = Column(Text, nullable=True, comment="크롤링 소스 사이트 기준의 첨부파일 고유 키")
     original_file_name = Column(Text, nullable=True, comment="원본파일명")
     display_order = Column(Integer, nullable=False, default=0, comment="사용자 화면 노출 정렬 순서")
@@ -111,7 +113,7 @@ class PolicyDocument(Base):
     __tablename__ = "policy_documents"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, comment="정규화 공고 UUID 참조")
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, index=True, comment="정규화 공고 UUID 참조")
     document_type = Column(String(30), nullable=False, comment="문서 유형 (예: eligibility_criteria, submission_guide 등)")
     source_ref = Column(Text, nullable=True, comment="원본 내 참조 위치 (특정 섹션 번호 등)")
     title = Column(Text, nullable=True, comment="해당 요건 문서 제목")

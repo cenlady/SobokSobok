@@ -16,8 +16,8 @@ class PolicyChunk(Base):
     __tablename__ = "policy_chunks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, comment="정규화 공고 ID 참조")
-    document_id = Column(UUID(as_uuid=True), ForeignKey("policy_documents.id", ondelete="CASCADE"), nullable=False, comment="요건 문서 ID 참조")
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, index=True, comment="정규화 공고 ID 참조")
+    document_id = Column(UUID(as_uuid=True), ForeignKey("policy_documents.id", ondelete="CASCADE"), nullable=False, index=True, comment="요건 문서 ID 참조")
     chunk_index = Column(Integer, nullable=False, comment="쪼개진 순서 인덱스 (0, 1, 2...)")
     chunk_text = Column(Text, nullable=False, comment="쪼개진 텍스트 본문 (청크)")
     chunk_hash = Column(String(255), nullable=False, comment="청크 텍스트 중복 방지용 해시")
