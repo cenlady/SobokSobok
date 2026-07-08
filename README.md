@@ -207,6 +207,48 @@ backend/storage/attachments/{pbanc_sn}/
 
 `backend/storage/`는 Git에 올리지 않습니다.
 
+## 데이터베이스 테이블 구성
+
+DB는 **원천 수집 → 정규화(공유) → 도메인별 벡터**의 3계층으로 나뉩니다. 크롤러는 원천 테이블만 쓰고, 각 서비스는 정규화 테이블을 읽어 각자 벡터 테이블을 소유합니다. 컬럼 단위 상세와 데이터 흐름도는 [`DB_SCHEMA.md`](./DB_SCHEMA.md)를 참고하세요.
+
+원천 수집 (크롤러가 적재):
+
+```text
+policy_announcements  소상공인24 공고 목록/상세 본문/원본 JSON/content_hash
+policy_attachments    첨부파일 메타데이터/저장 경로/file_hash
+policy_program_pages  SEMAS 지원사업 안내 페이지 본문/섹션/content_hash
+gov24_service_lists       정부24 서비스 목록
+gov24_service_details     정부24 서비스 상세
+gov24_support_conditions  정부24 지원 조건
+```
+
+정규화 공유 계층 (수집 파이프라인이 생성, 전체 도메인이 소비):
+
+```text
+normalized_policies       원본을 공통 스키마로 정규화한 통합 공고 + 구조화 데이터
+attachment_files          첨부파일 실체 및 OCR/텍스트 추출 본문
+policy_attachment_links   공고 ↔ 첨부파일 N:M 매핑
+policy_documents          공고를 세부 요건/안내 단위로 분할한 문서
+```
+
+도메인별 RAG 벡터 계층 (pgvector, 각 도메인이 소유):
+
+```text
+policy_chunks    챗봇 RAG용 텍스트 청크 + 임베딩 벡터
+rec_vectors      추천 서비스용 정책 매칭 벡터
+review_vectors   서류 검토용 필수 서류 요건 벡터
+prep_vectors     서류 준비 가이드 지식베이스 벡터
+```
+
+사용자:
+
+```text
+users          JWT 인증 / 구글 OAuth 계정
+user_profiles  추천 사전 필터용 사용자 프로필(업종/지역/매출/직원수 등)
+```
+
+벡터 차원은 루트 `.env`의 `EMBEDDING_DIM`(기본 `1536`)으로 관리합니다. 임베딩 모델을 바꿔 차원이 달라지면 이 값만 조정하면 됩니다(예: Gemini `text-embedding-004`는 `768`).
+
 ## DB 확인
 
 DBeaver에서 compose DB를 보려면 아래 설정으로 연결합니다.
@@ -266,4 +308,4 @@ docker compose ps
 
 테이블은 FastAPI 서버 시작 시 SQLAlchemy `create_all()`로 생성됩니다. 데이터가 비어 있으면 크롤러 1회 실행 명령으로 수집을 시작할 수 있습니다.
 
-`soboksobok_db`는 pgvector 지원 이미지를 사용합니다. 다만 임베딩/벡터 검색용 테이블과 `vector` extension 생성은 아직 크롤러 저장 로직과 별도 작업입니다.
+`soboksobok_db`는 pgvector 지원 이미지를 사용합니다. `vector` extension은 서버/크롤러 시작 시 `CREATE EXTENSION IF NOT EXISTS vector`로 자동 생성되며, 임베딩/벡터 검색용 테이블(`policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`)도 `create_all()`로 함께 생성됩니다.

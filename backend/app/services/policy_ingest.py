@@ -19,6 +19,8 @@ from app.models.policy import PolicyAnnouncement, PolicyAttachment
 
 
 def crawl_sbiz24_once() -> dict[str, int | bool]:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()

@@ -113,6 +113,8 @@ SUPPORT_CONDITION_FIELD_MAP = {
 
 
 def crawl_gov24_once() -> dict[str, dict[str, int] | bool]:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
