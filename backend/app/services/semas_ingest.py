@@ -16,6 +16,8 @@ from app.models.policy import PolicyProgramPage
 
 
 def crawl_semas_program_pages_once() -> dict[str, int | bool]:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
     Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
