@@ -54,19 +54,14 @@ flowchart TD
 
 ## 🧠 pgvector(벡터) 설정 및 변경 방법
 
-현재 생성된 모든 벡터 테이블(`policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`)은 **기본 `1536` 차원**(`pgvector.sqlalchemy.Vector(1536)`)으로 세팅되어 있습니다.
+현재 생성된 모든 벡터 테이블(`policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`)의 임베딩 차원은 **설정값 `settings.EMBEDDING_DIM` (기본 `1536`)** 하나로 통일 관리됩니다. 각 모델 파일은 `Column(Vector(settings.EMBEDDING_DIM))`을 사용하므로, 개별 파일을 고칠 필요 없이 이 값 하나만 바꾸면 모든 벡터 테이블 차원이 함께 바뀝니다.
 
-만약 다른 임베딩 모델(예: HuggingFace 384 또는 768 차원 등)을 사용하고자 한다면, 본인이 담당하는 Python 파일 내에서 차원 수만 간단히 수정하시면 됩니다.
+만약 다른 임베딩 모델(예: HuggingFace 384, Gemini `text-embedding-004` 768 차원 등)을 사용하고자 한다면, 루트 `.env`에서 차원 수만 지정하면 됩니다.
 
-### 예시: `recommend.py`에서 768차원 모델로 변경 시
-```python
-# recommend.py 수정
-class RecommendationVector(Base):
-    __tablename__ = "rec_vectors"
-    
-    # ...
-    # 기존 Vector(1536)에서 원하는 차원으로 수정
-    embedding = Column(Vector(768), nullable=False) 
+### 예시: 768차원 모델로 변경 시
+```env
+# .env
+EMBEDDING_DIM=768
 ```
 
 그 후 아래 도커 명령어를 통해 볼륨을 삭제하고 다시 컴포즈 업하시면 자동으로 변경된 차원수로 데이터베이스 테이블이 재생성됩니다.
