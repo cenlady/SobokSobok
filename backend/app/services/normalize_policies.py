@@ -18,6 +18,7 @@ from app.models.normalized_policy import (
     NormalizedPolicy,
     PolicyAttachmentLink,
     PolicyDocument,
+    ensure_normalized_policy_schema,
 )
 from app.models.policy import PolicyAnnouncement, PolicyAttachment, PolicyProgramPage
 
@@ -169,6 +170,9 @@ def normalize_policy_sources_once() -> dict[str, int | bool]:
         if not locked:
             return stats
 
+        ensure_normalized_policy_schema(db)
+        db.commit()
+
         for normalizer in (
             _normalize_sbiz24,
             _normalize_semas,
@@ -210,6 +214,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
         target_text = _first_text(metadata["target_text"], row.target)
         support_content = _first_text(metadata["support_content_text"], row.content_text)
         docs = _sbiz24_documents(row, sections, metadata)
+        filter_columns = _filter_columns_from_metadata(metadata)
         payload = {
             "source": "sbiz24",
             "source_pk": str(row.pbanc_sn),
@@ -225,6 +230,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
             "region_scope": metadata["region"]["region_scope"],
             "sido": metadata["region"]["sido"],
             "sigungu": metadata["region"]["sigungu"],
+            **filter_columns,
             "status": _normalize_status(row.status),
             "apply_start": _parse_datetime(row.apply_start),
             "apply_end": _parse_datetime(row.apply_end),
@@ -243,6 +249,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
                 "industry_tags": metadata["industry_tags"],
                 "employee_limit": metadata["employee_limit"],
                 "sales_limit": metadata["sales_limit"],
+                "business_age_limit": metadata["business_age_limit"],
                 "money_conditions": metadata["money_conditions"],
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
@@ -288,6 +295,7 @@ def _normalize_semas(db: Session) -> dict[str, int]:
         target_text = metadata["target_text"]
         support_content = _first_text(metadata["support_content_text"], row.content_text)
         docs = _semas_documents(row, sections, metadata)
+        filter_columns = _filter_columns_from_metadata(metadata)
         payload = {
             "source": "semas",
             "source_pk": source_pk,
@@ -303,6 +311,7 @@ def _normalize_semas(db: Session) -> dict[str, int]:
             "region_scope": metadata["region"]["region_scope"],
             "sido": metadata["region"]["sido"],
             "sigungu": metadata["region"]["sigungu"],
+            **filter_columns,
             "status": "notice",
             "apply_start": None,
             "apply_end": None,
@@ -319,6 +328,7 @@ def _normalize_semas(db: Session) -> dict[str, int]:
                 "industry_tags": metadata["industry_tags"],
                 "employee_limit": metadata["employee_limit"],
                 "sales_limit": metadata["sales_limit"],
+                "business_age_limit": metadata["business_age_limit"],
                 "money_conditions": metadata["money_conditions"],
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
@@ -375,6 +385,21 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         )
         apply_start, apply_end = _parse_deadline_range(application_deadline)
         condition_payload = _condition_payload(condition)
+        application_method = _first_text(detail.application_method if detail else None, list_row.application_method)
+        contacts = _extract_contacts(
+            _join_text([detail.contact if detail else None, list_row.contact_phone])
+        )
+        gov_text_blob = _join_text(
+            [
+                list_row.service_name,
+                list_row.service_field,
+                list_row.support_type,
+                target_text,
+                support_content,
+                _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
+                application_method,
+            ]
+        )
         region = _extract_region_metadata(
             _join_text(
                 [
@@ -393,13 +418,23 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             target_text=target_text,
             support_content=support_content,
             required_docs=docs_required,
-            application_method=_first_text(detail.application_method if detail else None, list_row.application_method),
+            application_method=application_method,
             application_deadline=application_deadline,
             selection_criteria=_first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
             contact=_first_text(detail.contact if detail else None, list_row.contact_phone),
             reception_institution=_first_text(detail.reception_institution_name if detail else None, list_row.reception_institution),
             laws=detail.laws if detail else None,
         )
+        gov_metadata = {
+            "region": region,
+            "required_documents": docs_required,
+            "application_methods": _extract_application_methods(application_method),
+            "contacts": contacts,
+            "employee_limit": _extract_employee_limit(gov_text_blob),
+            "sales_limit": _extract_sales_limit(gov_text_blob),
+            "business_age_limit": _extract_business_age_limit(gov_text_blob),
+        }
+        filter_columns = _filter_columns_from_metadata(gov_metadata)
         source_hash = _make_hash(
             [
                 list_row.content_hash,
@@ -422,25 +457,32 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "region_scope": region["region_scope"],
             "sido": region["sido"],
             "sigungu": region["sigungu"],
+            **filter_columns,
             "status": _status_from_deadline(application_deadline),
             "apply_start": apply_start,
             "apply_end": apply_end,
             "apply_url": _first_text(detail.online_application_url if detail else None, list_row.detail_url),
-            "industry_tags": condition_payload["industry_tags"],
-            "business_status_tags": condition_payload["business_status_tags"],
+            "industry_tags": _merge_unique_lists(
+                condition_payload["industry_tags"],
+                _tags_from_keyword_map(gov_text_blob, INDUSTRY_KEYWORDS),
+            ),
+            "business_status_tags": _merge_unique_lists(
+                condition_payload["business_status_tags"],
+                _tags_from_keyword_map(gov_text_blob, BUSINESS_STATUS_KEYWORDS),
+            ),
             "eligibility": {
                 "source": "gov24",
                 "user_type": list_row.user_type,
                 "service_field": list_row.service_field,
                 "selection_criteria": _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
                 "application_deadline": application_deadline,
-                "application_methods": _extract_application_methods(
-                    _first_text(detail.application_method if detail else None, list_row.application_method)
-                ),
-                "contacts": _extract_contacts(
-                    _join_text([detail.contact if detail else None, list_row.contact_phone])
-                ),
+                "application_methods": filter_columns["application_methods"],
+                "contacts": filter_columns["contact_points"],
                 "region": region,
+                "employee_limit": gov_metadata["employee_limit"],
+                "sales_limit": gov_metadata["sales_limit"],
+                "business_age_limit": gov_metadata["business_age_limit"],
+                "money_conditions": _extract_money_conditions(gov_text_blob),
                 "support_conditions": condition_payload["raw_flags"],
                 "support_condition_labels": condition_payload["condition_labels"],
                 "age": condition_payload["age"],
@@ -765,9 +807,32 @@ def _source_metadata(
         "industry_tags": industry_tags,
         "employee_limit": _extract_employee_limit(text_blob),
         "sales_limit": _extract_sales_limit(text_blob),
+        "business_age_limit": _extract_business_age_limit(text_blob),
         "money_conditions": _extract_money_conditions(text_blob),
         "application_methods": _extract_application_methods(application_text or text_blob),
         "contacts": _extract_contacts(_join_text([contacts_text, text_blob])),
+    }
+
+
+def _filter_columns_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    region = metadata.get("region") or {}
+    required_documents = metadata.get("required_documents") or []
+    employee_limit = metadata.get("employee_limit") or {}
+    sales_limit = metadata.get("sales_limit") or {}
+    business_age_limit = metadata.get("business_age_limit") or {}
+    return {
+        "matched_sidos": region.get("matched_sidos") or [],
+        "region_confidence": region.get("confidence"),
+        "application_methods": metadata.get("application_methods") or [],
+        "contact_points": metadata.get("contacts") or [],
+        "employee_limit_value": employee_limit.get("value"),
+        "employee_limit_operator": employee_limit.get("operator"),
+        "sales_limit_amount_krw": sales_limit.get("amount_krw"),
+        "sales_limit_operator": sales_limit.get("operator"),
+        "business_age_limit_value": business_age_limit.get("value"),
+        "business_age_limit_operator": business_age_limit.get("operator"),
+        "required_document_count": len(required_documents),
+        "has_required_documents": bool(required_documents),
     }
 
 
@@ -817,7 +882,8 @@ def _metadata_documents(source_ref_prefix: str, metadata: dict[str, Any]) -> lis
         )
     employee_limit = metadata.get("employee_limit")
     sales_limit = metadata.get("sales_limit")
-    if employee_limit or sales_limit:
+    business_age_limit = metadata.get("business_age_limit")
+    if employee_limit or sales_limit or business_age_limit:
         documents.append(
             {
                 "document_type": "eligibility",
@@ -827,6 +893,7 @@ def _metadata_documents(source_ref_prefix: str, metadata: dict[str, Any]) -> lis
                     {
                         "employee_limit": employee_limit,
                         "sales_limit": sales_limit,
+                        "business_age_limit": business_age_limit,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -1048,6 +1115,33 @@ def _extract_sales_limit(value: str | None) -> dict[str, Any] | None:
         "source_text": match.group(1),
         "extraction_method": "rule",
     }
+
+
+def _extract_business_age_limit(value: str | None) -> dict[str, Any] | None:
+    text_value = _clean_text(value)
+    if not text_value:
+        return None
+    patterns = [
+        r"((?:창업|업력)[^0-9]{0,10}(\d+)\s*년\s*(이내|이하|미만|초과|경과하지\s*(?:않은|아니한)))",
+        r"((\d+)\s*년\s*(이내|이하|미만|초과|경과하지\s*(?:않은|아니한))[^.\n]{0,20}(?:창업|업력))",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text_value)
+        if not match:
+            continue
+        limit_years = int(match.group(2))
+        op_text = match.group(3)
+        operator = _operator_symbol(op_text)
+        if op_text == "이내" or "경과하지" in op_text:
+            operator = "<="
+        return {
+            "value": limit_years,
+            "operator": operator,
+            "unit": "years",
+            "source_text": match.group(1),
+            "extraction_method": "rule",
+        }
+    return None
 
 
 def _extract_money_conditions(value: str | None) -> list[dict[str, Any]]:
