@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.crawlers.gov24_client import Gov24Client
 from app.models.gov24 import Gov24ServiceDetail, Gov24ServiceList, Gov24SupportCondition
 
@@ -113,10 +113,6 @@ SUPPORT_CONDITION_FIELD_MAP = {
 
 
 def crawl_gov24_once() -> dict[str, dict[str, int] | bool]:
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-    Base.metadata.create_all(bind=engine)
-
     db = SessionLocal()
     locked = False
     stats: dict[str, dict[str, int] | bool] = {
