@@ -10,16 +10,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.crawlers.semas_client import SemasClient, SemasProgramPage
 from app.models.policy import PolicyProgramPage
 
 
 def crawl_semas_program_pages_once() -> dict[str, int | bool]:
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-    Base.metadata.create_all(bind=engine)
-
     db = SessionLocal()
     locked = False
     stats: dict[str, int | bool] = {

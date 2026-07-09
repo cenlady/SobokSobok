@@ -13,16 +13,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.database import Base, SessionLocal, engine
+from app.core.database import SessionLocal
 from app.crawlers.sbiz24_client import Sbiz24Client
 from app.models.policy import PolicyAnnouncement, PolicyAttachment
 
 
 def crawl_sbiz24_once() -> dict[str, int | bool]:
-    with engine.begin() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-    Base.metadata.create_all(bind=engine)
-
     db = SessionLocal()
     locked = False
     stats: dict[str, int | bool] = {
