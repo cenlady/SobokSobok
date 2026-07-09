@@ -226,6 +226,59 @@ normalized_policies(source, source_pk)
 
 정규화 문서는 원천 내용이 바뀌었거나 아직 문서가 없을 때 다시 구성합니다. 현재 임베딩은 아직 생성하지 않으므로 `policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`는 별도 단계에서 채웁니다.
 
+### 정규화 기준
+
+정규화는 임베딩 직전의 공통 재료를 만드는 단계입니다. raw 테이블을 직접 임베딩하지 않고, 각 도메인 job은 `normalized_policies`, `policy_documents`, `attachment_files`를 읽습니다.
+
+```text
+Gov24
+- 목록/상세/지원조건 테이블을 service_id로 조인
+- 지원조건 코드(JA*)를 eligibility.support_condition_labels, industry_tags, business_status_tags로 매핑
+- 나이/소득/대상특성 코드는 eligibility.age, income_ranges, target_traits에 보관
+
+Sbiz24
+- 공고 상세 content_text에서 지원대상/지원내용/신청방법/문의처/신청서류 표제를 rule 기반 분리
+- target/category/apply 기간과 첨부파일 연결 정보를 함께 보관
+
+SEMAS
+- sections_json을 표준 document_type으로 매핑
+- breadcrumbs/category/content_text로 업종, 대상 상태, 신청방법, 연락처를 보강
+```
+
+`eligibility` JSON에는 아래 공통 필드를 넣습니다.
+
+```text
+region.region_scope
+region.sido
+region.sigungu
+region.matched_sidos
+business_status_tags
+industry_tags
+employee_limit
+sales_limit
+money_conditions
+application_methods
+contacts
+```
+
+`policy_documents.document_type`은 다음 값을 기준으로 나뉩니다.
+
+```text
+summary
+support_content
+eligibility
+application
+deadline
+requirements
+contact
+procedure
+reference
+body
+section
+```
+
+`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. Sbiz24/SEMAS처럼 서류 정보가 첨부파일 안에만 있거나 본문이 애매한 경우에는 빈 배열일 수 있고, 이 값은 추후 첨부파일 parser/OCR job에서 보강합니다.
+
 ## 저장 테이블
 
 데이터는 세 계층으로 나눕니다.

@@ -101,6 +101,73 @@ api 컨테이너 시작
 
 ---
 
+## 🧩 정규화 출력 계약
+
+정규화 파이프라인은 세 원천을 아래 기준으로 `normalized_policies`와 `policy_documents`에 맞춥니다.
+
+```text
+Gov24
+- gov24_service_lists + gov24_service_details + gov24_support_conditions를 service_id로 조인
+- 상세의 지원대상/지원내용/신청방법/신청기한/구비서류를 반영
+- 지원조건 코드(JA*)는 industry_tags, business_status_tags, eligibility.support_condition_labels, age, income_ranges, target_traits로 반영
+
+Sbiz24
+- policy_announcements의 title/target/category/content_text/apply 기간을 기준으로 정규화
+- 본문 표제(지원대상, 지원내용, 신청방법, 문의처, 신청서류 등)를 rule 기반으로 section 분리
+- 첨부파일은 attachment_files / policy_attachment_links의 file_hash, storage_path, original_file_name으로 연결
+
+SEMAS
+- policy_program_pages.sections_json의 HTML 섹션을 표준 document_type으로 매핑
+- breadcrumbs/category/program_name/content_text를 함께 사용해 업종, 대상 상태, 신청방법, 연락처를 보강
+```
+
+`eligibility` JSON은 추천 사전필터와 임베딩 job이 공통으로 읽을 수 있게 아래 필드를 포함합니다.
+
+```text
+region
+- region_scope: national/local/unknown
+- sido, sigungu
+- matched_sidos: 권역 표현을 여러 시도로 푼 리스트
+- confidence, extraction_method
+
+business_status_tags
+industry_tags
+employee_limit
+sales_limit
+money_conditions
+application_methods
+contacts
+```
+
+`policy_documents.document_type`은 임베딩 전 공통 문서 단위입니다.
+
+```text
+summary
+support_content
+eligibility
+application
+deadline
+requirements
+contact
+procedure
+reference
+body
+section
+```
+
+각 도메인은 이 문서들을 자기 목적에 맞게 다시 chunking/embedding합니다.
+
+```text
+추천: normalized_policies + eligibility/summary/support_content 문서
+챗봇 RAG: policy_documents 전체
+서류검토: required_documents + requirements 문서 + attachment_files
+일정/준비: deadline/application/requirements/contact 문서
+```
+
+`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. Sbiz24/SEMAS에서 서류가 첨부파일 내부에만 있거나 본문 문맥이 애매한 경우에는 빈 배열일 수 있으며, 이 경우 추후 첨부파일 parser/OCR job이 `attachment_files.extracted_text`를 채운 뒤 보강합니다.
+
+---
+
 ## 🧠 pgvector(벡터) 설정 및 변경 방법
 
 현재 코드의 벡터 컬럼은 임시로 **설정값 `settings.EMBEDDING_DIM` (기본 `1536`)** 하나를 공유합니다. 다만 팀 기획상 최종 구조는 각 도메인이 자기 임베딩 모델과 벡터 테이블을 소유하는 방식입니다.
