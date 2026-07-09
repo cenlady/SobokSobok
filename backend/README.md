@@ -245,36 +245,41 @@ SEMAS
 - breadcrumbs/category/content_text로 업종, 대상 상태, 신청방법, 연락처를 보강
 ```
 
-`eligibility` JSON에는 아래 공통 필드를 넣습니다.
+`eligibility` JSON에는 아래 구조화 공통 필드를 포함합니다.
 
 ```text
-region.region_scope
-region.sido
-region.sigungu
-region.matched_sidos
+region
+- region_scope: national/local/unknown
+- sido, sigungu
+- matched_sidos: 권역 표현을 여러 시도로 푼 리스트
+- confidence, extraction_method
 business_status_tags
 industry_tags
 employee_limit
+- value, operator, unit, source_text
 sales_limit
+- amount_krw, operator, source_text
+business_age_limit
+- value, operator, unit, source_text ("~년이 경과하지 않은 자" 등의 엣지 케이스 포함)
 money_conditions
 application_methods
 contacts
 ```
 
-`policy_documents.document_type`은 다음 값을 기준으로 나뉩니다.
+`policy_documents.document_type`은 다음 RAG 분할 기준 값을 사용합니다.
 
 ```text
-summary
-support_content
-eligibility
-application
-deadline
-requirements
-contact
-procedure
-reference
-body
-section
+summary         (요약 / 사업목적)
+support_content (지원 내용 및 혜택 규모)
+eligibility     (지원 대상 및 조건)
+application     (신청 방법 및 신청 접수처)
+deadline        (신청 기간 및 제출 마감일)
+requirements    (필수 구비 서류 목록)
+contact         (문의처 연락처 및 전화번호)
+procedure       (추진 절차 및 단계)
+reference       (관련 법령 및 참조)
+body            (공고문 본문 전체 백업)
+section         (기타 일반 세부 섹션)
 ```
 
 `required_documents`는 확실한 구비서류만 보수적으로 채웁니다. Sbiz24/SEMAS처럼 서류 정보가 첨부파일 안에만 있거나 본문이 애매한 경우에는 빈 배열일 수 있고, 이 값은 추후 첨부파일 parser/OCR job에서 보강합니다.
@@ -344,10 +349,11 @@ gov24_service_details
 gov24_support_conditions
 ```
 
-정규화 공유 테이블:
+정규화 공유 테이블 (최신 추천 사전필터 고속 컬럼 포함):
 
 ```text
 normalized_policies
+- id (UUID PK)
 - source
 - source_pk
 - canonical_key
@@ -364,13 +370,26 @@ normalized_policies
 - apply_start
 - apply_end
 - apply_url
-- industry_tags
-- business_status_tags
-- eligibility
-- required_documents
+- matched_sidos             (JSON: 권역 포함 적용 가능 시도 목록 GIN 인덱스)
+- region_confidence         (Double: 지역 추출 신뢰도 점수)
+- application_methods       (JSON: 신청 방법 태그 리스트 GIN 인덱스)
+- contact_points            (JSON: 문의처 전화번호 목록)
+- employee_limit_value      (Integer: 상시근로자수 제한 제한치)
+- employee_limit_operator   (String: 상시근로자수 대소비교 기호)
+- sales_limit_amount_krw    (BigInt: 연 매출액 제한값 원 단위)
+- sales_limit_operator      (String: 매출액 대소비교 기호)
+- business_age_limit_value  (Integer: 창업 연차 조건 제한치)
+- business_age_limit_operator (String: 창업 연차 대소비교 기호)
+- required_document_count   (Integer: 필수 제출서류 개수)
+- has_required_documents    (Boolean: 필수 제출서류 정규화 유무)
+- industry_tags             (JSON: 대상 업종 태그 GIN 인덱스)
+- business_status_tags      (JSON: 대상 기업상태 태그 GIN 인덱스)
+- eligibility               (JSON: 상세 자격 조건)
+- required_documents        (JSON: 상세 구비 서류 객체 목록)
 - source_content_hash
 - normalized_hash
 - is_active
+```
 
 attachment_files
 - file_hash
@@ -396,16 +415,75 @@ policy_documents
 - text_hash
 ```
 
-도메인별 벡터 테이블:
+도메인별 벡터 테이블 및 사용자 프로필:
 
 ```text
-rec_vectors       추천 서비스 소유
-policy_chunks     챗봇 RAG 소유
-review_vectors    서류 검토 소유
-prep_vectors      일정/준비 가이드 소유
+rec_vectors (추천 서비스 소유)
+- policy_id (UUID FK)
+- embedding (VECTOR)
+
+policy_chunks (챗봇 RAG 소유)
+- policy_id (UUID FK)
+- document_id (UUID FK)
+- chunk_index (INTEGER)
+- chunk_text (TEXT)
+- chunk_hash (VARCHAR)
+- metadata (JSON)
+- embedding_status (VARCHAR)
+- embedding_model (TEXT)
+- embedding (VECTOR)
+
+review_vectors (서류 검토 소유)
+- policy_id (UUID FK)
+- document_name (VARCHAR)
+- embedding (VECTOR)
+
+prep_vectors (일정/준비 가이드 소유)
+- document_name (VARCHAR)
+- guide_text (TEXT)
+- embedding (VECTOR)
+
+users (인증 공통)
+- email (VARCHAR)
+- hashed_password (VARCHAR)
+- is_active (BOOLEAN)
+
+user_profiles (추천 필터 공통)
+- user_id (INTEGER FK)
+- industry (JSON)
+- region (VARCHAR)
+- sales (INTEGER)
+- employees (INTEGER)
+- available_time_preference (JSON)
 ```
 
 벡터 테이블은 공유 정규화 데이터를 읽어서 각 도메인이 자기 임베딩 모델로 채우는 영역입니다. 현재 자동화 범위에는 포함하지 않습니다.
+
+첨부파일 실제 저장 위치:
+
+```text
+backend/storage/attachments/{pbanc_sn}/
+```
+
+첨부파일 bytes는 DB에 직접 넣지 않습니다. DB에는 `saved_path`, `file_hash`, 파일 메타데이터만 저장합니다.
+
+## 정책 API
+
+목록:
+
+```text
+GET /api/v1/policies/
+```
+
+상세:
+
+```text
+GET /api/v1/policies/{pbanc_sn}
+```
+
+SEMAS 지원사업 안내 페이지 목록:
+
+```text
 
 첨부파일 실제 저장 위치:
 
@@ -456,24 +534,43 @@ backend/
     ├── api/
     │   ├── api.py
     │   └── v1/
-    │       └── policies.py
+    │       ├── auth.py
+    │       ├── calendar.py
+    │       ├── chat.py
+    │       ├── policies.py
+    │       ├── recommend.py
+    │       ├── review.py
+    │       └── users.py
     ├── core/
     │   ├── config.py
-    │   └── database.py
+    │   ├── database.py
+    │   └── rag_utils.py
     ├── crawlers/
+    │   ├── gov24_client.py
     │   ├── sbiz24_client.py
     │   └── semas_client.py
     ├── crud/
     │   └── policy.py
     ├── jobs/
-    │   ├── crawl_sbiz24_once.py
+    │   ├── crawl_gov24_once.py
     │   ├── crawl_policy_sources_loop.py
-    │   └── crawl_semas_once.py
+    │   ├── crawl_sbiz24_once.py
+    │   ├── crawl_semas_once.py
+    │   └── normalize_policies_once.py
     ├── models/
-    │   └── policy.py
+    │   ├── chat.py
+    │   ├── gov24.py
+    │   ├── normalized_policy.py
+    │   ├── policy.py
+    │   ├── prep.py
+    │   ├── recommend.py
+    │   ├── review.py
+    │   └── user.py
     ├── schemas/
     │   └── policy.py
     ├── services/
+    │   ├── gov24_ingest.py
+    │   ├── normalize_policies.py
     │   ├── policy_ingest.py
     │   └── semas_ingest.py
     └── main.py
