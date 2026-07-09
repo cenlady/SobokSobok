@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 1536
 
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
+    NORMALIZE_AFTER_CRAWL: bool = True
+    NORMALIZER_ADVISORY_LOCK_ID: int = 2026070604
     SBIZ24_PAGE_SIZE: int = 100
     SBIZ24_REQUEST_DELAY_SECONDS: float = 1.0
     SEMAS_SEED_URL: str = "https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc"
