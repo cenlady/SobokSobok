@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.api.api import api_router
 from app import models  # noqa: F401
+from app.models.normalized_policy import ensure_normalized_policy_schema
 
 
 app = FastAPI(
@@ -35,6 +36,8 @@ def create_tables() -> None:
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        ensure_normalized_policy_schema(conn)
 
 
 @app.get("/", tags=["Root"])

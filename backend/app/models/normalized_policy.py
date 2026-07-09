@@ -1,9 +1,10 @@
 import uuid
-from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint, Index, func
+from sqlalchemy import Column, String, Text, DateTime, Boolean, Integer, BigInteger, ForeignKey, JSON, UniqueConstraint, Index, func, Float, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.config import settings
 
 class NormalizedPolicy(Base):
     """
@@ -29,10 +30,22 @@ class NormalizedPolicy(Base):
     region_scope = Column(String(20), nullable=False, default="unknown", comment="지역 범위 (national, local, unknown 등)")
     sido = Column(String(50), nullable=True, comment="시/도 명칭 (예: 서울특별시)")
     sigungu = Column(String(50), nullable=True, comment="시/군/구 명칭 (예: 마포구)")
+    matched_sidos = Column(JSON, nullable=False, default=list, comment="권역 공고까지 포함한 적용 가능 시/도 리스트")
+    region_confidence = Column(Float, nullable=True, comment="지역 추출 신뢰도")
     status = Column(String(30), nullable=True, comment="신청 상태 (접수중, 마감 등)")
     apply_start = Column(DateTime, nullable=True, comment="신청 시작일")
     apply_end = Column(DateTime, nullable=True, comment="신청 마감일")
     apply_url = Column(Text, nullable=True, comment="온라인 신청 외부 링크 주소")
+    application_methods = Column(JSON, nullable=False, default=list, comment="신청 방식 태그 리스트 (online, visit, mail 등)")
+    contact_points = Column(JSON, nullable=False, default=list, comment="문의 전화번호/연락처 리스트")
+    employee_limit_value = Column(Integer, nullable=True, comment="상시 근로자 수 제한값")
+    employee_limit_operator = Column(String(10), nullable=True, comment="상시 근로자 수 제한 비교 연산자")
+    sales_limit_amount_krw = Column(BigInteger, nullable=True, comment="매출액 제한값 원 단위")
+    sales_limit_operator = Column(String(10), nullable=True, comment="매출액 제한 비교 연산자")
+    business_age_limit_value = Column(Integer, nullable=True, comment="창업 제한 연차 값")
+    business_age_limit_operator = Column(String(10), nullable=True, comment="창업 제한 연차 비교 연산자")
+    required_document_count = Column(Integer, nullable=False, default=0, comment="정규화된 필수 제출서류 개수")
+    has_required_documents = Column(Boolean, nullable=False, default=False, index=True, comment="필수 제출서류 정규화 여부")
     
     # 구조화 데이터 JSON 컬럼들
     industry_tags = Column(JSON, nullable=False, comment="구조화된 대상 업종 태그 리스트")
@@ -50,6 +63,8 @@ class NormalizedPolicy(Base):
         UniqueConstraint("source", "source_pk", name="uk_normalized_policies_source"),
         Index("idx_normalized_policies_region", "region_scope", "sido", "sigungu"),
         Index("idx_normalized_policies_status_dates", "status", "apply_start", "apply_end"),
+        Index("idx_normalized_policies_limits", "employee_limit_value", "sales_limit_amount_krw"),
+        Index("idx_normalized_policies_required_docs", "has_required_documents", "required_document_count"),
     )
 
     # Relationships
@@ -128,3 +143,32 @@ class PolicyDocument(Base):
     # Relationships
     policy = relationship("NormalizedPolicy", back_populates="documents")
     chunks = relationship("PolicyChunk", back_populates="document", cascade="all, delete-orphan")
+
+
+NORMALIZED_POLICY_SCHEMA_SQL = [
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS matched_sidos JSON NOT NULL DEFAULT '[]'::json",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS region_confidence DOUBLE PRECISION",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS application_methods JSON NOT NULL DEFAULT '[]'::json",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS contact_points JSON NOT NULL DEFAULT '[]'::json",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS employee_limit_value INTEGER",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS employee_limit_operator VARCHAR(10)",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS sales_limit_amount_krw BIGINT",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS sales_limit_operator VARCHAR(10)",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS business_age_limit_value INTEGER",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS business_age_limit_operator VARCHAR(10)",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS required_document_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE normalized_policies ADD COLUMN IF NOT EXISTS has_required_documents BOOLEAN NOT NULL DEFAULT false",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_limits ON normalized_policies (employee_limit_value, sales_limit_amount_krw, business_age_limit_value)",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_required_docs ON normalized_policies (has_required_documents, required_document_count)",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_matched_sidos_gin ON normalized_policies USING gin ((matched_sidos::jsonb))",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_application_methods_gin ON normalized_policies USING gin ((application_methods::jsonb))",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_industry_tags_gin ON normalized_policies USING gin ((industry_tags::jsonb))",
+    "CREATE INDEX IF NOT EXISTS idx_normalized_policies_business_status_tags_gin ON normalized_policies USING gin ((business_status_tags::jsonb))",
+]
+
+
+def ensure_normalized_policy_schema(bind) -> None:
+    if not settings.database_url.startswith("postgresql"):
+        return
+    for statement in NORMALIZED_POLICY_SCHEMA_SQL:
+        bind.execute(text(statement))
