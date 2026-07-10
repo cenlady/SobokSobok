@@ -6,6 +6,7 @@ import ChatScreen from './screens/ChatScreen'
 import ProfileScreen from './screens/ProfileScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
 import BenefitDetailScreen from './screens/BenefitDetailScreen'
+import PolicyDetailScreen from './screens/PolicyDetailScreen'
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
       {/* 전체 화면 (탭 없음) */}
       <Route path="/onboarding" element={<OnboardingScreen />} />
       <Route path="/benefit/:id" element={<BenefitDetailScreen />} />
+      <Route path="/policy/:policyId" element={<PolicyDetailScreen />} />
     </Routes>
   )
 }
