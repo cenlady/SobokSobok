@@ -1,7 +1,8 @@
 import type { BenefitStatus } from '../types'
+import { localDateKey } from './calendar'
 
-// 앱 기준 "오늘" (목업 데이터 기준일과 맞춤)
-export const TODAY = '2024-06-17'
+// 앱 기준 "오늘"
+export const TODAY = localDateKey()
 
 export function ddayLabel(dueDate: string, base: string = TODAY): string {
   const d1 = new Date(base + 'T00:00:00')
