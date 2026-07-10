@@ -99,17 +99,19 @@ class OllamaEmbeddingModel(EmbeddingModel):
 
     def embed_text(self, text: str) -> List[float]:
         response = self.client.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": self.model_name, "prompt": text}
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": text}
         )
         response.raise_for_status()
-        return response.json()["embedding"]
+        return response.json()["embeddings"][0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = []
-        for text_val in texts:
-            embeddings.append(self.embed_text(text_val))
-        return embeddings
+        response = self.client.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": texts}
+        )
+        response.raise_for_status()
+        return response.json()["embeddings"]
 
 
 class SimpleTextSplitter:
