@@ -15,9 +15,31 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     SQL_ECHO: bool = False
 
-    # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
-    # 예: OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
-    EMBEDDING_DIM: int = 1536
+    # RAG 임베딩 벡터 차원. 챗봇 RAG는 bge-m3 기준 1024차원을 기본값으로 사용한다.
+    # 예: bge-m3 = 1024, OpenAI text-embedding-3-small = 1536
+    EMBEDDING_DIM: int = 1024
+
+    # 챗봇 RAG 설정
+    # policy_documents 전체 문서를 챗봇용 policy_chunks로 쪼개고 임베딩할 때 사용한다.
+    CHAT_EMBEDDING_PROVIDER: str = "ollama"  # openai | gemini | ollama
+    CHAT_EMBEDDING_MODEL: str = "bge-m3"
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    CHAT_CHUNK_SIZE: int = 280
+    CHAT_CHUNK_OVERLAP: int = 40
+    CHAT_RETRIEVAL_LIMIT: int = 6
+    CHAT_COMPLETION_PROVIDER: str = "openai"  # openai | disabled
+    CHAT_COMPLETION_MODEL: str = "gpt-4o-mini"
+    CHAT_MAX_CONTEXT_CHARS: int = 4500
+    CHAT_SYSTEM_PROMPT: str = (
+        "너는 소상공인 정책 공고 안내 챗봇이다. "
+        "반드시 제공된 검색 근거 안에서만 답하고, 근거가 부족하면 부족하다고 말한다. "
+        "신청 대상, 신청 방법, 제출 서류, 접수 기간, 문의처를 사용자가 이해하기 쉽게 정리한다."
+    )
+
+    # LangSmith는 키가 있을 때만 추적한다. 키가 없으면 코드 경로는 no-op으로 동작한다.
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_API_KEY: str | None = None
+    LANGSMITH_PROJECT: str = "soboksobok-chatbot-rag"
 
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     NORMALIZE_AFTER_CRAWL: bool = True

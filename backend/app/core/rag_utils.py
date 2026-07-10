@@ -2,12 +2,13 @@ import os
 import uuid
 import hashlib
 from abc import ABC, abstractmethod
-from typing import List, Type, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import func
 
 from app.models.chat import PolicyChunk
+from app.core.config import settings
 
 class EmbeddingModel(ABC):
     """
@@ -38,6 +39,16 @@ class OpenAIEmbeddingModel(EmbeddingModel):
         
         self.model_name = model_name
         self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        if settings.LANGSMITH_TRACING and settings.LANGSMITH_API_KEY:
+            try:
+                from langsmith import wrappers
+
+                os.environ.setdefault("LANGSMITH_TRACING", "true")
+                os.environ.setdefault("LANGSMITH_API_KEY", settings.LANGSMITH_API_KEY)
+                os.environ.setdefault("LANGSMITH_PROJECT", settings.LANGSMITH_PROJECT)
+                self.client = wrappers.wrap_openai(self.client)
+            except ImportError:
+                pass
 
     def embed_text(self, text: str) -> List[float]:
         # 개행 문자를 공백으로 치환하여 임베딩 품질 향상
@@ -91,13 +102,33 @@ class OllamaEmbeddingModel(EmbeddingModel):
     로컬에 설치된 Ollama를 사용하는 임베딩 모델 구현체.
     기본 모델: nomic-embed-text
     """
-    def __init__(self, model_name: str = "nomic-embed-text", base_url: str = "http://localhost:11434"):
+    def __init__(self, model_name: str = "bge-m3", base_url: str = None):
         import httpx
         self.model_name = model_name
-        self.base_url = base_url
+        self.base_url = base_url or settings.OLLAMA_BASE_URL
         self.client = httpx.Client(timeout=60.0)
 
     def embed_text(self, text: str) -> List[float]:
+        return self.embed_documents([text])[0]
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        clean_texts = [text_val.replace("\n", " ") for text_val in texts]
+        response = self.client.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": clean_texts}
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if "embeddings" in payload:
+            return payload["embeddings"]
+
+        # 구버전 Ollama 호환 fallback
+        embeddings = []
+        for text_val in clean_texts:
+            embeddings.append(self._embed_text_legacy(text_val))
+        return embeddings
+
+    def _embed_text_legacy(self, text: str) -> List[float]:
         response = self.client.post(
             f"{self.base_url}/api/embeddings",
             json={"model": self.model_name, "prompt": text}
@@ -105,39 +136,71 @@ class OllamaEmbeddingModel(EmbeddingModel):
         response.raise_for_status()
         return response.json()["embedding"]
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = []
-        for text_val in texts:
-            embeddings.append(self.embed_text(text_val))
-        return embeddings
-
 
 class SimpleTextSplitter:
     """
     텍스트를 지정한 문자 수 및 오버랩(겹침) 기준으로 분할해 주는 기본 청커.
     """
-    def __init__(self, chunk_size: int = 500, chunk_overlap: int = 50):
+    def __init__(self, chunk_size: int = 280, chunk_overlap: int = 40):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
     def split_text(self, text: str) -> List[str]:
         if not text:
             return []
+
+        # LangChain은 자연스러운 문단/문장 경계를 최대한 유지해 주므로 챗봇 RAG 청킹에 우선 사용합니다.
+        # 의존성이 없는 개발 환경에서는 아래 기본 문자 단위 splitter로 안전하게 fallback됩니다.
+        try:
+            from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+            splitter = RecursiveCharacterTextSplitter(
+                chunk_size=self.chunk_size,
+                chunk_overlap=self.chunk_overlap,
+                separators=["\n\n", "\n", ". ", "。", "? ", "! ", " ", ""],
+            )
+            return [chunk.strip() for chunk in splitter.split_text(text) if chunk.strip()]
+        except ImportError:
+            pass
         
         chunks = []
         start = 0
-        text_len = len(text)
+        normalized_text = text.strip()
+        text_len = len(normalized_text)
 
         while start < text_len:
             end = start + self.chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
+            chunk = normalized_text[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
             
             start += (self.chunk_size - self.chunk_overlap)
             if start >= text_len or (self.chunk_size - self.chunk_overlap) <= 0:
                 break
                 
         return chunks
+
+
+def create_embedding_model(
+    provider: Optional[str] = None,
+    model_name: Optional[str] = None,
+) -> EmbeddingModel:
+    """
+    설정값 기반으로 챗봇 RAG 임베딩 모델을 생성합니다.
+    - provider: openai | gemini | ollama
+    - model_name을 생략하면 settings.CHAT_EMBEDDING_MODEL을 사용합니다.
+    """
+    selected_provider = (provider or settings.CHAT_EMBEDDING_PROVIDER).lower()
+    selected_model = model_name or settings.CHAT_EMBEDDING_MODEL
+
+    if selected_provider == "openai":
+        return OpenAIEmbeddingModel(model_name=selected_model)
+    if selected_provider == "gemini":
+        return GeminiEmbeddingModel(model_name=selected_model)
+    if selected_provider == "ollama":
+        return OllamaEmbeddingModel(model_name=selected_model, base_url=settings.OLLAMA_BASE_URL)
+
+    raise ValueError(f"지원하지 않는 임베딩 provider입니다: {selected_provider}")
 
 
 def upsert_policy_chunks(
@@ -147,8 +210,10 @@ def upsert_policy_chunks(
     text_content: str,
     embedding_model: EmbeddingModel,
     model_name_log: str,
-    chunk_size: int = 500,
-    chunk_overlap: int = 50
+    chunk_size: int = settings.CHAT_CHUNK_SIZE,
+    chunk_overlap: int = settings.CHAT_CHUNK_OVERLAP,
+    metadata_base: Optional[Dict[str, Any]] = None,
+    embedding_context: Optional[str] = None,
 ) -> int:
     """
     [챗봇 RAG 영역] 텍스트 본문을 청킹하고 임베딩한 뒤 policy_chunks 테이블에 저장합니다.
@@ -165,11 +230,22 @@ def upsert_policy_chunks(
         return 0
 
     # 3) 임베딩 벡터 생성
-    embeddings = embedding_model.embed_documents(chunks)
+    embedding_inputs = [
+        f"{embedding_context}\n본문: {chunk_text}" if embedding_context else chunk_text
+        for chunk_text in chunks
+    ]
+    embeddings = embedding_model.embed_documents(embedding_inputs)
     
     # 4) 데이터베이스 삽입
     for i, (chunk_text, vector) in enumerate(zip(chunks, embeddings)):
         chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
+        chunk_metadata = {
+            **(metadata_base or {}),
+            "chunk_size": chunk_size,
+            "chunk_overlap": chunk_overlap,
+            "length": len(chunk_text),
+            "embedding_input_strategy": "document_context_plus_chunk" if embedding_context else "chunk_only",
+        }
         
         db_chunk = PolicyChunk(
             policy_id=policy_id,
@@ -177,11 +253,7 @@ def upsert_policy_chunks(
             chunk_index=i,
             chunk_text=chunk_text,
             chunk_hash=chunk_hash,
-            chunk_metadata={
-                "chunk_size": chunk_size,
-                "chunk_overlap": chunk_overlap,
-                "length": len(chunk_text)
-            },
+            chunk_metadata=chunk_metadata,
             embedding_status="success",
             embedding_model=model_name_log,
             embedding=vector,
@@ -208,10 +280,19 @@ def search_policy_chunks(
     # pgvector의 cosine_distance를 기반으로 정렬하며, 점수는 1 - cosine_distance로 변환
     distance_expr = PolicyChunk.embedding.cosine_distance(query_vector)
     
-    results = db.query(
-        PolicyChunk,
-        (1 - distance_expr).label("similarity")
-    ).order_by(distance_expr).limit(limit).all()
+    results = (
+        db.query(
+            PolicyChunk,
+            (1 - distance_expr).label("similarity")
+        )
+        .filter(
+            PolicyChunk.embedding_status == "success",
+            PolicyChunk.embedding.isnot(None),
+        )
+        .order_by(distance_expr)
+        .limit(limit)
+        .all()
+    )
     
     return [(row[0], float(row[1])) for row in results]
 
