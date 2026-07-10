@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# 파일 역할: [공통/인증 도메인] 사용자(User) 및 프로필(UserProfile) ORM 모델 정의
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, JSON, func
 from sqlalchemy.orm import relationship
 
@@ -14,6 +17,12 @@ class User(Base):
     email = Column(String(255), unique=True, index=True, nullable=False, comment="이메일 (아이디)")
     hashed_password = Column(String(255), nullable=True, comment="암호화된 비밀번호 (구글 OAuth 사용 시 NULL 가능)")
     is_active = Column(Boolean, default=True, nullable=False, comment="활성화 여부")
+    
+    # Google OAuth2.0 캘린더 연동 토큰 저장용 컬럼 추가 (이재혁 도메인 연동)
+    google_access_token = Column(String(255), nullable=True, comment="Google API Access Token")
+    google_refresh_token = Column(String(255), nullable=True, comment="Google API Refresh Token (영구 일정 연동에 사용)")
+    google_token_expires_at = Column(DateTime(timezone=True), nullable=True, comment="Google Access Token 만료 일시")
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, comment="생성일시")
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False, comment="수정일시")
 
