@@ -47,6 +47,7 @@ export default function CalendarScreen() {
   const [selected, setSelected] = useState(TODAY)
 
   const scheduledPolicies = policies.filter((policy) => toDateKey(policy.apply_end))
+  const unscheduledPolicies = policies.filter((policy) => !toDateKey(policy.apply_end))
 
   const dots = useMemo(() => {
     const map: Record<string, BenefitStatus[]> = {}
@@ -179,7 +180,7 @@ export default function CalendarScreen() {
               {selDate.getMonth() + 1}월 {selDate.getDate()}일 마감 정책
             </h3>
             <p className="mt-1 text-sm text-brand-dark/50">
-              저장된 정책 {scheduledPolicies.length}건 중 해당 날짜 일정이에요.
+              저장된 정책 {policies.length}건 중 해당 날짜 일정이에요.
             </p>
           </div>
         </div>
@@ -258,6 +259,52 @@ export default function CalendarScreen() {
             저장한 정책의 마감일이 이 달력에 표시됩니다.
           </p>
         </div>
+
+        {/* 기한 미정 정책 목록 */}
+        {unscheduledPolicies.length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-lg font-bold text-brand-dark">기한 미정 정책 ({unscheduledPolicies.length}건)</h3>
+            <div className="mt-3 space-y-3">
+              {unscheduledPolicies.map((policy) => (
+                <article
+                  key={policy.policy_id}
+                  className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card"
+                >
+                  <span className="w-1.5 flex-shrink-0 bg-brand-dark/20" />
+                  <div className="min-w-0 flex-1 py-4 pr-4 pl-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-brand-dark/40">기한 미정</span>
+                      {policy.support_type && (
+                        <span className="truncate text-xs font-medium text-brand-dark/50">
+                          {policy.support_type}
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="mt-1 line-clamp-2 text-base font-semibold text-brand-dark">
+                      {policy.title}
+                    </h4>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => navigate(`/policy/${policy.policy_id}`)}
+                        className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
+                      >
+                        상세보기 <ArrowRight size={13} />
+                      </button>
+                      <button
+                        onClick={() =>
+                          window.open(buildGoogleCalendarUrl(policy), '_blank', 'noopener,noreferrer')
+                        }
+                        className="flex items-center justify-center gap-1 rounded-xl bg-accent-soft px-3 py-2 text-xs font-bold text-accent"
+                      >
+                        캘린더 추가
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   )
