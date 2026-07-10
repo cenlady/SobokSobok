@@ -16,8 +16,15 @@ class Settings(BaseSettings):
     SQL_ECHO: bool = False
 
     # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
-    # 예: OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
+    # 예: OpenAI text-embedding-3-small = 1536, bge-m3 = 1024
     EMBEDDING_DIM: int = 1536
+    REC_EMBEDDING_DIM: int = 1024
+    REC_EMBEDDING_PROVIDER: str = "ollama"
+    REC_OLLAMA_MODEL: str = "bge-m3:latest"
+    REC_OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
+    REC_OPENAI_MODEL: str = "text-embedding-3-small"
+    GEMINI_API_KEY: str | None = None
+    GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
 
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     NORMALIZE_AFTER_CRAWL: bool = True
