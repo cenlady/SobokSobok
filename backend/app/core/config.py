@@ -29,6 +29,15 @@ class Settings(BaseSettings):
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     NORMALIZE_AFTER_CRAWL: bool = True
     NORMALIZER_ADVISORY_LOCK_ID: int = 2026070604
+
+    # 첨부파일 텍스트 추출 (kordoc 기반)
+    EXTRACT_AFTER_NORMALIZE: bool = True
+    EXTRACTOR_ADVISORY_LOCK_ID: int = 2026070605
+    KORDOC_CMD: str = "kordoc"                 # 실행 커맨드 (경로 오버라이드용)
+    KORDOC_TIMEOUT_SECONDS: int = 120          # 파일당 추출 타임아웃
+    EXTRACT_MAX_CHARS: int = 1_000_000         # 행당 저장 상한 (초대형 문서 방어)
+    EXTRACT_RETRY_FAILED: bool = False         # failed 상태 재시도 포함 여부
+    EXTRACT_BATCH_LIMIT: int = 0               # 0=전체, N=한 실행당 N건
     SBIZ24_PAGE_SIZE: int = 100
     SBIZ24_REQUEST_DELAY_SECONDS: float = 1.0
     SEMAS_SEED_URL: str = "https://www.semas.or.kr/web/SUP01/SUP0122/SUP012201.kmdc"
