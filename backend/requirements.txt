@@ -39,4 +39,9 @@ pydantic-settings        # .env 환경 변수 설정 로드
 pytz                     # 시간대 처리 (time_tool.py 예제)
 beautifulsoup4           # SEMAS HTML 파싱
 
+# ── Google API / OAuth ────────────────────────────────────────
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
 

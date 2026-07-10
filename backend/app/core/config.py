@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     CRAWLER_ADVISORY_LOCK_ID: int = 2026070601
     SEMAS_CRAWLER_ADVISORY_LOCK_ID: int = 2026070602
 
+    # Google OAuth 2.0 Settings
+    GOOGLE_CLIENT_ID: str | None = None
+    GOOGLE_CLIENT_SECRET: str | None = None
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+
     # CORS Origins
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:5173",  # React default port
