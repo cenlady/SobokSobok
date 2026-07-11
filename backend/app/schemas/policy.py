@@ -1,4 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PolicyAttachmentRead(BaseModel):
@@ -50,3 +54,40 @@ class PolicyProgramPageDetailRead(PolicyProgramPageRead):
 class PolicyAnnouncementDetailRead(PolicyAnnouncementRead):
     content_html: str | None = None
     attachments: list[PolicyAttachmentRead] = []
+
+
+class NormalizedPolicyAttachmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    attachment_file_id: UUID
+    original_file_name: str | None = None
+
+
+class NormalizedPolicyDetailRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    source: str
+    source_pk: str
+    title: str
+    summary: str | None = None
+    body: str | None = None
+    organization: str | None = None
+    support_type: str | None = None
+    target_text: str | None = None
+    support_content: str | None = None
+    region_scope: str
+    sido: str | None = None
+    sigungu: str | None = None
+    matched_sidos: list[str] = Field(default_factory=list)
+    status: str | None = None
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    apply_url: str | None = None
+    application_methods: list[str] = Field(default_factory=list)
+    contact_points: list[Any] = Field(default_factory=list)
+    industry_tags: list[str] = Field(default_factory=list)
+    business_status_tags: list[str] = Field(default_factory=list)
+    eligibility: dict[str, Any] = Field(default_factory=dict)
+    required_documents: list[Any] = Field(default_factory=list)
+    attachments: list[NormalizedPolicyAttachmentRead] = Field(default_factory=list)

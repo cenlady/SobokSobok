@@ -5,15 +5,18 @@ import {
   Lock,
   MapPin,
   Pencil,
+  SlidersHorizontal,
   Users,
   Utensils,
   Wallet,
   CheckCircle2,
+  BriefcaseBusiness,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import { useProfile } from '../lib/storage'
 import { useState } from 'react'
+import { NEED_OPTIONS } from '../lib/recommend'
 
 export default function ProfileScreen() {
   const navigate = useNavigate()
@@ -55,6 +58,8 @@ export default function ProfileScreen() {
         <div className="mt-4 grid grid-cols-2 gap-3">
           <InfoTile icon={Utensils} label="업종" value={profile.industry} />
           <InfoTile icon={MapPin} label="지역" value={profile.region} />
+          <InfoTile icon={BriefcaseBusiness} label="사업자 상태" value={profile.businessStatus} />
+          <InfoTile icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
         </div>
         <div className="mt-3">
           <InfoTile
@@ -68,6 +73,11 @@ export default function ProfileScreen() {
         <div className="mt-3">
           <InfoTile icon={Users} label="직원 수" value={profile.employees} />
         </div>
+        {profile.needTags.length > 0 && (
+          <p className="mt-3 rounded-2xl bg-white p-4 text-sm font-semibold text-brand-dark shadow-card">
+            관심 지원: {profile.needTags.map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag).join(', ')}
+          </p>
+        )}
 
         {/* 안내 배너 */}
         <div className="mt-4 flex items-center gap-3 rounded-2xl bg-green-50 p-4">

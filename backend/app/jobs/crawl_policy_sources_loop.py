@@ -3,6 +3,7 @@ import time
 import traceback
 
 from app.core.config import settings
+from app.jobs.build_rec_vectors_once import build_rec_vectors_once
 from app.services.extract_attachments import extract_pending_attachments_once
 from app.services.gov24_ingest import crawl_gov24_once
 from app.services.normalize_policies import normalize_policy_sources_once
@@ -67,6 +68,17 @@ def _run_all_jobs() -> None:
         except Exception:
             print("[extractor] failed", flush=True)
             traceback.print_exc()
+
+    try:
+        stats = build_rec_vectors_once()
+        print(
+            "[embedding] success "
+            + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+    except Exception:
+        print("[embedding] failed", flush=True)
+        traceback.print_exc()
 
 
 if __name__ == "__main__":

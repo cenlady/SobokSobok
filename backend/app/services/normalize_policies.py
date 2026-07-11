@@ -1459,10 +1459,23 @@ def _parse_deadline_range(value: str | None) -> tuple[datetime | None, datetime 
             dates.append(datetime(int(year), int(month), int(day)))
         except ValueError:
             continue
+    if len(dates) == 1:
+        first_date = dates[0]
+        year = first_date.year
+        remaining_text = re.sub(r"20\d{2}[.\-/년\s]+\d{1,2}[.\-/월\s]+\d{1,2}", "", text_value, count=1)
+        second_match = re.search(r"(\d{1,2})[.\-/월\s]+(\d{1,2})", remaining_text)
+        if second_match:
+            try:
+                second_date = datetime(year, int(second_match.group(1)), int(second_match.group(2)))
+                if first_date <= second_date:
+                    return first_date, second_date
+                else:
+                    return second_date, first_date
+            except ValueError:
+                pass
+        return None, first_date
     if not dates:
         return None, None
-    if len(dates) == 1:
-        return None, dates[0]
     return dates[0], dates[1]
 
 

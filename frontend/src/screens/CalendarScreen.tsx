@@ -1,17 +1,18 @@
 import { useMemo, useState } from 'react'
 import {
+  ArrowRight,
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Clock,
   Info,
-  Plus,
-  Sprout,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
-import { benefits } from '../data/benefits'
-import { statusMeta, TODAY } from '../lib/format'
-import type { BenefitStatus } from '../types'
+import { buildGoogleCalendarUrl, formatDate, toDateKey } from '../lib/calendar'
+import { ddayLabel, statusMeta, TODAY } from '../lib/format'
+import { useSavedPolicies } from '../lib/storage'
+import type { BenefitStatus, SavedPolicy } from '../types'
 
 const WEEK = ['일', '월', '화', '수', '목', '금', '토']
 
@@ -19,26 +20,44 @@ function ymd(y: number, m: number, d: number) {
   return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
 }
 
+function statusForPolicy(policy: SavedPolicy): BenefitStatus {
+  const end = toDateKey(policy.apply_end)
+  if (!end) return 'notice'
+  const today = new Date(`${TODAY}T00:00:00`)
+  const due = new Date(`${end}T00:00:00`)
+  const diff = Math.round((due.getTime() - today.getTime()) / 86400000)
+  if (diff <= 14) return 'closing'
+  return 'open'
+}
+
 const statusIcon: Record<BenefitStatus, typeof Clock> = {
   closing: Clock,
-  open: Sprout,
+  open: CalendarDays,
   notice: Info,
 }
 
 export default function CalendarScreen() {
   const navigate = useNavigate()
-  // 목업 기준 2024년 6월
-  const [cursor, setCursor] = useState({ year: 2024, month: 5 }) // month: 0-indexed
+  const { policies } = useSavedPolicies()
+  const todayDate = new Date(`${TODAY}T00:00:00`)
+  const [cursor, setCursor] = useState({
+    year: todayDate.getFullYear(),
+    month: todayDate.getMonth(),
+  })
   const [selected, setSelected] = useState(TODAY)
 
-  // 날짜별 혜택 상태 dot 매핑
+  const scheduledPolicies = policies.filter((policy) => toDateKey(policy.apply_end))
+  const unscheduledPolicies = policies.filter((policy) => !toDateKey(policy.apply_end))
+
   const dots = useMemo(() => {
     const map: Record<string, BenefitStatus[]> = {}
-    for (const b of benefits) {
-      ;(map[b.dueDate] ??= []).push(b.status)
+    for (const policy of scheduledPolicies) {
+      const key = toDateKey(policy.apply_end)
+      if (!key) continue
+      ;(map[key] ??= []).push(statusForPolicy(policy))
     }
     return map
-  }, [])
+  }, [scheduledPolicies])
 
   const { year, month } = cursor
   const first = new Date(year, month, 1)
@@ -46,7 +65,6 @@ export default function CalendarScreen() {
   const daysInMonth = new Date(year, month + 1, 0).getDate()
   const prevDays = new Date(year, month, 0).getDate()
 
-  // 6주(42칸) 그리드 구성
   const cells: { day: number; inMonth: boolean; dateKey?: string }[] = []
   for (let i = 0; i < startDow; i++) {
     cells.push({ day: prevDays - startDow + 1 + i, inMonth: false })
@@ -67,30 +85,36 @@ export default function CalendarScreen() {
     setCursor({ year: ny, month: nm })
   }
 
-  const dayList = benefits.filter((b) => b.dueDate === selected)
-  const selDate = new Date(selected + 'T00:00:00')
+  const dayList = scheduledPolicies.filter((policy) => toDateKey(policy.apply_end) === selected)
+  const selDate = new Date(`${selected}T00:00:00`)
 
   return (
     <div className="pb-24">
       <TopBar />
 
-      {/* 월 캘린더 카드 */}
       <section className="px-5">
         <div className="rounded-3xl bg-white p-5 shadow-card">
           <div className="mb-4 flex items-center justify-between">
-            <button className="flex items-center gap-1 text-lg font-bold text-brand-dark">
-              {year}년 {month + 1}월
-            </button>
+            <div>
+              <button className="flex items-center gap-1 text-lg font-bold text-brand-dark">
+                {year}년 {month + 1}월
+              </button>
+              <p className="mt-1 text-xs font-medium text-brand-dark/45">
+                저장한 정책의 마감 일정이 표시돼요.
+              </p>
+            </div>
             <div className="flex gap-2">
               <button
                 onClick={() => shift(-1)}
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
+                aria-label="이전 달"
               >
                 <ChevronLeft size={18} />
               </button>
               <button
                 onClick={() => shift(1)}
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
+                aria-label="다음 달"
               >
                 <ChevronRight size={18} />
               </button>
@@ -115,7 +139,7 @@ export default function CalendarScreen() {
               const dayDots = c.dateKey ? dots[c.dateKey] : undefined
               return (
                 <button
-                  key={idx}
+                  key={`${c.dateKey ?? 'empty'}-${idx}`}
                   disabled={!c.inMonth}
                   onClick={() => c.dateKey && setSelected(c.dateKey)}
                   className="relative flex flex-col items-center py-1.5"
@@ -139,10 +163,7 @@ export default function CalendarScreen() {
                   </span>
                   <span className="mt-1 flex h-1.5 gap-0.5">
                     {dayDots?.slice(0, 3).map((s, i) => (
-                      <span
-                        key={i}
-                        className={`h-1.5 w-1.5 rounded-full ${statusMeta[s].bar}`}
-                      />
+                      <span key={`${s}-${i}`} className={`h-1.5 w-1.5 rounded-full ${statusMeta[s].bar}`} />
                     ))}
                   </span>
                 </button>
@@ -152,75 +173,139 @@ export default function CalendarScreen() {
         </div>
       </section>
 
-      {/* 선택일 혜택 일정 */}
       <section className="mt-6 px-5">
         <div className="flex items-center justify-between">
-          <h3 className="text-xl font-bold text-brand-dark">
-            {selDate.getMonth() + 1}월 {selDate.getDate()}일의 혜택 일정
-          </h3>
-          <button className="rounded-full bg-accent-soft px-3 py-1 text-xs font-semibold text-brand">
-            전체보기
-          </button>
+          <div>
+            <h3 className="text-xl font-bold text-brand-dark">
+              {selDate.getMonth() + 1}월 {selDate.getDate()}일 마감 정책
+            </h3>
+            <p className="mt-1 text-sm text-brand-dark/50">
+              저장된 정책 {policies.length}건 중 해당 날짜 일정이에요.
+            </p>
+          </div>
         </div>
 
         <div className="mt-4 space-y-3">
           {dayList.length === 0 && (
-            <p className="rounded-2xl bg-white p-6 text-center text-sm text-brand-dark/40 shadow-card">
-              이 날에는 등록된 혜택 일정이 없어요.
-            </p>
-          )}
-          {dayList.map((b) => {
-            const meta = statusMeta[b.status]
-            const Icon = statusIcon[b.status]
-            return (
+            <div className="rounded-2xl bg-white p-6 text-center shadow-card">
+              <p className="text-sm font-medium text-brand-dark/45">
+                이 날 마감되는 저장 정책이 없어요.
+              </p>
               <button
-                key={b.id}
-                onClick={() => navigate(`/benefit/${b.id}`)}
-                className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card active:scale-[0.99]"
+                onClick={() => navigate('/')}
+                className="mt-4 rounded-xl bg-brand-dark px-4 py-2 text-sm font-bold text-white"
+              >
+                추천 정책 보러가기
+              </button>
+            </div>
+          )}
+
+          {dayList.map((policy) => {
+            const status = statusForPolicy(policy)
+            const meta = statusMeta[status]
+            const Icon = statusIcon[status]
+            return (
+              <article
+                key={policy.policy_id}
+                className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card"
               >
                 <span className={`w-1.5 flex-shrink-0 ${meta.bar}`} />
-                <span
-                  className={`my-4 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${meta.iconBg}`}
-                >
+                <span className={`my-4 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${meta.iconBg}`}>
                   <Icon size={22} className={meta.iconColor} />
                 </span>
-                <span className="flex-1 py-4 pr-4">
-                  <span className="flex items-center justify-between">
-                    <span className={`text-sm font-bold ${meta.text}`}>{meta.label}</span>
-                    <span className="text-xs font-medium text-brand-dark/50">
-                      {b.timeLabel}
+                <div className="min-w-0 flex-1 py-4 pr-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={`text-sm font-bold ${meta.text}`}>
+                      {ddayLabel(toDateKey(policy.apply_end) || selected)}
                     </span>
-                  </span>
-                  <span className="mt-0.5 block text-base font-semibold text-brand-dark">
-                    {b.title}
-                  </span>
-                  <span className="mt-0.5 block text-sm text-brand-dark/50">
-                    {b.summary}
-                  </span>
-                </span>
-              </button>
+                    {policy.support_type && (
+                      <span className="truncate text-xs font-medium text-brand-dark/50">
+                        {policy.support_type}
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="mt-1 line-clamp-2 text-base font-semibold text-brand-dark">
+                    {policy.title}
+                  </h4>
+                  <p className="mt-1 text-sm text-brand-dark/50">
+                    {formatDate(policy.apply_start)} ~ {formatDate(policy.apply_end)}
+                  </p>
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => navigate(`/policy/${policy.policy_id}`)}
+                      className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
+                    >
+                      상세보기 <ArrowRight size={13} />
+                    </button>
+                    <button
+                      onClick={() =>
+                        window.open(buildGoogleCalendarUrl(policy), '_blank', 'noopener,noreferrer')
+                      }
+                      className="flex items-center justify-center gap-1 rounded-xl bg-accent-soft px-3 py-2 text-xs font-bold text-accent"
+                    >
+                      캘린더 추가
+                    </button>
+                  </div>
+                </div>
+              </article>
             )
           })}
         </div>
 
-        {/* AI 사장님 비서 배너 */}
-        <div className="mt-4 flex items-center gap-3 rounded-2xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-4">
-          <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-full bg-white/70">
-            🤖
-          </span>
-          <p className="flex-1 text-sm font-medium text-brand-dark">
-            <span className="font-bold">AI 사장님 비서</span>
+        <div className="mt-4 rounded-2xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-4">
+          <p className="text-sm font-medium text-brand-dark">
+            <span className="font-bold">정책 상세에서 저장한 공고</span>
             <br />
-            “{month + 1}월에는 사장님이 놓칠 수 있는 마감 혜택이 3건 더 있어요. 확인해볼까요?”
+            저장한 정책의 마감일이 이 달력에 표시됩니다.
           </p>
-          <ChevronRight size={20} className="text-brand-dark/50" />
         </div>
-      </section>
 
-      {/* FAB */}
-      <button className="fixed bottom-24 left-1/2 z-20 flex h-14 w-14 -translate-x-1/2 items-center justify-center rounded-full bg-brand-dark text-white shadow-xl shadow-brand-dark/30 active:scale-95 sm:left-auto sm:right-[calc(50%-215px+20px)] sm:translate-x-0">
-        <Plus size={26} />
-      </button>
+        {/* 기한 미정 정책 목록 */}
+        {unscheduledPolicies.length > 0 && (
+          <div className="mt-6">
+            <h3 className="text-lg font-bold text-brand-dark">기한 미정 정책 ({unscheduledPolicies.length}건)</h3>
+            <div className="mt-3 space-y-3">
+              {unscheduledPolicies.map((policy) => (
+                <article
+                  key={policy.policy_id}
+                  className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card"
+                >
+                  <span className="w-1.5 flex-shrink-0 bg-brand-dark/20" />
+                  <div className="min-w-0 flex-1 py-4 pr-4 pl-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-brand-dark/40">기한 미정</span>
+                      {policy.support_type && (
+                        <span className="truncate text-xs font-medium text-brand-dark/50">
+                          {policy.support_type}
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="mt-1 line-clamp-2 text-base font-semibold text-brand-dark">
+                      {policy.title}
+                    </h4>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => navigate(`/policy/${policy.policy_id}`)}
+                        className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
+                      >
+                        상세보기 <ArrowRight size={13} />
+                      </button>
+                      <button
+                        onClick={() =>
+                          window.open(buildGoogleCalendarUrl(policy), '_blank', 'noopener,noreferrer')
+                        }
+                        className="flex items-center justify-center gap-1 rounded-xl bg-accent-soft px-3 py-2 text-xs font-bold text-accent"
+                      >
+                        캘린더 추가
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   )
 }

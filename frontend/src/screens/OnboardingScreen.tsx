@@ -1,28 +1,65 @@
 import { useState } from 'react'
-import { ChevronLeft, MapPin, Users, Utensils, Wallet } from 'lucide-react'
+import { BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useProfile } from '../lib/storage'
-
-const OPTIONS = {
-  industry: ['음식점업', '도소매업', '서비스업', '제조업', '숙박업', '기타'],
-  region: ['서울시 마포구', '서울시 강남구', '경기도 성남시', '부산시 해운대구', '기타'],
-  revenue: ['5천만원 미만', '5천만원 ~ 2억', '연 2억 ~ 5억', '5억 ~ 10억', '10억 이상'],
-  employees: ['없음 (1인 사업)', '상시 1~4인', '상시 4인', '상시 5~9인', '10인 이상'],
-}
+import {
+  BUSINESS_AGE_OPTIONS,
+  BUSINESS_STATUS_OPTIONS,
+  EMPLOYEE_OPTIONS,
+  INDUSTRY_OPTIONS,
+  NEED_OPTIONS,
+  REGION_MAP,
+  REVENUE_OPTIONS,
+  optionByLabel,
+} from '../lib/recommend'
 
 export default function OnboardingScreen() {
   const navigate = useNavigate()
   const { profile, setProfile } = useProfile()
 
   const [industry, setIndustry] = useState(profile.industry)
-  const [region, setRegion] = useState(profile.region)
+  const [sido, setSido] = useState(profile.regionSido || '서울특별시')
+  const [sigungu, setSigungu] = useState(profile.regionSigungu || '마포구')
   const [revenue, setRevenue] = useState(profile.revenue)
   const [employees, setEmployees] = useState(profile.employees)
+  const [businessStatus, setBusinessStatus] = useState(profile.businessStatus)
+  const [businessAge, setBusinessAge] = useState(profile.businessAge)
+  const [needTags, setNeedTags] = useState(profile.needTags)
 
   const submit = () => {
-    setProfile({ ...profile, industry, region, revenue, employees })
-    // Step 2·3은 아직 미구현 → 저장 후 홈으로 이동
+    const industryOption = optionByLabel(INDUSTRY_OPTIONS, industry)
+    const revenueOption = optionByLabel(REVENUE_OPTIONS, revenue)
+    const employeeOption = optionByLabel(EMPLOYEE_OPTIONS, employees)
+    const statusOption = optionByLabel(BUSINESS_STATUS_OPTIONS, businessStatus)
+    const ageOption = optionByLabel(BUSINESS_AGE_OPTIONS, businessAge)
+
+    const displaySigungu = sigungu === '전체' ? '' : sigungu
+    const combinedRegion = displaySigungu ? `${sido} ${displaySigungu}` : sido
+
+    setProfile({
+      ...profile,
+      industry,
+      industryTags: industryOption?.tags || [],
+      region: combinedRegion,
+      regionSido: sido,
+      regionSigungu: displaySigungu,
+      revenue,
+      revenueRange: revenueOption?.range || null,
+      employees,
+      employeesRange: employeeOption?.range || null,
+      businessStatus,
+      businessStatusTags: statusOption?.tags || [],
+      businessAge,
+      businessAgeYears: ageOption?.range || null,
+      needTags,
+    })
     navigate('/')
+  }
+
+  const toggleNeedTag = (tag: string) => {
+    setNeedTags((prev) =>
+      prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
+    )
   }
 
   return (
@@ -37,13 +74,13 @@ export default function OnboardingScreen() {
       <div className="h-px bg-black/5" />
 
       <div className="flex-1 overflow-y-auto px-6 pt-6">
-        {/* 진행 표시 (Step 1/3) */}
+        {/* 진행 표시 */}
         <div className="flex items-baseline justify-between">
-          <span className="font-bold text-brand">Step 1 / 3</span>
-          <span className="text-sm font-medium text-brand-dark/50">기본 정보 입력</span>
+          <span className="font-bold text-brand">맞춤 추천 정보</span>
+          <span className="text-sm font-medium text-brand-dark/50">필수 + 권장 입력</span>
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/10">
-          <div className="h-full w-1/3 rounded-full bg-brand" />
+          <div className="h-full w-full rounded-full bg-brand" />
         </div>
 
         <h2 className="mt-8 text-2xl font-bold leading-snug text-brand-dark">
@@ -61,23 +98,70 @@ export default function OnboardingScreen() {
             icon={Utensils}
             value={industry}
             onChange={setIndustry}
-            options={OPTIONS.industry}
+            options={INDUSTRY_OPTIONS.map((item) => item.label)}
             placeholder="업종을 선택해주세요"
           />
+          {/* 활동 지역 (시/도) */}
+          <div>
+            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">활동 지역 (시/도)</label>
+            <div className="relative">
+              <select
+                value={sido}
+                onChange={(e) => {
+                  const nextSido = e.target.value
+                  setSido(nextSido)
+                  const nextSigunguOptions = REGION_MAP[nextSido] || []
+                  setSigungu(nextSigunguOptions[0] || '전체')
+                }}
+                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-brand-dark"
+              >
+                {Object.keys(REGION_MAP).map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-brand-dark/40">
+                <MapPin size={20} />
+              </span>
+            </div>
+          </div>
+
+          {/* 활동 지역 (시/군/구) */}
+          <div>
+            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">활동 지역 (시/군/구)</label>
+            <div className="relative">
+              <select
+                value={sigungu || '전체'}
+                onChange={(e) => setSigungu(e.target.value)}
+                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-brand-dark"
+                disabled={!(REGION_MAP[sido] && REGION_MAP[sido].length > 1)}
+              >
+                {(REGION_MAP[sido] || []).map((sg) => (
+                  <option key={sg} value={sg}>
+                    {sg}
+                  </option>
+                ))}
+              </select>
+              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-brand-dark/40">
+                <MapPin size={20} />
+              </span>
+            </div>
+          </div>
           <SelectField
-            label="활동 지역"
-            icon={MapPin}
-            value={region}
-            onChange={setRegion}
-            options={OPTIONS.region}
-            placeholder="지역을 선택해주세요"
+            label="사업자 상태"
+            icon={BriefcaseBusiness}
+            value={businessStatus}
+            onChange={setBusinessStatus}
+            options={BUSINESS_STATUS_OPTIONS.map((item) => item.label)}
+            placeholder="현재 상태를 선택해주세요"
           />
           <SelectField
             label="연매출 규모"
             icon={Wallet}
             value={revenue}
             onChange={setRevenue}
-            options={OPTIONS.revenue}
+            options={REVENUE_OPTIONS.map((item) => item.label)}
             placeholder="연매출 범위를 선택해주세요"
           />
           <SelectField
@@ -85,9 +169,42 @@ export default function OnboardingScreen() {
             icon={Users}
             value={employees}
             onChange={setEmployees}
-            options={OPTIONS.employees}
+            options={EMPLOYEE_OPTIONS.map((item) => item.label)}
             placeholder="직원 수를 선택해주세요"
           />
+          <SelectField
+            label="업력"
+            icon={SlidersHorizontal}
+            value={businessAge}
+            onChange={setBusinessAge}
+            options={BUSINESS_AGE_OPTIONS.map((item) => item.label)}
+            placeholder="사업 운영 기간을 선택해주세요"
+          />
+
+          <div>
+            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">
+              원하는 지원 유형
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {NEED_OPTIONS.map((option) => {
+                const active = needTags.includes(option.tag)
+                return (
+                  <button
+                    key={option.tag}
+                    type="button"
+                    onClick={() => toggleNeedTag(option.tag)}
+                    className={`rounded-2xl border px-3 py-3 text-sm font-semibold transition-colors ${
+                      active
+                        ? 'border-brand bg-brand text-white'
+                        : 'border-brand-light/40 bg-white text-brand-dark/70'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -288,9 +288,22 @@ def _as_int(value: Any) -> int | None:
 
 
 def _html_to_text(value: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", value or "")
+    if not value:
+        return ""
+    html_str = re.sub(r"(?i)<br\s*/?>", "\n", value)
+    html_str = re.sub(r"(?i)</?p\s*/?>", "\n", html_str)
+    html_str = re.sub(r"(?i)</?div\s*/?>", "\n", html_str)
+    html_str = re.sub(r"(?i)</?li\s*/?>", "\n", html_str)
+    text = re.sub(r"<[^>]+>", " ", html_str)
     text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+    
+    # Preserve lines but clean internal spacing
+    lines = []
+    for line in text.split("\n"):
+        cleaned_line = re.sub(r"[ \t]+", " ", line).strip()
+        if cleaned_line:
+            lines.append(cleaned_line)
+    return "\n".join(lines)
 
 
 def _make_content_hash(payload: dict[str, Any]) -> str:

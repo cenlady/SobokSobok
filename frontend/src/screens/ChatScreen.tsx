@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Bookmark, Bot, CalendarDays, Plus, Send } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import { benefits, getBenefit } from '../data/benefits'
 import { useBookmarks } from '../lib/storage'
@@ -26,6 +26,8 @@ const initialMessages: Message[] = [
 
 export default function ChatScreen() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const policyId = searchParams.get('policyId')
   const { has, toggle } = useBookmarks()
   const [messages, setMessages] = useState<Message[]>(initialMessages)
   const [input, setInput] = useState('')
@@ -71,6 +73,19 @@ export default function ChatScreen() {
       <TopBar />
 
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {policyId && (
+          <div className="rounded-2xl bg-brand-dark p-4 text-white shadow-card">
+            <p className="text-sm font-semibold">선택한 정책 상담을 이어갈 수 있어요.</p>
+            <p className="mt-1 break-all text-xs text-white/70">policyId: {policyId}</p>
+            <button
+              onClick={() => navigate(`/policy/${policyId}`)}
+              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-brand-dark"
+            >
+              정책 상세 다시 보기
+            </button>
+          </div>
+        )}
+
         {messages.map((m) =>
           m.role === 'bot' ? (
             <BotBubble key={m.id} m={m} navigate={navigate} has={has} toggle={toggle} />

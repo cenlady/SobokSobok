@@ -16,19 +16,30 @@ class Settings(BaseSettings):
     SQL_ECHO: bool = False
 
     # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
-    # 예: OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
+    # 예: OpenAI text-embedding-3-small = 1536, bge-m3 = 1024, Gemini text-embedding-004 = 768
     #
     # 공유 계약 #1: "공유하는 건 텍스트, 각자 소유하는 건 벡터" — 도메인마다 다른
     # 임베딩 모델을 쓸 수 있어야 하므로 벡터 테이블별로 차원을 분리해 관리한다.
     # 아래 값을 지정하지 않은 테이블은 EMBEDDING_DIM을 따른다.
     EMBEDDING_DIM: int = 1536
 
-    # [서류 검토] Ollama bge-m3 = 1024차원 (실측 확인)
+    # 팀 합의: 임베딩 모델은 Ollama bge-m3:latest(1024차원)로 통일한다.
+    # 추천/서류검토 모두 아래 기본값을 따르며, 모델명 문자열도 일치시킨다.
+    # (추천의 OpenAI 전환 분기는 유지하되 기본은 ollama로 고정)
+    REC_EMBEDDING_DIM: int = 1024
+    REC_EMBEDDING_PROVIDER: str = "ollama"
+    REC_OLLAMA_MODEL: str = "bge-m3:latest"
+    REC_OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
+    REC_OPENAI_MODEL: str = "text-embedding-3-small"
+    GEMINI_API_KEY: str | None = None
+    GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
+
+    # [서류 검토] Ollama bge-m3:latest = 1024차원 (실측 확인)
     REVIEW_EMBEDDING_DIM: int = 1024
 
-    # 서류 검토 (이슈 #6) — 로컬 Ollama 사용
+    # 서류 검토 (이슈 #6) — 로컬 Ollama 사용 (추천과 동일 모델로 통일)
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"  # 컨테이너 → 호스트 Ollama
-    REVIEW_EMBEDDING_MODEL: str = "bge-m3"        # 임베딩 (1024차원, 다국어)
+    REVIEW_EMBEDDING_MODEL: str = "bge-m3:latest"  # 임베딩 (1024차원, 다국어) — REC와 표기 통일
     REVIEW_LLM_MODEL: str = "exaone3.5"           # 진단용 LLM (한국어 특화)
     REVIEW_VECTORS_ADVISORY_LOCK_ID: int = 2026070606
     # bge-m3 컨텍스트가 8192 토큰이라 긴 문서는 청킹 필요 (통째로 넣으면 뒷부분 소실)
