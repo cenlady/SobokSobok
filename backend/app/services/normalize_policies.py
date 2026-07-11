@@ -537,11 +537,8 @@ def _replace_documents(
     policy: NormalizedPolicy,
     documents: list[dict[str, str | None]],
 ) -> int:
-    for document in list(policy.documents):
-        db.delete(document)
-    db.flush()
-
     created = 0
+    incoming_documents: dict[tuple[str, str], dict[str, str | None]] = {}
     seen: set[tuple[str, str]] = set()
     for document in documents:
         text_value = _clean_text(document.get("text"))
@@ -553,17 +550,49 @@ def _replace_documents(
         if key in seen:
             continue
         seen.add(key)
+        incoming_documents[key] = {
+            "document_type": document_type,
+            "source_ref": document.get("source_ref"),
+            "title": document.get("title"),
+            "text": text_value,
+            "text_hash": text_hash,
+        }
+
+    existing_documents = {
+        (document.document_type, document.text_hash): document
+        for document in list(policy.documents)
+    }
+
+    # 동일한 document_type + text_hash 문서는 그대로 유지합니다.
+    # document_id가 보존되어야 policy_chunks FK와 기존 임베딩도 함께 살아남습니다.
+    for key, payload in incoming_documents.items():
+        existing_document = existing_documents.get(key)
+        if existing_document is not None:
+            # 본문이 같은 문서라도 제목/source_ref는 크롤링 데이터 보정으로 바뀔 수 있으므로 갱신합니다.
+            existing_document.source_ref = payload["source_ref"]
+            existing_document.title = payload["title"]
+            continue
+
         db.add(
             PolicyDocument(
                 policy_id=policy.id,
-                document_type=document_type,
-                source_ref=document.get("source_ref"),
-                title=document.get("title"),
-                text=text_value,
-                text_hash=text_hash,
+                document_type=payload["document_type"],
+                source_ref=payload["source_ref"],
+                title=payload["title"],
+                text=payload["text"],
+                text_hash=payload["text_hash"],
             )
         )
         created += 1
+
+    # 새 정규화 결과에서 사라진 문서만 삭제합니다.
+    # 이 경우에만 연결된 policy_chunks가 cascade 삭제되는 것이 의도된 동작입니다.
+    incoming_keys = set(incoming_documents.keys())
+    for key, existing_document in existing_documents.items():
+        if key not in incoming_keys:
+            db.delete(existing_document)
+
+    db.flush()
     return created
 
 
