@@ -63,7 +63,7 @@ class ReviewUpload(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True, comment="업로드한 사용자 (미인증 데모 허용 위해 nullable)")
-    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=False, index=True, comment="검토 대상 정책")
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=True, index=True, comment="검토 대상 정책 (선택 — 서류 자체 검토는 정책 없이도 가능)")
 
     original_file_name = Column(Text, nullable=True, comment="원본 파일명")
     storage_path = Column(Text, nullable=False, comment="업로드 파일 저장 경로")
@@ -73,7 +73,7 @@ class ReviewUpload(Base):
     extracted_text = Column(Text, nullable=True, comment="kordoc/OCR로 추출된 서류 본문")
     extraction_status = Column(String(30), nullable=False, default="pending", comment="추출 상태 (pending, success, empty, unsupported, failed)")
 
-    diagnosis = Column(JSON, nullable=True, comment="LLM 진단 결과 {document_type, missing_items[], improvement_points[], overall}")
+    diagnosis = Column(JSON, nullable=True, comment="LLM 진단 결과 {document_type, typos[], missing_fields[], format_issues[], improvement_points[], overall}")
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -106,6 +106,8 @@ REVIEW_SCHEMA_SQL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_review_vectors_policy_type ON review_vectors (policy_id, document_type)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uk_review_vectors_policy_doc ON review_vectors (policy_id, document_type, document_name)",
+    # 서류 자체 검토로 전환하며 policy_id를 선택으로 변경 (#23)
+    "ALTER TABLE review_uploads ALTER COLUMN policy_id DROP NOT NULL",
 ]
 
 
