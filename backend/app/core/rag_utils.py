@@ -89,27 +89,38 @@ class GeminiEmbeddingModel(EmbeddingModel):
 class OllamaEmbeddingModel(EmbeddingModel):
     """
     로컬에 설치된 Ollama를 사용하는 임베딩 모델 구현체.
-    기본 모델: nomic-embed-text
+    기본 모델: bge-m3:latest (1024차원, 다국어)
+
+    nomic-embed-text(768차원)는 영어 중심이라 한국어 정책 문서의 의미 유사도가
+    떨어져 기본값을 bge-m3로 둔다. bge-m3는 컨텍스트가 8192 토큰이므로 그보다
+    긴 문서는 호출 전에 청킹해야 뒷부분이 잘리지 않는다.
     """
-    def __init__(self, model_name: str = "nomic-embed-text", base_url: str = "http://localhost:11434"):
+    def __init__(self, model_name: str = "bge-m3:latest", base_url: str = "http://localhost:11434"):
         import httpx
         self.model_name = model_name
         self.base_url = base_url
         self.client = httpx.Client(timeout=60.0)
 
     def embed_text(self, text: str) -> List[float]:
+        # 최신 /api/embed 엔드포인트 사용 (레거시 /api/embeddings 대체).
+        # 요청 필드는 input, 응답은 embeddings(배열)로 바뀌었다.
         response = self.client.post(
-            f"{self.base_url}/api/embeddings",
-            json={"model": self.model_name, "prompt": text}
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": text.replace("\n", " ")}
         )
         response.raise_for_status()
-        return response.json()["embedding"]
+        return response.json()["embeddings"][0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        embeddings = []
-        for text_val in texts:
-            embeddings.append(self.embed_text(text_val))
-        return embeddings
+        # /api/embed는 input에 리스트를 받아 한 번의 요청으로 배치 임베딩한다
+        # (레거시 /api/embeddings는 단건만 가능해 루프가 필요했음).
+        clean_texts = [t.replace("\n", " ") for t in texts]
+        response = self.client.post(
+            f"{self.base_url}/api/embed",
+            json={"model": self.model_name, "input": clean_texts}
+        )
+        response.raise_for_status()
+        return response.json()["embeddings"]
 
 
 class SimpleTextSplitter:
