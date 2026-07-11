@@ -15,13 +15,34 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     SQL_ECHO: bool = False
 
-    # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
-    # 예: OpenAI text-embedding-3-small = 1536, bge-m3 = 1024, Gemini text-embedding-004 = 768
+    # RAG 임베딩 벡터 차원. 팀 합의로 임베딩은 bge-m3:latest(1024)로 통일한다.
+    # 예: bge-m3 = 1024, OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
     #
     # 공유 계약 #1: "공유하는 건 텍스트, 각자 소유하는 건 벡터" — 도메인마다 다른
     # 임베딩 모델을 쓸 수 있어야 하므로 벡터 테이블별로 차원을 분리해 관리한다.
-    # 아래 값을 지정하지 않은 테이블은 EMBEDDING_DIM을 따른다.
-    EMBEDDING_DIM: int = 1536
+    # bare EMBEDDING_DIM을 쓰는 테이블(policy_chunks, prep_vectors)의 기본값.
+    EMBEDDING_DIM: int = 1024
+
+    # 챗봇 RAG 설정 (policy_documents → policy_chunks 청킹/임베딩)
+    # OLLAMA_BASE_URL은 아래 공용 설정을 사용한다.
+    CHAT_EMBEDDING_PROVIDER: str = "ollama"  # openai | gemini | ollama
+    CHAT_EMBEDDING_MODEL: str = "bge-m3:latest"   # 통일
+    CHAT_CHUNK_SIZE: int = 280
+    CHAT_CHUNK_OVERLAP: int = 40
+    CHAT_RETRIEVAL_LIMIT: int = 6
+    CHAT_COMPLETION_PROVIDER: str = "openai"  # openai | disabled
+    CHAT_COMPLETION_MODEL: str = "gpt-4o-mini"
+    CHAT_MAX_CONTEXT_CHARS: int = 4500
+    CHAT_SYSTEM_PROMPT: str = (
+        "너는 소상공인 정책 공고 안내 챗봇이다. "
+        "반드시 제공된 검색 근거 안에서만 답하고, 근거가 부족하면 부족하다고 말한다. "
+        "신청 대상, 신청 방법, 제출 서류, 접수 기간, 문의처를 사용자가 이해하기 쉽게 정리한다."
+    )
+
+    # LangSmith는 키가 있을 때만 추적한다. 키가 없으면 코드 경로는 no-op으로 동작한다.
+    LANGSMITH_TRACING: bool = False
+    LANGSMITH_API_KEY: str | None = None
+    LANGSMITH_PROJECT: str = "soboksobok-chatbot-rag"
 
     # 팀 합의: 임베딩 모델은 Ollama bge-m3:latest(1024차원)로 통일한다.
     # 추천/서류검토 모두 아래 기본값을 따르며, 모델명 문자열도 일치시킨다.
