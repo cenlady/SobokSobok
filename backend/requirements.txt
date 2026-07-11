@@ -12,6 +12,7 @@ python-dotenv       # .env 파일 로드
 # ── 웹 프레임워크 ──────────────────────────────────────────────
 fastapi
 uvicorn[standard]   # 핫리로드(watchfiles) + websockets 포함
+python-multipart    # 파일 업로드(UploadFile) — 서류 검토 API
 streamlit
 httpx                      # 비동기 HTTP 클라이언트 (SSE 수신)
 sqlmodel

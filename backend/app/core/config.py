@@ -17,7 +17,31 @@ class Settings(BaseSettings):
 
     # RAG 임베딩 벡터 차원. 사용하는 임베딩 모델에 맞춰 조정한다.
     # 예: OpenAI text-embedding-3-small = 1536, Gemini text-embedding-004 = 768
+    #
+    # 공유 계약 #1: "공유하는 건 텍스트, 각자 소유하는 건 벡터" — 도메인마다 다른
+    # 임베딩 모델을 쓸 수 있어야 하므로 벡터 테이블별로 차원을 분리해 관리한다.
+    # 아래 값을 지정하지 않은 테이블은 EMBEDDING_DIM을 따른다.
     EMBEDDING_DIM: int = 1536
+
+    # [서류 검토] Ollama bge-m3 = 1024차원 (실측 확인)
+    REVIEW_EMBEDDING_DIM: int = 1024
+
+    # 서류 검토 (이슈 #6) — 로컬 Ollama 사용
+    OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"  # 컨테이너 → 호스트 Ollama
+    REVIEW_EMBEDDING_MODEL: str = "bge-m3"        # 임베딩 (1024차원, 다국어)
+    REVIEW_LLM_MODEL: str = "exaone3.5"           # 진단용 LLM (한국어 특화)
+    REVIEW_VECTORS_ADVISORY_LOCK_ID: int = 2026070606
+    # bge-m3 컨텍스트가 8192 토큰이라 긴 문서는 청킹 필요 (통째로 넣으면 뒷부분 소실)
+    REVIEW_CHUNK_SIZE: int = 1000
+    REVIEW_CHUNK_OVERLAP: int = 100
+    # 임베딩 유사도는 "후보 필터"로만 쓰고, 최종 누락 판정은 LLM에 맡긴다.
+    # 실측: 긴 쿼리에선 정답도 0.63까지 내려가고 오답도 0.66까지 올라와
+    # 절대 임계값으로 정답/오답을 가를 수 없다(구간 겹침). 그래서 낮게 잡아
+    # 후보만 거르고(0.55), 판정은 LLM(exaone3.5)이 원문 근거를 보고 내린다.
+    REVIEW_CANDIDATE_THRESHOLD: float = 0.55
+    REVIEW_UPLOAD_DIR: str = "./storage/review_uploads"
+    REVIEW_MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024  # 20MB
+    REVIEW_LLM_TIMEOUT_SECONDS: int = 180
 
     CRAWL_INTERVAL_SECONDS: int = 60 * 60 * 24
     NORMALIZE_AFTER_CRAWL: bool = True
