@@ -36,27 +36,25 @@ def get_google_login_url():
         "https://www.googleapis.com/auth/calendar"
     ]
 
-    client_config = {
-        "web": {
-            "client_id": settings.GOOGLE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-        }
-    }
+    import urllib.parse
+    import secrets
 
     try:
-        flow = Flow.from_client_config(
-            client_config=client_config,
-            scopes=scopes,
-            redirect_uri=settings.GOOGLE_REDIRECT_URI
-        )
+        # CSRF 보안을 위한 무작위 state 생성
+        state = secrets.token_urlsafe(16)
 
-        authorization_url, state = flow.authorization_url(
-            access_type="offline",
-            prompt="consent",
-            include_granted_scopes="true"
-        )
+        # 직접 구글 규격에 맞추어 쿼리 조립 (PKCE 키 누락 오류 원천 차단)
+        params = {
+            "response_type": "code",
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "scope": " ".join(scopes),
+            "access_type": "offline",
+            "prompt": "consent",
+            "include_granted_scopes": "true",
+            "state": state
+        }
+        authorization_url = "https://accounts.google.com/o/oauth2/auth?" + urllib.parse.urlencode(params)
 
         return {
             "login_url": authorization_url,

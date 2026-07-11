@@ -30,6 +30,8 @@ services:
       DB_USER: ${DB_USER:-edu}
       DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
       ATTACHMENT_DIR: ${ATTACHMENT_DIR:-/app/storage/attachments}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       - "8000:8000"
     volumes:
