@@ -5,7 +5,7 @@ import BottomNav from './BottomNav'
 export default function AppLayout() {
   return (
     <div className="app-frame flex flex-col">
-      <main className="flex-1 overflow-y-auto">
+      <main className="no-scrollbar flex-1 overflow-y-auto">
         <Outlet />
       </main>
       <BottomNav />

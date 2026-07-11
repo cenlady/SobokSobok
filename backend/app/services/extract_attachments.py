@@ -168,9 +168,14 @@ def _extract_json_blob(text_value: str) -> str:
 
 
 def _is_unsupported(row: AttachmentFile) -> bool:
+    return _is_unsupported_name(row.original_file_name, row.content_type)
+
+
+def _is_unsupported_name(file_name: str | None, content_type: str | None) -> bool:
+    """파일명/콘텐츠타입으로 kordoc 미지원 형식(PPTX 등)인지 판정한다."""
     haystacks = [
-        (row.content_type or "").lower(),
-        Path(row.original_file_name or "").suffix.lower().lstrip("."),
+        (content_type or "").lower(),
+        Path(file_name or "").suffix.lower().lstrip("."),
     ]
     return any(
         marker in value
