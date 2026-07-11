@@ -197,7 +197,6 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
     rows = (
         db.query(PolicyAnnouncement)
         .options(selectinload(PolicyAnnouncement.attachments))
-        .filter(PolicyAnnouncement.is_active.is_(True))
         .all()
     )
 
@@ -210,6 +209,14 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
             target_text=row.target,
             content_text=row.content_text,
             sections=sections,
+            region_text=_join_text(
+                [
+                    row.title,
+                    row.organization,
+                    row.target,
+                    _first_section_text_by_type(sections, "eligibility"),
+                ]
+            ),
         )
         target_text = _first_text(metadata["target_text"], row.target)
         support_content = _first_text(metadata["support_content_text"], row.content_text)
@@ -233,9 +240,9 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
             **filter_columns,
             "status": _normalize_status(row.status),
             "apply_start": _parse_datetime(row.apply_start),
-            "apply_end": _parse_datetime(row.apply_end),
+            "apply_end": _parse_datetime(row.apply_end, end_of_day=True),
             "apply_url": row.detail_url,
-            "industry_tags": _merge_unique_lists(_compact_list([row.category]), metadata["industry_tags"]),
+            "industry_tags": metadata["industry_tags"],
             "business_status_tags": _merge_unique_lists(_business_tags_from_text(row.target or ""), metadata["business_status_tags"]),
             "eligibility": {
                 "source": "sbiz24",
@@ -275,7 +282,6 @@ def _normalize_semas(db: Session) -> dict[str, int]:
     stats = _empty_stats()
     rows = (
         db.query(PolicyProgramPage)
-        .filter(PolicyProgramPage.is_active.is_(True))
         .all()
     )
 
@@ -291,6 +297,13 @@ def _normalize_semas(db: Session) -> dict[str, int]:
             sections=sections,
             extra_texts=row.raw_breadcrumbs_json or [],
             default_business_status_tags=["small_business"],
+            region_text=_join_text(
+                [
+                    row.program_name,
+                    *[_as_text(item) for item in (row.raw_breadcrumbs_json or [])],
+                    _first_section_text_by_type(sections, "eligibility"),
+                ]
+            ),
         )
         target_text = metadata["target_text"]
         support_content = _first_text(metadata["support_content_text"], row.content_text)
@@ -316,7 +329,7 @@ def _normalize_semas(db: Session) -> dict[str, int]:
             "apply_start": None,
             "apply_end": None,
             "apply_url": row.source_url,
-            "industry_tags": _merge_unique_lists(_compact_list([row.category]), metadata["industry_tags"]),
+            "industry_tags": metadata["industry_tags"],
             "business_status_tags": metadata["business_status_tags"],
             "eligibility": {
                 "source": "semas",
@@ -352,7 +365,6 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
     stats = _empty_stats()
     list_rows = (
         db.query(Gov24ServiceList)
-        .filter(Gov24ServiceList.is_active.is_(True))
         .all()
     )
 
@@ -400,6 +412,15 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
                 application_method,
             ]
         )
+        gov_eligibility_blob = _join_text(
+            [
+                list_row.service_name,
+                list_row.service_field,
+                list_row.support_type,
+                target_text,
+                _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
+            ]
+        )
         region = _extract_region_metadata(
             _join_text(
                 [
@@ -407,7 +428,6 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
                     list_row.organization_name,
                     detail.organization_name if detail else None,
                     target_text,
-                    support_content,
                     _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
                 ]
             ),
@@ -430,9 +450,9 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "required_documents": docs_required,
             "application_methods": _extract_application_methods(application_method),
             "contacts": contacts,
-            "employee_limit": _extract_employee_limit(gov_text_blob),
-            "sales_limit": _extract_sales_limit(gov_text_blob),
-            "business_age_limit": _extract_business_age_limit(gov_text_blob),
+            "employee_limit": _extract_employee_limit(gov_eligibility_blob),
+            "sales_limit": _extract_sales_limit(gov_eligibility_blob),
+            "business_age_limit": _extract_business_age_limit(gov_eligibility_blob),
         }
         filter_columns = _filter_columns_from_metadata(gov_metadata)
         source_hash = _make_hash(
@@ -458,17 +478,17 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "sido": region["sido"],
             "sigungu": region["sigungu"],
             **filter_columns,
-            "status": _status_from_deadline(application_deadline),
+            "status": _status_from_deadline(application_deadline, apply_start, apply_end),
             "apply_start": apply_start,
             "apply_end": apply_end,
             "apply_url": _first_text(detail.online_application_url if detail else None, list_row.detail_url),
             "industry_tags": _merge_unique_lists(
                 condition_payload["industry_tags"],
-                _tags_from_keyword_map(gov_text_blob, INDUSTRY_KEYWORDS),
+                _tags_from_keyword_map(gov_eligibility_blob, INDUSTRY_KEYWORDS),
             ),
             "business_status_tags": _merge_unique_lists(
                 condition_payload["business_status_tags"],
-                _tags_from_keyword_map(gov_text_blob, BUSINESS_STATUS_KEYWORDS),
+                _tags_from_keyword_map(gov_eligibility_blob, BUSINESS_STATUS_KEYWORDS),
             ),
             "eligibility": {
                 "source": "gov24",
@@ -537,12 +557,12 @@ def _replace_documents(
     policy: NormalizedPolicy,
     documents: list[dict[str, str | None]],
 ) -> int:
-    for document in list(policy.documents):
-        db.delete(document)
-    db.flush()
-
     created = 0
-    seen: set[tuple[str, str]] = set()
+    existing = {
+        (document.document_type, document.text_hash): document
+        for document in policy.documents
+    }
+    desired_keys: set[tuple[str, str]] = set()
     for document in documents:
         text_value = _clean_text(document.get("text"))
         if not text_value:
@@ -550,9 +570,15 @@ def _replace_documents(
         document_type = document.get("document_type") or "body"
         text_hash = _make_hash(text_value)
         key = (document_type, text_hash)
-        if key in seen:
+        if key in desired_keys:
             continue
-        seen.add(key)
+        desired_keys.add(key)
+        existing_document = existing.get(key)
+        if existing_document is not None:
+            existing_document.source_ref = document.get("source_ref")
+            existing_document.title = document.get("title")
+            existing_document.text = text_value
+            continue
         db.add(
             PolicyDocument(
                 policy_id=policy.id,
@@ -564,6 +590,12 @@ def _replace_documents(
             )
         )
         created += 1
+
+    for key, document in existing.items():
+        if key not in desired_keys:
+            db.delete(document)
+
+    db.flush()
     return created
 
 
@@ -704,7 +736,7 @@ def _gov24_documents(
         {"document_type": "contact", "source_ref": "gov24:contact", "title": "문의처", "text": contact},
         {"document_type": "application", "source_ref": "gov24:reception_institution", "title": "접수 기관", "text": reception_institution},
         {"document_type": "reference", "source_ref": "gov24:laws", "title": "관련 법령", "text": laws},
-        {"document_type": "body", "source_ref": "gov24:support_content", "title": "지원 내용", "text": support_content},
+        {"document_type": "support_content", "source_ref": "gov24:support_content", "title": "지원 내용", "text": support_content},
     ]
 
 
@@ -770,6 +802,7 @@ def _source_metadata(
     sections: list[dict[str, str | None]],
     extra_texts: list[Any] | None = None,
     default_business_status_tags: list[str] | None = None,
+    region_text: str | None = None,
 ) -> dict[str, Any]:
     text_blob = _join_text(
         [
@@ -782,12 +815,20 @@ def _source_metadata(
             *[section.get("text") for section in sections],
         ]
     ) or ""
+    eligibility_text = _join_text(
+        [
+            title,
+            category,
+            target_text,
+            _first_section_text_by_type(sections, "eligibility"),
+        ]
+    ) or text_blob
 
     business_status_tags = _merge_unique_lists(
         default_business_status_tags or [],
-        _tags_from_keyword_map(text_blob, BUSINESS_STATUS_KEYWORDS),
+        _tags_from_keyword_map(eligibility_text, BUSINESS_STATUS_KEYWORDS),
     )
-    industry_tags = _tags_from_keyword_map(_join_text([category, text_blob]) or "", INDUSTRY_KEYWORDS)
+    industry_tags = _tags_from_keyword_map(eligibility_text, INDUSTRY_KEYWORDS)
     required_documents = _extract_required_documents(sections, source)
     application_text = _join_text(
         [
@@ -798,16 +839,16 @@ def _source_metadata(
     contacts_text = _first_section_text_by_type(sections, "contact")
 
     return {
-        "region": _extract_region_metadata(text_blob),
+        "region": _extract_region_metadata(region_text if region_text is not None else eligibility_text),
         "summary_text": _first_section_text_by_type(sections, "summary"),
         "target_text": _first_text(_first_section_text_by_type(sections, "eligibility"), target_text),
         "support_content_text": _first_section_text_by_type(sections, "support_content"),
         "required_documents": required_documents,
         "business_status_tags": business_status_tags,
         "industry_tags": industry_tags,
-        "employee_limit": _extract_employee_limit(text_blob),
-        "sales_limit": _extract_sales_limit(text_blob),
-        "business_age_limit": _extract_business_age_limit(text_blob),
+        "employee_limit": _extract_employee_limit(eligibility_text),
+        "sales_limit": _extract_sales_limit(eligibility_text),
+        "business_age_limit": _extract_business_age_limit(eligibility_text),
         "money_conditions": _extract_money_conditions(text_blob),
         "application_methods": _extract_application_methods(application_text or text_blob),
         "contacts": _extract_contacts(_join_text([contacts_text, text_blob])),
@@ -949,7 +990,7 @@ def _extract_region_metadata(value: str | None, default_scope: str = "unknown") 
     text_value = _clean_text(value) or ""
     matched_sidos: list[str] = []
     for alias, sido in sorted(SIDO_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
-        if alias in text_value and sido not in matched_sidos:
+        if _contains_region_alias(text_value, alias) and sido not in matched_sidos:
             matched_sidos.append(sido)
     for group_name, sidos in REGION_GROUPS.items():
         if group_name not in text_value:
@@ -979,6 +1020,12 @@ def _extract_region_metadata(value: str | None, default_scope: str = "unknown") 
         "confidence": confidence,
         "extraction_method": "rule",
     }
+
+
+def _contains_region_alias(text_value: str, alias: str) -> bool:
+    if len(alias) >= 4 or alias.endswith(("특별시", "광역시", "특별자치시", "특별자치도", "도")):
+        return alias in text_value
+    return bool(re.search(rf"(?<![가-힣]){re.escape(alias)}(?:시|도)?(?![가-힣])", text_value))
 
 
 def _extract_required_documents(
@@ -1419,18 +1466,29 @@ def _normalize_status(value: str | None) -> str | None:
     return text_value
 
 
-def _status_from_deadline(deadline: str | None) -> str | None:
+def _status_from_deadline(
+    deadline: str | None,
+    apply_start: datetime | None = None,
+    apply_end: datetime | None = None,
+) -> str | None:
     text_value = _clean_text(deadline)
     if not text_value:
         return None
-    if "상시" in text_value:
+    now = datetime.now()
+    if apply_end is not None and now > apply_end:
+        return "closed"
+    if apply_start is not None and now < apply_start:
+        return "notice"
+    if apply_start is not None or apply_end is not None:
+        return "open"
+    if "상시" in text_value or "소진" in text_value or "연중" in text_value:
         return "open"
     if any(token in text_value for token in ("마감", "종료")):
         return "closed"
     return "notice"
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
+def _parse_datetime(value: str | None, *, end_of_day: bool = False) -> datetime | None:
     text_value = _clean_text(value)
     if not text_value:
         return None
@@ -1442,7 +1500,10 @@ def _parse_datetime(value: str | None) -> datetime | None:
             else:
                 match = re.search(r"\d{4}[-.]\d{1,2}[-.]\d{1,2}", text_value)
             if match:
-                return datetime.strptime(match.group(0), pattern)
+                parsed = datetime.strptime(match.group(0), pattern)
+                if end_of_day and "%H:%M" not in pattern:
+                    return _as_end_of_day(parsed)
+                return parsed
         except ValueError:
             pass
     return None
@@ -1468,15 +1529,21 @@ def _parse_deadline_range(value: str | None) -> tuple[datetime | None, datetime 
             try:
                 second_date = datetime(year, int(second_match.group(1)), int(second_match.group(2)))
                 if first_date <= second_date:
-                    return first_date, second_date
+                    return first_date, _as_end_of_day(second_date)
                 else:
-                    return second_date, first_date
+                    return second_date, _as_end_of_day(first_date)
             except ValueError:
                 pass
-        return None, first_date
+        if re.search(r"(?:예산|자금|보증규모|한도)?.{0,10}소진\s*(?:시|때|까지)?", remaining_text):
+            return first_date, None
+        return None, _as_end_of_day(first_date)
     if not dates:
         return None, None
-    return dates[0], dates[1]
+    return dates[0], _as_end_of_day(dates[1])
+
+
+def _as_end_of_day(value: datetime) -> datetime:
+    return value.replace(hour=23, minute=59, second=59, microsecond=999999)
 
 
 def _split_requirement_lines(value: str | None) -> list[str]:
