@@ -89,13 +89,13 @@ class GeminiEmbeddingModel(EmbeddingModel):
 class OllamaEmbeddingModel(EmbeddingModel):
     """
     로컬에 설치된 Ollama를 사용하는 임베딩 모델 구현체.
-    기본 모델: bge-m3 (1024차원, 다국어)
+    기본 모델: bge-m3:latest (1024차원, 다국어)
 
     nomic-embed-text(768차원)는 영어 중심이라 한국어 정책 문서의 의미 유사도가
     떨어져 기본값을 bge-m3로 둔다. bge-m3는 컨텍스트가 8192 토큰이므로 그보다
     긴 문서는 호출 전에 청킹해야 뒷부분이 잘리지 않는다.
     """
-    def __init__(self, model_name: str = "bge-m3", base_url: str = "http://localhost:11434"):
+    def __init__(self, model_name: str = "bge-m3:latest", base_url: str = "http://localhost:11434"):
         import httpx
         self.model_name = model_name
         self.base_url = base_url
