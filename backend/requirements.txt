@@ -12,6 +12,7 @@ python-dotenv       # .env 파일 로드
 # ── 웹 프레임워크 ──────────────────────────────────────────────
 fastapi
 uvicorn[standard]   # 핫리로드(watchfiles) + websockets 포함
+python-multipart    # 파일 업로드(UploadFile) — 서류 검토 API
 streamlit
 httpx                      # 비동기 HTTP 클라이언트 (SSE 수신)
 sqlmodel
@@ -19,6 +20,8 @@ sqlmodel
 # ── RAG / 벡터 DB ─────────────────────────────────────────────
 psycopg2-binary
 pgvector                 # pgvector 파이썬 어댑터
+langchain-text-splitters # 챗봇 RAG 청킹용(RecursiveCharacterTextSplitter)
+langsmith                # RAG 추적/평가(optional, 키 없으면 비활성)
 
 # ── MCP ───────────────────────────────────────────────────────
 mcp               # FastMCP + Streamable HTTP

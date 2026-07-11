@@ -3,6 +3,10 @@ import time
 import traceback
 
 from app.core.config import settings
+from app.core.database import SessionLocal
+from app.jobs.build_rec_vectors_once import build_rec_vectors_once
+from app.services.chat_rag import build_policy_chunks
+from app.services.extract_attachments import extract_pending_attachments_once
 from app.services.gov24_ingest import crawl_gov24_once
 from app.services.normalize_policies import normalize_policy_sources_once
 from app.services.policy_ingest import crawl_sbiz24_once
@@ -54,6 +58,49 @@ def _run_all_jobs() -> None:
         except Exception:
             print("[normalizer] failed", flush=True)
             traceback.print_exc()
+
+    if settings.EXTRACT_AFTER_NORMALIZE:
+        try:
+            stats = extract_pending_attachments_once()
+            print(
+                "[extractor] success "
+                + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+        except Exception:
+            print("[extractor] failed", flush=True)
+            traceback.print_exc()
+
+    if settings.EMBED_CHAT_CHUNKS_AFTER_NORMALIZE:
+        try:
+            stats = _build_missing_chat_chunks_once()
+            print(
+                "[chat-rag-embedding] success "
+                + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+        except Exception:
+            print("[chat-rag-embedding] failed", flush=True)
+            traceback.print_exc()
+
+    try:
+        stats = build_rec_vectors_once()
+        print(
+            "[embedding] success "
+            + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+    except Exception:
+        print("[embedding] failed", flush=True)
+        traceback.print_exc()
+
+
+def _build_missing_chat_chunks_once() -> dict:
+    db = SessionLocal()
+    try:
+        return build_policy_chunks(db=db, force=False)
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
