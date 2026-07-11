@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     CHAT_CHUNK_SIZE: int = 280
     CHAT_CHUNK_OVERLAP: int = 40
     CHAT_RETRIEVAL_LIMIT: int = 6
+    EMBED_CHAT_CHUNKS_AFTER_NORMALIZE: bool = True
     CHAT_COMPLETION_PROVIDER: str = "openai"  # openai | disabled
     CHAT_COMPLETION_MODEL: str = "gpt-4o-mini"
     CHAT_MAX_CONTEXT_CHARS: int = 4500
