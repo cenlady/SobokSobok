@@ -2,12 +2,14 @@ import json
 import unittest
 from unittest.mock import patch
 
-from app.services.normalize_policies import (
+from app.services.normalization.field_extractors import (
     _extract_business_age_limit,
     _extract_employee_limit,
-    _extract_limits_via_ollama,
     _extract_sales_limit,
-    _limit_fields_requiring_llm,
+)
+from app.services.normalization.limit_rules import _limit_fields_requiring_llm
+from app.services.normalization.llm_limits import (
+    _extract_limits_via_ollama,
     _resolve_limits_with_llm_cache,
 )
 
@@ -68,7 +70,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(result["amount_krw"], 104_000_000)
         self.assertEqual(result["operator"], "<")
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_preserves_strict_upper_bound(self, mock_post) -> None:
         evidence = "상시근로자 5인 미만"
         mock_post.return_value = FakeOllamaResponse(
@@ -86,7 +88,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(result["employee_limit"]["value"], 5)
         self.assertEqual(result["employee_limit"]["operator"], "<")
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_cache_reuses_validated_result_until_source_changes(self, mock_post) -> None:
         evidence = "종사자 5인 미만"
         mock_post.return_value = FakeOllamaResponse(
@@ -135,7 +137,7 @@ class NormalizeLimitTests(unittest.TestCase):
         )
         self.assertEqual(mock_post.call_count, 2)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_cache_reuses_explicit_no_match(self, mock_post) -> None:
         evidence = "매출액 기준 세부 산정방식 확인 후 신청대상 여부 판단 약 1억원 범위"
         mock_post.return_value = FakeOllamaResponse(
@@ -175,7 +177,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertIsNone(first_limits["sales_limit"])
         self.assertIsNone(second_limits["sales_limit"])
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_cache_reuses_validation_rejection_as_safe_no_match(self, mock_post) -> None:
         text = "근무자 약 7명 규모"
         mock_post.return_value = FakeOllamaResponse(
@@ -215,7 +217,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertIsNone(first_limits["employee_limit"])
         self.assertIsNone(second_limits["employee_limit"])
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_preserves_two_sided_range_without_flattening(self, mock_post) -> None:
         evidence = "창업 3년 이상 7년 이하"
         mock_post.return_value = FakeOllamaResponse(
@@ -235,7 +237,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(limit["max_value"], 7)
         self.assertNotIn("value", limit)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_evidence_recovers_range_bound_omitted_by_small_model(self, mock_post) -> None:
         evidence = "창업 3년 이상 7년 이하"
         mock_post.return_value = FakeOllamaResponse(
@@ -254,7 +256,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(limit["max_value"], 7)
         self.assertNotIn("value", limit)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_does_not_treat_rent_as_sales_lower_bound(self, mock_post) -> None:
         evidence = "연 매출액 1억원 이하 ▸ 월 임차료 30만원 이상"
         mock_post.return_value = FakeOllamaResponse(
@@ -275,7 +277,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertIsNone(result["min_value"])
         self.assertEqual(result["max_value"], 100_000_000)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_llm_rejects_evidence_for_a_different_field(self, mock_post) -> None:
         evidence = "상시종업원 10인 미만 업체"
         mock_post.return_value = FakeOllamaResponse(
@@ -303,7 +305,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(result["value"], 5)
         self.assertEqual(result["operator"], "<")
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_industry_specific_employee_limits_are_not_flattened(self, mock_post) -> None:
         text = "제조업은 상시근로자 10인 미만, 기타 업종은 상시근로자 5인 미만"
         mock_post.return_value = FakeOllamaResponse(
@@ -314,7 +316,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual({item["value"] for item in result["constraints"]}, {5, 10})
         self.assertNotIn("value", result)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_funding_type_age_limits_are_not_flattened(self, mock_post) -> None:
         text = (
             "자금별 요건을 충족해야 함 - 창업자금 : 업력 1년 이내 "
@@ -328,7 +330,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(result["logic"], "any_of")
         self.assertNotIn("value", result)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_or_sales_condition_is_not_flattened(self, mock_post) -> None:
         text = "기준 중위소득 125% 이하 소상공인 또는 최근 1년 연 매출액 2억원 이하 소상공인"
         mock_post.return_value = FakeOllamaResponse(
@@ -340,7 +342,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertEqual(result["extraction_method"], "ollama_structure")
         self.assertNotIn("amount_krw", result)
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_mixed_money_is_preserved_inside_complex_payload(self, mock_post) -> None:
         text = (
             "아래 ①~③ 요건을 모두 충족 ① 영업 중 ② 매출액 1억 4백만원 미만 "
@@ -353,7 +355,7 @@ class NormalizeLimitTests(unittest.TestCase):
         self.assertTrue(result["requires_manual_review"])
         self.assertIn(104_000_000, {item["value"] for item in result["constraints"]})
 
-    @patch("app.services.normalize_policies.httpx.post")
+    @patch("app.services.normalization.llm_limits.httpx.post")
     def test_relational_employee_condition_is_not_flattened(self, mock_post) -> None:
         text = (
             "다음 각 호 중 1개 이상 충족 ① 업력 3년 미만 "
