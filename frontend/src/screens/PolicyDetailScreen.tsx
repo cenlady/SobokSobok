@@ -35,7 +35,8 @@ export default function PolicyDetailScreen() {
   const location = useLocation()
   const recommendation = (location.state as { recommendation?: RecommendationResult } | null)
     ?.recommendation
-  const { has, get, save, remove } = useSavedPolicies()
+  const { has, toggle } = useSavedPolicies()
+  const [savePending, setSavePending] = useState(false)
   const { profile } = useProfile()
   const [policy, setPolicy] = useState<PolicyDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -131,26 +132,27 @@ export default function PolicyDetailScreen() {
     }
   }, [policyId, policy, profile, recommendation])
 
-  const savedPolicy = useMemo(() => {
-    if (!policy) return null
-    const current = get(policy.id)
-    return toSavedPolicy(policy, recommendation, current?.saved_at)
-  }, [get, policy, recommendation])
+  // 구글 캘린더 URL을 만들기 위한 최소 정보. 저장 여부와 무관하게 정책만 있으면 만들 수 있다.
+  const calendarPolicy = useMemo(
+    () => (policy ? toSavedPolicy(policy) : null),
+    [policy],
+  )
 
   const isSaved = policy ? has(policy.id) : false
 
-  const toggleSave = () => {
-    if (!policy || !savedPolicy) return
-    if (isSaved) {
-      remove(policy.id)
-    } else {
-      save(savedPolicy)
+  const toggleSave = async () => {
+    if (!policy || savePending) return
+    setSavePending(true)
+    try {
+      await toggle(policy.id)
+    } finally {
+      setSavePending(false)
     }
   }
 
   const openGoogleCalendar = () => {
-    if (!savedPolicy) return
-    window.open(buildGoogleCalendarUrl(savedPolicy), '_blank', 'noopener,noreferrer')
+    if (!calendarPolicy) return
+    window.open(buildGoogleCalendarUrl(calendarPolicy), '_blank', 'noopener,noreferrer')
   }
 
   if (loading) {
@@ -167,8 +169,6 @@ export default function PolicyDetailScreen() {
       : policy.matched_sidos.length > 0
         ? policy.matched_sidos.join(', ')
         : [policy.sido, policy.sigungu].filter(Boolean).join(' ') || '확인 필요'
-  const primaryReasons = recommendation?.reasons ?? []
-  const warnings = recommendation?.warnings ?? []
 
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
@@ -373,11 +373,8 @@ export default function PolicyDetailScreen() {
   )
 }
 
-function toSavedPolicy(
-  policy: PolicyDetailResponse,
-  recommendation?: RecommendationResult,
-  savedAt?: string,
-): SavedPolicy {
+/** 구글 캘린더 URL 생성에 필요한 필드만 추린다. 저장은 이제 서버가 하므로 정책 스냅샷은 만들지 않는다. */
+function toSavedPolicy(policy: PolicyDetailResponse): SavedPolicy {
   return {
     policy_id: policy.id,
     title: policy.title,
@@ -387,11 +384,7 @@ function toSavedPolicy(
     apply_start: policy.apply_start,
     apply_end: policy.apply_end,
     apply_url: policy.apply_url,
-    rank_score: recommendation?.rank_score,
-    match_status: recommendation?.match_status,
-    reasons: recommendation?.reasons,
-    warnings: recommendation?.warnings,
-    saved_at: savedAt || new Date().toISOString(),
+    saved_at: new Date().toISOString(),
   }
 }
 

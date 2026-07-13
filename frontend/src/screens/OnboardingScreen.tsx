@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
 import {
   BUSINESS_AGE_OPTIONS,
@@ -15,18 +16,35 @@ import {
 
 export default function OnboardingScreen() {
   const navigate = useNavigate()
-  const { profile, setProfile } = useProfile()
+  const { profile, loading, saveProfile } = useProfile()
+  const { markOnboarded, logout } = useAuth()
 
-  const [industry, setIndustry] = useState(profile.industry)
-  const [sido, setSido] = useState(profile.regionSido || '서울특별시')
-  const [sigungu, setSigungu] = useState(profile.regionSigungu || '마포구')
-  const [revenue, setRevenue] = useState(profile.revenue)
-  const [employees, setEmployees] = useState(profile.employees)
-  const [businessStatus, setBusinessStatus] = useState(profile.businessStatus)
-  const [businessAge, setBusinessAge] = useState(profile.businessAge)
-  const [needTags, setNeedTags] = useState(profile.needTags)
+  const [industry, setIndustry] = useState('')
+  const [sido, setSido] = useState('서울특별시')
+  const [sigungu, setSigungu] = useState('마포구')
+  const [revenue, setRevenue] = useState('')
+  const [employees, setEmployees] = useState('')
+  const [businessStatus, setBusinessStatus] = useState('')
+  const [businessAge, setBusinessAge] = useState('')
+  const [needTags, setNeedTags] = useState<string[]>([])
 
-  const submit = () => {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // 프로필은 서버에서 비동기로 온다. 도착하면 폼을 채운다(마이페이지에서 수정할 때 필요).
+  useEffect(() => {
+    if (loading) return
+    setIndustry(profile.industry)
+    if (profile.regionSido) setSido(profile.regionSido)
+    if (profile.regionSigungu) setSigungu(profile.regionSigungu)
+    setRevenue(profile.revenue)
+    setEmployees(profile.employees)
+    setBusinessStatus(profile.businessStatus)
+    setBusinessAge(profile.businessAge)
+    setNeedTags(profile.needTags)
+  }, [loading, profile])
+
+  const submit = async () => {
     const industryOption = optionByLabel(INDUSTRY_OPTIONS, industry)
     const revenueOption = optionByLabel(REVENUE_OPTIONS, revenue)
     const employeeOption = optionByLabel(EMPLOYEE_OPTIONS, employees)
@@ -36,24 +54,33 @@ export default function OnboardingScreen() {
     const displaySigungu = sigungu === '전체' ? '' : sigungu
     const combinedRegion = displaySigungu ? `${sido} ${displaySigungu}` : sido
 
-    setProfile({
-      ...profile,
-      industry,
-      industryTags: industryOption?.tags || [],
-      region: combinedRegion,
-      regionSido: sido,
-      regionSigungu: displaySigungu,
-      revenue,
-      revenueRange: revenueOption?.range || null,
-      employees,
-      employeesRange: employeeOption?.range || null,
-      businessStatus,
-      businessStatusTags: statusOption?.tags || [],
-      businessAge,
-      businessAgeYears: ageOption?.range || null,
-      needTags,
-    })
-    navigate('/')
+    setSaving(true)
+    setError(null)
+    try {
+      await saveProfile({
+        ...profile,
+        industry,
+        industryTags: industryOption?.tags || [],
+        region: combinedRegion,
+        regionSido: sido,
+        regionSigungu: displaySigungu,
+        revenue,
+        revenueRange: revenueOption?.range || null,
+        employees,
+        employeesRange: employeeOption?.range || null,
+        businessStatus,
+        businessStatusTags: statusOption?.tags || [],
+        businessAge,
+        businessAgeYears: ageOption?.range || null,
+        needTags,
+      })
+      // 서버가 onboarded_at을 채웠다. 가드가 다시 온보딩으로 되돌리지 않도록 알린다.
+      markOnboarded()
+      navigate('/', { replace: true })
+    } catch {
+      setError('저장에 실패했습니다. 잠시 후 다시 시도해주세요.')
+      setSaving(false)
+    }
   }
 
   const toggleNeedTag = (tag: string) => {
@@ -64,9 +91,17 @@ export default function OnboardingScreen() {
 
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col bg-cream">
-      {/* 헤더 */}
+      {/* 헤더 — 온보딩은 로그인 직후 첫 화면이라 '뒤로'가 갈 곳이 없다.
+          아직 앱을 못 쓰는 상태이므로, 나가려면 로그아웃뿐이다. */}
       <header className="flex items-center gap-2 px-4 py-4">
-        <button onClick={() => navigate(-1)} className="p-1 text-brand-dark active:opacity-60">
+        <button
+          onClick={() => {
+            logout()
+            navigate('/login', { replace: true })
+          }}
+          className="p-1 text-brand-dark active:opacity-60"
+          aria-label="로그아웃"
+        >
           <ChevronLeft size={26} />
         </button>
         <h1 className="text-lg font-semibold text-brand-dark">소복소복 내 정보 입력</h1>
@@ -209,11 +244,15 @@ export default function OnboardingScreen() {
       </div>
 
       <div className="px-6 py-5">
+        {error && (
+          <p className="mb-3 text-center text-sm font-medium text-status-red">{error}</p>
+        )}
         <button
           onClick={submit}
-          className="w-full rounded-2xl bg-brand-dark py-4 text-lg font-bold text-white active:scale-[0.99]"
+          disabled={saving}
+          className="w-full rounded-2xl bg-brand-dark py-4 text-lg font-bold text-white active:scale-[0.99] disabled:opacity-60"
         >
-          맞춤 혜택 찾기
+          {saving ? '저장 중…' : '맞춤 혜택 찾기'}
         </button>
       </div>
     </div>

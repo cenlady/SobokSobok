@@ -104,6 +104,7 @@ export interface PolicyAttachment {
   original_file_name: string | null
 }
 
+/** 서버에 저장된 즐겨찾기 1건 (GET /api/v1/favorites) */
 export interface SavedPolicy {
   policy_id: string
   title: string
@@ -113,11 +114,77 @@ export interface SavedPolicy {
   apply_start?: string | null
   apply_end?: string | null
   apply_url?: string | null
-  rank_score?: number
-  match_status?: 'eligible' | 'needs_review'
-  reasons?: string[]
-  warnings?: string[]
   saved_at: string
+}
+
+export interface UserMe {
+  id: number
+  email: string
+  is_active: boolean
+  /** false면 온보딩으로 보내야 한다 */
+  onboarded: boolean
+}
+
+/** 서버 프로필 (GET/PUT /api/v1/users/me/profile). 추천 요청과 1:1로 대응한다. */
+export interface ServerProfile {
+  owner_name?: string | null
+  store_name?: string | null
+  region?: { sido?: string | null; sigungu?: string | null } | null
+  industry: { label?: string | null; tags: string[] }
+  business_status: { label?: string | null; tags: string[] }
+  annual_sales: { label?: string | null; min?: number | null; max?: number | null }
+  employees: { label?: string | null; min?: number | null; max?: number | null }
+  business_age: { label?: string | null; min?: number | null; max?: number | null }
+  need_tags: string[]
+  onboarded_at?: string | null
+}
+
+/** 서류검토 접수 응답 (POST /api/v1/review → 202) */
+export interface ReviewStartResponse {
+  upload_id: string
+  policy_id: string | null
+  review_status: ReviewStatus
+  /** policy_id가 있어 요건 대조 단계를 거치는지. 진행 단계 수를 결정한다. */
+  has_requirement_matching: boolean
+}
+
+export type ReviewStatus =
+  | 'queued'
+  | 'extracting'
+  | 'matching'
+  | 'diagnosing'
+  | 'done'
+  | 'failed'
+
+export interface RequirementMatch {
+  document_name: string
+  best_similarity: number
+  /** 임계값 이상이면 true. 확정이 아니라 후보다 — 최종 판정은 LLM이 한다. */
+  likely_covered: boolean
+}
+
+export interface ReviewResult {
+  document_type: string
+  typos: string[]
+  /** 이 서류 안의 빈칸 (연락처·서명 등) */
+  missing_fields: string[]
+  format_issues: string[]
+  /** 따로 발급받아 제출해야 하는 서류 */
+  missing_documents: string[]
+  improvement_points: string[]
+  overall: string
+}
+
+/** 서류검토 폴링 응답 (GET /api/v1/review/{upload_id}) */
+export interface ReviewResponse {
+  upload_id: string
+  policy_id: string | null
+  review_status: ReviewStatus
+  /** 실패 사유 (unsupported/empty/failed) */
+  extraction_status: string
+  requirement_matches: RequirementMatch[]
+  /** 진행 중이면 null */
+  result: ReviewResult | null
 }
 
 export interface RecommendationExplanationResponse {
