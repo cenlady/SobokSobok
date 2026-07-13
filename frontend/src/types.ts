@@ -111,10 +111,15 @@ export interface SavedPolicy {
   summary?: string | null
   organization?: string | null
   support_type?: string | null
+  region_scope: string
+  sido?: string | null
+  sigungu?: string | null
+  status?: string | null
   apply_start?: string | null
   apply_end?: string | null
   apply_url?: string | null
   saved_at: string
+  categories?: string[]
 }
 
 export interface UserMe {

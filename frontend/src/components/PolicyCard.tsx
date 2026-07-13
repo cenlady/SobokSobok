@@ -2,12 +2,37 @@ import { ArrowRight, Bookmark, BookmarkCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ddayLabel } from '../lib/format'
 import { toDateKey } from '../lib/calendar'
+import { NEED_OPTIONS } from '../lib/recommend'
+
+const SUPPORT_TYPE_LABELS: Record<string, string> = {
+  현금: '현금 지원',
+  비현금: '서비스 지원',
+  현물: '현물 지원',
+  융자: '융자',
+  보조금: '보조금',
+}
+
+function getSupportTypeLabels(value: string) {
+  const tokens = value
+    .replace(/기타\(([^)]*)\)/g, ' $1 ')
+    .split(/[,/|·;\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  const labels = tokens
+    .filter((token) => token !== '기타')
+    .map((token) => SUPPORT_TYPE_LABELS[token] || token)
+    .filter((token) => token.length <= 12)
+
+  return [...new Set(labels)].slice(0, 3)
+}
 
 export interface PolicyCardData {
   policy_id: string
   title: string
   summary?: string | null
   support_type?: string | null
+  categories?: string[]
   apply_end?: string | null
   /** 추천 탭에서만 채워진다 */
   rank_score?: number
@@ -48,11 +73,24 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
                 {policy.match_status === 'eligible' ? '추천 가능' : '확인 필요'}
               </span>
             )}
-            {policy.support_type && (
-              <span className="rounded-lg bg-brand-light/20 px-2 py-0.5 text-xs font-semibold text-brand">
-                {policy.support_type}
+            {policy.categories?.map((category) => (
+              <span
+                key={category}
+                className="rounded-lg bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent"
+              >
+                {NEED_OPTIONS.find((option) => option.tag === category)?.label || category}
               </span>
-            )}
+            ))}
+            {!policy.categories?.length &&
+              policy.support_type &&
+              getSupportTypeLabels(policy.support_type).map((label) => (
+                <span
+                  key={label}
+                  className="rounded-lg bg-brand-light/20 px-2 py-0.5 text-xs font-semibold text-brand"
+                >
+                  {label}
+                </span>
+              ))}
             {deadline && (
               <span className="rounded-lg bg-red-50 px-2 py-0.5 text-xs font-bold text-status-red">
                 {ddayLabel(deadline)}
