@@ -274,7 +274,8 @@ def search_policy_chunks(
     db: Session,
     query: str,
     embedding_model: EmbeddingModel,
-    limit: int = 5
+    limit: int = 5,
+    policy_id: Optional[uuid.UUID] = None,
 ) -> List[Tuple[PolicyChunk, float]]:
     """
     [챗봇 RAG 영역] 쿼리를 임베딩하여 policy_chunks 테이블에서 코사인 유사도가 가장 높은 청크를 검색합니다.
@@ -285,7 +286,7 @@ def search_policy_chunks(
     # pgvector의 cosine_distance를 기반으로 정렬하며, 점수는 1 - cosine_distance로 변환
     distance_expr = PolicyChunk.embedding.cosine_distance(query_vector)
     
-    results = (
+    search_query = (
         db.query(
             PolicyChunk,
             (1 - distance_expr).label("similarity")
@@ -294,10 +295,12 @@ def search_policy_chunks(
             PolicyChunk.embedding_status == "success",
             PolicyChunk.embedding.isnot(None),
         )
-        .order_by(distance_expr)
-        .limit(limit)
-        .all()
     )
+
+    if policy_id is not None:
+        search_query = search_query.filter(PolicyChunk.policy_id == policy_id)
+
+    results = search_query.order_by(distance_expr).limit(limit).all()
     
     return [(row[0], float(row[1])) for row in results]
 

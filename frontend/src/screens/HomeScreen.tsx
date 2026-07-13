@@ -1,259 +1,298 @@
-import { useEffect, useState } from 'react'
-import { ArrowRight, ChevronRight, CalendarDays, RefreshCw, Sparkles, Sun } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import {
+  ArrowRight,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Info,
+  Sparkles,
+} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
-import { benefits } from '../data/benefits'
-import { ddayLabel } from '../lib/format'
-import { buildRecommendationRequest } from '../lib/recommend'
-import { useProfile } from '../lib/storage'
-import type { RecommendationPreviewResponse } from '../types'
+import { formatDate, toDateKey } from '../lib/calendar'
+import { ddayLabel, statusMeta, TODAY } from '../lib/format'
+import { useSavedPolicies } from '../lib/storage'
+import type { BenefitStatus, SavedPolicy } from '../types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// 홈은 달력이다. 저장한 정책의 마감일을 한눈에 보여주는 게 앱의 첫 화면.
+// 저장한 정책이 없으면 달력이 텅 비므로, 그때만 정책 찾기로 유도한다.
+
+const WEEK = ['일', '월', '화', '수', '목', '금', '토']
+
+function ymd(y: number, m: number, d: number) {
+  return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+function statusForPolicy(policy: SavedPolicy): BenefitStatus {
+  const end = toDateKey(policy.apply_end)
+  if (!end) return 'notice'
+  const today = new Date(`${TODAY}T00:00:00`)
+  const due = new Date(`${end}T00:00:00`)
+  const diff = Math.round((due.getTime() - today.getTime()) / 86400000)
+  return diff <= 14 ? 'closing' : 'open'
+}
+
+const statusIcon: Record<BenefitStatus, typeof Clock> = {
+  closing: Clock,
+  open: CalendarDays,
+  notice: Info,
+}
 
 export default function HomeScreen() {
   const navigate = useNavigate()
-  const { profile } = useProfile()
-  const [recommendations, setRecommendations] = useState<RecommendationPreviewResponse | null>(null)
-  const [loadingRecommendations, setLoadingRecommendations] = useState(false)
-  const [recommendationError, setRecommendationError] = useState<string | null>(null)
+  const { policies, loading } = useSavedPolicies()
 
-  // 곧 마감되는 순으로 상위 노출
-  const upcoming = [...benefits]
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
-    .slice(0, 4)
-  const count = upcoming.length
+  const todayDate = new Date(`${TODAY}T00:00:00`)
+  const [cursor, setCursor] = useState({
+    year: todayDate.getFullYear(),
+    month: todayDate.getMonth(),
+  })
+  const [selected, setSelected] = useState(TODAY)
 
-  const loadRecommendations = async () => {
-    setLoadingRecommendations(true)
-    setRecommendationError(null)
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/v1/recommend/preview?limit=10`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(buildRecommendationRequest(profile)),
-      })
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-      setRecommendations((await response.json()) as RecommendationPreviewResponse)
-    } catch {
-      setRecommendationError('추천 API 연결을 확인해주세요.')
-    } finally {
-      setLoadingRecommendations(false)
+  const scheduled = policies.filter((p) => toDateKey(p.apply_end))
+  const unscheduled = policies.filter((p) => !toDateKey(p.apply_end))
+
+  const dots = useMemo(() => {
+    const map: Record<string, BenefitStatus[]> = {}
+    for (const policy of scheduled) {
+      const key = toDateKey(policy.apply_end)
+      if (!key) continue
+      ;(map[key] ??= []).push(statusForPolicy(policy))
     }
+    return map
+  }, [scheduled])
+
+  const { year, month } = cursor
+  const startDow = new Date(year, month, 1).getDay()
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const prevDays = new Date(year, month, 0).getDate()
+
+  const cells: { day: number; inMonth: boolean; dateKey?: string }[] = []
+  for (let i = 0; i < startDow; i++) {
+    cells.push({ day: prevDays - startDow + 1 + i, inMonth: false })
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push({ day: d, inMonth: true, dateKey: ymd(year, month, d) })
+  }
+  let tail = 1
+  while (cells.length % 7 !== 0 || cells.length < 42) {
+    cells.push({ day: tail++, inMonth: false })
+    if (cells.length >= 42) break
   }
 
-  useEffect(() => {
-    loadRecommendations()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile])
+  const shift = (dir: number) => {
+    const m = month + dir
+    setCursor({ year: year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 })
+  }
+
+  const dayList = scheduled.filter((p) => toDateKey(p.apply_end) === selected)
+  const selDate = new Date(`${selected}T00:00:00`)
+  const isEmpty = !loading && policies.length === 0
 
   return (
     <div className="pb-6">
       <TopBar />
 
-      {/* 인사 배너 */}
+      {/* 달력 */}
       <section className="px-5">
-        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-6 shadow-card">
-          <Sun
-            className="absolute -right-6 -top-6 text-white/40"
-            size={120}
-            strokeWidth={1.2}
-          />
-          <span className="inline-flex items-center gap-1 rounded-full bg-white/70 px-3 py-1 text-xs font-semibold text-brand-dark">
-            ☀️ 좋은 아침입니다!
-          </span>
-          <h2 className="mt-3 text-2xl font-bold leading-snug text-brand-dark">
-            {profile.ownerName} 사장님,
-            <br />
-            오늘 챙겨야 할 혜택이 <span className="text-brand">{count}건</span> 있어요!
-          </h2>
-          <p className="mt-2 text-sm text-brand-dark/70">
-            놓치지 않도록 소복소복 메이가 도와드릴게요.
-          </p>
-          <button
-            onClick={() => navigate('/chat')}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-dark py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-dark/20 active:scale-[0.99]"
-          >
-            <Sparkles size={18} /> AI 추천 시작하기
-          </button>
-        </div>
-      </section>
-
-      {/* 실제 추천 정책 */}
-      <section className="mt-7 px-5">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-              <Sparkles size={20} className="text-brand" /> 맞춤 추천 정책
-            </h3>
-            <p className="mt-1 text-sm text-brand-dark/50">
-              {recommendations
-                ? `${recommendations.total_candidates}개 후보 중 ${recommendations.returned}개를 골랐어요.`
-                : '내 정보 기준으로 정책을 불러오는 중이에요.'}
-            </p>
-          </div>
-          <button
-            onClick={loadRecommendations}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-brand-dark shadow-card active:scale-[0.97]"
-            aria-label="추천 새로고침"
-          >
-            <RefreshCw size={17} className={loadingRecommendations ? 'animate-spin' : ''} />
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {recommendationError && (
-            <div className="rounded-2xl bg-white p-4 text-sm font-medium text-status-red shadow-card">
-              {recommendationError}
-            </div>
-          )}
-
-          {!recommendationError && loadingRecommendations && (
-            <div className="rounded-2xl bg-white p-4 text-sm font-medium text-brand-dark/60 shadow-card">
-              맞춤 정책을 계산하고 있어요.
-            </div>
-          )}
-
-          {!loadingRecommendations &&
-            recommendations?.results.slice(0, 5).map((item) => (
-              <article key={item.policy_id} className="rounded-2xl bg-white p-4 shadow-card">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span
-                        className={`rounded-lg px-2 py-0.5 text-xs font-bold ${
-                          item.match_status === 'eligible'
-                            ? 'bg-green-50 text-status-green'
-                            : item.match_status === 'needs_review'
-                              ? 'bg-blue-50 text-status-blue'
-                              : 'bg-amber-50 text-amber-700'
-                        }`}
-                      >
-                        {item.match_status === 'eligible'
-                          ? '추천 가능'
-                          : item.match_status === 'needs_review'
-                            ? '확인 필요'
-                            : '유사 정책'}
-                      </span>
-                      {item.support_type && (
-                        <span className="rounded-lg bg-brand-light/20 px-2 py-0.5 text-xs font-semibold text-brand">
-                          {item.support_type}
-                        </span>
-                      )}
-                    </div>
-                    <h4 className="mt-2 line-clamp-2 text-base font-bold leading-snug text-brand-dark">
-                      {item.title}
-                    </h4>
-                  </div>
-                  <span className="rounded-xl bg-accent-soft px-2.5 py-1 text-xs font-bold text-accent">
-                    {Math.round(item.rank_score)}점
-                  </span>
-                </div>
-                {item.summary && (
-                  <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-dark/60">
-                    {item.summary}
-                  </p>
-                )}
-                <div className="mt-3 space-y-1">
-                  {item.reasons.slice(0, 2).map((reason) => (
-                    <p key={reason} className="text-xs font-medium text-brand-dark/60">
-                      {reason}
-                    </p>
-                  ))}
-                  {item.warnings[0] && (
-                    <p className="text-xs font-medium text-status-blue">{item.warnings[0]}</p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(`/policy/${item.policy_id}`, {
-                      state: { recommendation: item },
-                    })
-                  }
-                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-brand-dark py-2.5 text-sm font-semibold text-white active:scale-[0.99]"
-                >
-                  상세보기 <ArrowRight size={15} />
-                </button>
-              </article>
-            ))}
-        </div>
-      </section>
-
-      {/* 나의 혜택 달력 */}
-      <section className="mt-7 px-5">
-        <div className="flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-            <CalendarDays size={20} className="text-brand" /> 나의 혜택 달력
-          </h3>
-          <button
-            onClick={() => navigate('/calendar')}
-            className="flex items-center text-sm font-medium text-brand-dark/50"
-          >
-            전체보기 <ChevronRight size={16} />
-          </button>
-        </div>
-        <p className="mt-1 text-sm text-brand-dark/50">곧 마감되는 정보를 확인하세요.</p>
-
-        <div className="no-scrollbar mt-4 flex gap-3 overflow-x-auto pb-1">
-          {upcoming.map((b) => (
-            <button
-              key={b.id}
-              onClick={() => navigate(`/benefit/${b.id}`)}
-              className="w-44 flex-shrink-0 rounded-2xl bg-white p-4 text-left shadow-card active:scale-[0.98]"
-            >
-              <div className="flex items-center justify-between">
-                <span
-                  className={`rounded-lg px-2 py-0.5 text-xs font-bold ${
-                    b.status === 'closing'
-                      ? 'bg-red-50 text-status-red'
-                      : b.status === 'open'
-                        ? 'bg-green-50 text-status-green'
-                        : 'bg-blue-50 text-status-blue'
-                  }`}
-                >
-                  {ddayLabel(b.dueDate)}
-                </span>
-                <ArrowRight size={14} className="text-brand-dark/30" />
-              </div>
-              <p className="mt-3 line-clamp-2 text-[15px] font-semibold leading-snug text-brand-dark">
-                {b.title}
+        <div className="rounded-3xl bg-white p-5 shadow-card">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <p className="text-lg font-bold text-brand-dark">
+                {year}년 {month + 1}월
               </p>
-              {b.amount && (
-                <p className="mt-2 text-xs font-medium text-brand-dark/60">
-                  🎁 {b.amount}
-                </p>
-              )}
-            </button>
-          ))}
+              <p className="mt-1 text-xs font-medium text-brand-dark/45">
+                저장한 정책의 마감일이 표시돼요.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => shift(-1)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
+                aria-label="이전 달"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <button
+                onClick={() => shift(1)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
+                aria-label="다음 달"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 text-center">
+            {WEEK.map((w, i) => (
+              <div
+                key={w}
+                className={`pb-2 text-xs font-semibold ${
+                  i === 0
+                    ? 'text-status-red/70'
+                    : i === 6
+                      ? 'text-status-blue/70'
+                      : 'text-brand-dark/40'
+                }`}
+              >
+                {w}
+              </div>
+            ))}
+            {cells.map((c, idx) => {
+              const isSel = c.dateKey === selected
+              const isToday = c.dateKey === TODAY
+              const dow = idx % 7
+              const dayDots = c.dateKey ? dots[c.dateKey] : undefined
+              return (
+                <button
+                  key={`${c.dateKey ?? 'empty'}-${idx}`}
+                  disabled={!c.inMonth}
+                  onClick={() => c.dateKey && setSelected(c.dateKey)}
+                  className="relative flex flex-col items-center py-1.5"
+                >
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-full text-sm ${
+                      isSel
+                        ? 'bg-brand-dark font-bold text-white'
+                        : !c.inMonth
+                          ? 'text-brand-dark/20'
+                          : isToday
+                            ? 'font-bold text-brand'
+                            : dow === 0
+                              ? 'text-status-red'
+                              : dow === 6
+                                ? 'text-status-blue'
+                                : 'text-brand-dark/80'
+                    }`}
+                  >
+                    {c.day}
+                  </span>
+                  <span className="mt-1 flex h-1.5 gap-0.5">
+                    {dayDots?.slice(0, 3).map((s, i) => (
+                      <span
+                        key={`${s}-${i}`}
+                        className={`h-1.5 w-1.5 rounded-full ${statusMeta[s].bar}`}
+                      />
+                    ))}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
       </section>
 
-      {/* 맞춤 정책 유도 카드 */}
-      <section className="mt-7 px-5">
-        <div className="rounded-3xl bg-white p-6 text-center shadow-card">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
-            <Sparkles size={22} className="text-accent" />
+      {/* 저장한 정책이 없으면 여기서 유도한다. 있으면 이 카드는 사라지고 달력이 주인공이 된다. */}
+      {isEmpty && (
+        <section className="mt-6 px-5">
+          <div className="rounded-3xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-6 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/70">
+              <Sparkles size={22} className="text-accent" />
+            </div>
+            <h3 className="mt-4 text-lg font-bold leading-snug text-brand-dark">
+              아직 저장한 정책이 없어요
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-brand-dark/70">
+              AI가 사장님께 맞는 지원금을 찾아드려요.
+              <br />
+              저장하면 마감일이 이 달력에 표시돼요.
+            </p>
+            <button
+              onClick={() => navigate('/policies')}
+              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-dark py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-dark/20 active:scale-[0.99]"
+            >
+              맞춤 정책 찾아보기 <ArrowRight size={18} />
+            </button>
           </div>
-          <h3 className="mt-4 text-lg font-bold leading-snug text-brand-dark">
-            간단한 정보 입력으로
-            <br />
-            맞춤 정책을 찾아보세요!
+        </section>
+      )}
+
+      {/* 선택한 날짜의 마감 정책 */}
+      {!isEmpty && (
+        <section className="mt-6 px-5">
+          <h3 className="text-xl font-bold text-brand-dark">
+            {selDate.getMonth() + 1}월 {selDate.getDate()}일 마감 정책
           </h3>
-          <p className="mt-2 text-sm text-brand-dark/60">
-            AI가 사장님의 업종, 규모에 딱 맞는 지원금을 찾아드려요.
+          <p className="mt-1 text-sm text-brand-dark/50">
+            저장한 정책 {policies.length}건 중 이 날짜 일정이에요.
           </p>
-          <button
-            onClick={() => navigate('/onboarding')}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-dark py-3.5 text-base font-semibold text-white active:scale-[0.99]"
-          >
-            내 정보 입력하기 <ArrowRight size={18} />
-          </button>
-        </div>
-      </section>
+
+          <div className="mt-4 space-y-3">
+            {dayList.length === 0 && (
+              <div className="rounded-2xl bg-white p-6 text-center shadow-card">
+                <p className="text-sm font-medium text-brand-dark/45">
+                  이 날 마감되는 저장 정책이 없어요.
+                </p>
+              </div>
+            )}
+
+            {dayList.map((policy) => (
+              <DeadlineCard key={policy.policy_id} policy={policy} />
+            ))}
+          </div>
+
+          {unscheduled.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-lg font-bold text-brand-dark">
+                기한 미정 정책 ({unscheduled.length}건)
+              </h3>
+              <div className="mt-3 space-y-3">
+                {unscheduled.map((policy) => (
+                  <DeadlineCard key={policy.policy_id} policy={policy} />
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
     </div>
+  )
+}
+
+function DeadlineCard({ policy }: { policy: SavedPolicy }) {
+  const navigate = useNavigate()
+  const end = toDateKey(policy.apply_end)
+  const status = statusForPolicy(policy)
+  const meta = statusMeta[status]
+  const Icon = statusIcon[status]
+
+  return (
+    <article className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card">
+      <span className={`w-1.5 flex-shrink-0 ${meta.bar}`} />
+      <span
+        className={`my-4 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${meta.iconBg}`}
+      >
+        <Icon size={22} className={meta.iconColor} />
+      </span>
+      <div className="min-w-0 flex-1 py-4 pr-4">
+        <div className="flex items-center justify-between gap-2">
+          <span className={`text-sm font-bold ${meta.text}`}>
+            {end ? ddayLabel(end) : '기한 미정'}
+          </span>
+          {policy.support_type && (
+            <span className="truncate text-xs font-medium text-brand-dark/50">
+              {policy.support_type}
+            </span>
+          )}
+        </div>
+        <h4 className="mt-1 line-clamp-2 text-base font-semibold text-brand-dark">
+          {policy.title}
+        </h4>
+        <p className="mt-1 text-sm text-brand-dark/50">
+          {formatDate(policy.apply_start)} ~ {formatDate(policy.apply_end)}
+        </p>
+        <div className="mt-3 grid grid-cols-2 items-start gap-2">
+          <button
+            onClick={() => navigate(`/policy/${policy.policy_id}`)}
+            className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
+          >
+            상세보기 <ArrowRight size={13} />
+          </button>
+          <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
+        </div>
+      </div>
+    </article>
   )
 }

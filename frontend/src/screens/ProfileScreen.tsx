@@ -14,14 +14,21 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
+import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
 import { useState } from 'react'
 import { NEED_OPTIONS } from '../lib/recommend'
 
 export default function ProfileScreen() {
   const navigate = useNavigate()
+  const { user, logout } = useAuth()
   const { profile } = useProfile()
   const [alarm, setAlarm] = useState(true)
+
+  const handleLogout = () => {
+    logout()
+    navigate('/login', { replace: true })
+  }
 
   return (
     <div className="pb-8">
@@ -40,6 +47,13 @@ export default function ProfileScreen() {
         <h2 className="mt-3 text-2xl font-bold text-brand-dark">
           {profile.ownerName} 사장님
         </h2>
+
+        {/* 로그인된 사용자 이메일 뱃지 */}
+        {user?.email && (
+          <p className="mt-0.5 rounded-full border border-brand/10 bg-brand/5 px-2 py-0.5 text-xs font-semibold text-brand/80">
+            {user.email}
+          </p>
+        )}
         <p className="mt-1 text-sm text-brand-dark/50">{profile.storeName}</p>
       </section>
 
@@ -123,7 +137,12 @@ export default function ProfileScreen() {
         </div>
 
         <div className="mt-8 flex flex-col items-center gap-3">
-          <button className="text-sm font-medium text-brand-dark/50">로그아웃</button>
+          <button
+            onClick={handleLogout}
+            className="text-sm font-medium text-brand-dark/50 active:opacity-60"
+          >
+            로그아웃
+          </button>
           <button className="text-sm font-medium text-status-red">탈퇴하기</button>
         </div>
       </section>

@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     CHAT_CHUNK_OVERLAP: int = 40
     CHAT_RETRIEVAL_LIMIT: int = 6
     EMBED_CHAT_CHUNKS_AFTER_NORMALIZE: bool = True
-    CHAT_COMPLETION_PROVIDER: str = "openai"  # openai | disabled
-    CHAT_COMPLETION_MODEL: str = "gpt-4o-mini"
+    CHAT_COMPLETION_PROVIDER: str = "gemini"  # gemini | openai | disabled
+    CHAT_COMPLETION_MODEL: str = "gemini-2.5-flash"
     CHAT_MAX_CONTEXT_CHARS: int = 4500
     CHAT_SYSTEM_PROMPT: str = (
         "너는 소상공인 정책 공고 안내 챗봇이다. "
@@ -112,7 +112,12 @@ class Settings(BaseSettings):
     # Google OAuth 2.0 Settings
     GOOGLE_CLIENT_ID: str | None = None
     GOOGLE_CLIENT_SECRET: str | None = None
+    # 구글 콘솔에 등록된 값과 반드시 일치해야 한다. 콜백은 백엔드가 받고,
+    # 토큰은 아래 FRONTEND_URL로 리다이렉트하며 넘긴다(콘솔 재등록 불필요).
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+
+    # 구글 콜백이 로그인 완료 후 사용자를 돌려보낼 프론트엔드 주소
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # CORS Origins
     BACKEND_CORS_ORIGINS: List[str] = [
