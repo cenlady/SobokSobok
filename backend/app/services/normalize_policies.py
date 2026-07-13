@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import calendar
 import re
+import httpx
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,32 @@ SECTION_TYPE_BY_TITLE = {
     "지원 내용": "support_content",
     "지원대상": "eligibility",
     "지원 대상": "eligibility",
+    "이용대상": "eligibility",
+    "이용 대상": "eligibility",
+    "신청대상": "eligibility",
+    "신청 대상": "eligibility",
+    "지원자격": "eligibility",
+    "지원 자격": "eligibility",
+    "자격요건": "eligibility",
+    "자격 요건": "eligibility",
+    "가입대상": "eligibility",
+    "가입 대상": "eligibility",
+    "가입기준": "eligibility",
+    "가입 기준": "eligibility",
+    "가입요건": "eligibility",
+    "가입 요건": "eligibility",
+    "대상자": "eligibility",
+    "대상자 기준": "eligibility",
+    "제한기준": "restriction",
+    "제한 기준": "restriction",
+    "지원제외": "restriction",
+    "지원 제외": "restriction",
+    "제외대상": "restriction",
+    "제외 대상": "restriction",
+    "이용용도": "purpose",
+    "이용 용도": "purpose",
+    "이용료": "cost",
+    "이용 료": "cost",
     "선정기준": "eligibility",
     "선정 기준": "eligibility",
     "대상": "eligibility",
@@ -56,6 +84,9 @@ SECTION_TYPE_BY_TITLE = {
     "제출 서류": "requirements",
     "제출자료": "requirements",
     "제출 자료": "requirements",
+    "제출서류 및 신청양식": "requirements",
+    "제출서류 안내": "requirements",
+    "제출서류 양식": "requirements",
     "증빙서류": "requirements",
     "증빙 서류": "requirements",
     "필요서류": "requirements",
@@ -116,6 +147,46 @@ SIDO_ALIASES = {
     "제주특별자치도": "제주특별자치도",
 }
 
+SIGUNGU_TO_SIDO = {
+    "수원": "경기도", "성남": "경기도", "의정부": "경기도", "안양": "경기도", "부천": "경기도",
+    "광명": "경기도", "평택": "경기도", "동두천": "경기도", "안산": "경기도", "고양": "경기도",
+    "과천": "경기도", "구리": "경기도", "남양주": "경기도", "오산": "경기도", "시흥": "경기도",
+    "군포": "경기도", "의왕": "경기도", "하남": "경기도", "용인": "경기도", "파주": "경기도",
+    "이천": "경기도", "안성": "경기도", "김포": "경기도", "화성": "경기도", "양주": "경기도",
+    "포천": "경기도", "여주": "경기도", "연천": "경기도", "가평": "경기도", "양평": "경기도",
+    "동탄": "경기도",
+    "춘천": "강원특별자치도", "원주": "강원특별자치도", "강릉": "강원특별자치도", "동해": "강원특별자치도",
+    "태백": "강원특별자치도", "속초": "강원특별자치도", "삼척": "강원특별자치도", "홍천": "강원특별자치도",
+    "횡성": "강원특별자치도", "영월": "강원특별자치도", "평창": "강원특별자치도", "정선": "강원특별자치도",
+    "철원": "강원특별자치도", "화천": "강원특별자치도", "양구": "강원특별자치도", "인제": "강원특별자치도",
+    "고성": "강원특별자치도", "양양": "강원특별자치도",
+    "청주": "충청북도", "충주": "충청북도", "제천": "충청북도", "보은": "충청북도", "옥천": "충청북도",
+    "영동": "충청북도", "증평": "충청북도", "진천": "충청북도", "괴산": "충청북도", "음성": "충청북도",
+    "단양": "충청북도",
+    "천안": "충청남도", "공주": "충청남도", "보령": "충청남도", "아산": "충청남도", "서산": "충청남도",
+    "논산": "충청남도", "계룡": "충청남도", "당진": "충청남도", "금산": "충청남도", "부여": "충청남도",
+    "서천": "충청남도", "청양": "충청남도", "홍성": "충청남도", "예산": "충청남도", "태안": "충청남도",
+    "전주": "전북특별자치도", "군산": "전북특별자치도", "익산": "전북특별자치도", "정읍": "전북특별자치도",
+    "남원": "전북특별자치도", "김제": "전북특별자치도", "완주": "전북특별자치도", "진안": "전북특별자치도",
+    "무주": "전북특별자치도", "장수": "전북특별자치도", "임실": "전북특별자치도", "순창": "전북특별자치도",
+    "고창": "전북특별자치도", "부안": "전북특별자치도",
+    "목포": "전라남도", "여수": "전라남도", "순천": "전라남도", "나주": "전라남도", "광양": "전라남도",
+    "담양": "전라남도", "곡성": "전라남도", "구례": "전라남도", "고흥": "전라남도", "보성": "전라남도",
+    "화순": "전라남도", "장흥": "전라남도", "강진": "전라남도", "해남": "전라남도", "영암": "전라남도",
+    "무안": "전라남도", "함평": "전라남도", "영광": "전라남도", "장성": "전라남도", "완도": "전라남도",
+    "진도": "전라남도", "신안": "전라남도",
+    "포항": "경상북도", "경주": "경상북도", "김천": "경상북도", "안동": "경상북도", "구미": "경상북도",
+    "영주": "경상북도", "영천": "경상북도", "상주": "경상북도", "문경": "경상북도", "경산": "경상북도",
+    "군위": "대구광역시", "의성": "경상북도", "청송": "경상북도", "영양": "경상북도", "영덕": "경상북도",
+    "청도": "경상북도", "고령": "경상북도", "성주": "경상북도", "칠곡": "경상북도", "예천": "경상북도",
+    "봉화": "경상북도", "울진": "경상북도", "울릉": "경상북도",
+    "창원": "경상남도", "진주": "경상남도", "통영": "경상남도", "사천": "경상남도", "김해": "경상남도",
+    "밀양": "경상남도", "거제": "경상남도", "양산": "경상남도", "의령": "경상남도", "함안": "경상남도",
+    "창녕": "경상남도", "고성": "경상남도", "남해": "경상남도", "하동": "경상남도", "산청": "경상남도",
+    "함양": "경상남도", "거창": "경상남도", "합천": "경상남도",
+    "서귀포": "제주특별자치도", "제주": "제주특별자치도"
+}
+
 REGION_GROUPS = {
     "수도권": ["서울특별시", "인천광역시", "경기도"],
     "충청권": ["대전광역시", "세종특별자치시", "충청북도", "충청남도"],
@@ -151,6 +222,7 @@ BUSINESS_STATUS_KEYWORDS = {
 
 
 def normalize_policy_sources_once() -> dict[str, int | bool]:
+    print("[normalizer] Starting policy normalization job...", flush=True)
     db = SessionLocal()
     locked = False
     stats: dict[str, int | bool] = {
@@ -168,6 +240,7 @@ def normalize_policy_sources_once() -> dict[str, int | bool]:
         locked = _try_advisory_lock(db)
         stats["locked"] = locked
         if not locked:
+            print("[normalizer] Aborted. Normalization job is already locked by another process.", flush=True)
             return stats
 
         ensure_normalized_policy_schema(db)
@@ -185,6 +258,7 @@ def normalize_policy_sources_once() -> dict[str, int | bool]:
                 stats["errors"] = int(stats["errors"]) + 1
                 print(f"[normalizer] source failed: {exc}", flush=True)
 
+        print(f"[normalizer] Normalization job finished. Stats: {stats}", flush=True)
         return stats
     finally:
         if locked:
@@ -199,8 +273,24 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
         .options(selectinload(PolicyAnnouncement.attachments))
         .all()
     )
+    print(f"[normalizer] sbiz24: Found {len(rows)} raw policies to normalize.", flush=True)
+    updated_count = 0
 
     for row in rows:
+        attachment_texts = []
+        existing_policy = (
+            db.query(NormalizedPolicy)
+            .filter(
+                NormalizedPolicy.source == "sbiz24",
+                NormalizedPolicy.source_pk == str(row.pbanc_sn),
+            )
+            .first()
+        )
+        if existing_policy:
+            for link in existing_policy.attachments:
+                if link.file and link.file.extracted_text:
+                    attachment_texts.append(link.file.extracted_text)
+
         sections = _sections_from_sbiz24_text(row.content_text)
         metadata = _source_metadata(
             source="sbiz24",
@@ -217,6 +307,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
                     _first_section_text_by_type(sections, "eligibility"),
                 ]
             ),
+            attachment_texts=attachment_texts,
         )
         target_text = _first_text(metadata["target_text"], row.target)
         support_content = _first_text(metadata["support_content_text"], row.content_text)
@@ -261,6 +352,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
                 "extraction_method": "rule",
+                "deadline_type": _classify_deadline_type(_join_text([row.apply_start, row.apply_end, row.status])),
             },
             "required_documents": metadata["required_documents"],
             "source_content_hash": row.content_hash,
@@ -275,6 +367,11 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
         _merge_stats(stats, file_stats)
         db.commit()
 
+        if action != "unchanged":
+            updated_count += 1
+            print(f"  [sbiz24] Policy '{row.title}' (ID: {row.pbanc_sn}) was {action}.", flush=True)
+
+    print(f"[normalizer] sbiz24: Completed. Updated/Created: {updated_count} / {len(rows)}", flush=True)
     return stats
 
 
@@ -284,9 +381,25 @@ def _normalize_semas(db: Session) -> dict[str, int]:
         db.query(PolicyProgramPage)
         .all()
     )
+    print(f"[normalizer] semas: Found {len(rows)} raw policies to normalize.", flush=True)
+    updated_count = 0
 
     for row in rows:
         source_pk = _stable_short_key(row.source_url)
+        attachment_texts = []
+        existing_policy = (
+            db.query(NormalizedPolicy)
+            .filter(
+                NormalizedPolicy.source == "semas",
+                NormalizedPolicy.source_pk == source_pk,
+            )
+            .first()
+        )
+        if existing_policy:
+            for link in existing_policy.attachments:
+                if link.file and link.file.extracted_text:
+                    attachment_texts.append(link.file.extracted_text)
+
         sections = _sections_from_semas(row)
         metadata = _source_metadata(
             source="semas",
@@ -304,11 +417,17 @@ def _normalize_semas(db: Session) -> dict[str, int]:
                     _first_section_text_by_type(sections, "eligibility"),
                 ]
             ),
+            attachment_texts=attachment_texts,
         )
         target_text = metadata["target_text"]
         support_content = _first_text(metadata["support_content_text"], row.content_text)
         docs = _semas_documents(row, sections, metadata)
         filter_columns = _filter_columns_from_metadata(metadata)
+        
+        deadline_text = _first_section_text_by_type(sections, "deadline") or _first_section_text_by_type(sections, "application")
+        apply_start, apply_end = _parse_deadline_range(deadline_text)
+        status = _status_from_deadline(deadline_text, apply_start, apply_end) or "notice"
+        
         payload = {
             "source": "semas",
             "source_pk": source_pk,
@@ -325,9 +444,9 @@ def _normalize_semas(db: Session) -> dict[str, int]:
             "sido": metadata["region"]["sido"],
             "sigungu": metadata["region"]["sigungu"],
             **filter_columns,
-            "status": "notice",
-            "apply_start": None,
-            "apply_end": None,
+            "status": status,
+            "apply_start": apply_start,
+            "apply_end": apply_end,
             "apply_url": row.source_url,
             "industry_tags": metadata["industry_tags"],
             "business_status_tags": metadata["business_status_tags"],
@@ -346,6 +465,8 @@ def _normalize_semas(db: Session) -> dict[str, int]:
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
                 "extraction_method": "rule",
+                "deadline_text": deadline_text,
+                "deadline_type": _classify_deadline_type(deadline_text),
             },
             "required_documents": metadata["required_documents"],
             "source_content_hash": row.content_hash,
@@ -358,6 +479,11 @@ def _normalize_semas(db: Session) -> dict[str, int]:
             stats["documents_created"] += _replace_documents(db, policy, docs)
         db.commit()
 
+        if action != "unchanged":
+            updated_count += 1
+            print(f"  [semas] Policy '{row.program_name}' was {action}.", flush=True)
+
+    print(f"[normalizer] semas: Completed. Updated/Created: {updated_count} / {len(rows)}", flush=True)
     return stats
 
 
@@ -367,6 +493,8 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         db.query(Gov24ServiceList)
         .all()
     )
+    print(f"[normalizer] gov24: Found {len(list_rows)} raw policies to normalize.", flush=True)
+    updated_count = 0
 
     for list_row in list_rows:
         detail = db.get(Gov24ServiceDetail, list_row.service_id)
@@ -445,14 +573,36 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             reception_institution=_first_text(detail.reception_institution_name if detail else None, list_row.reception_institution),
             laws=detail.laws if detail else None,
         )
+        gov_emp = _extract_employee_limit(gov_eligibility_blob)
+        gov_sales = _extract_sales_limit(gov_eligibility_blob)
+        gov_age = _extract_business_age_limit(gov_eligibility_blob)
+        gov_limits = {
+            "employee_limit": gov_emp,
+            "sales_limit": gov_sales,
+            "business_age_limit": gov_age,
+        }
+        llm_fields = _limit_fields_requiring_llm(gov_eligibility_blob, gov_limits)
+        if llm_fields and settings.REC_OLLAMA_BASE_URL:
+            print(f"  [Ollama] gov24 '{list_row.service_name[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
+            llm_limits = _extract_limits_via_ollama(gov_eligibility_blob, llm_fields)
+            for field in llm_fields:
+                if llm_limits.get(field) is not None:
+                    gov_limits[field] = llm_limits[field]
+            filled = [field for field in llm_fields if gov_limits[field] is not None]
+            print(f"  [Ollama] gov24 '{list_row.service_name[:30]}' 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+
+        gov_emp = gov_limits["employee_limit"]
+        gov_sales = gov_limits["sales_limit"]
+        gov_age = gov_limits["business_age_limit"]
+
         gov_metadata = {
             "region": region,
             "required_documents": docs_required,
             "application_methods": _extract_application_methods(application_method),
             "contacts": contacts,
-            "employee_limit": _extract_employee_limit(gov_eligibility_blob),
-            "sales_limit": _extract_sales_limit(gov_eligibility_blob),
-            "business_age_limit": _extract_business_age_limit(gov_eligibility_blob),
+            "employee_limit": gov_emp,
+            "sales_limit": gov_sales,
+            "business_age_limit": gov_age,
         }
         filter_columns = _filter_columns_from_metadata(gov_metadata)
         source_hash = _make_hash(
@@ -509,6 +659,7 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
                 "income_ranges": condition_payload["income_ranges"],
                 "target_traits": condition_payload["target_traits"],
                 "extraction_method": "gov24_detail_and_condition_codes",
+                "deadline_type": _classify_deadline_type(application_deadline),
             },
             "required_documents": docs_required,
             "source_content_hash": source_hash,
@@ -521,6 +672,11 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             stats["documents_created"] += _replace_documents(db, policy, docs)
         db.commit()
 
+        if action != "unchanged":
+            updated_count += 1
+            print(f"  [gov24] Policy '{list_row.service_name}' (ID: {list_row.service_id}) was {action}.", flush=True)
+
+    print(f"[normalizer] gov24: Completed. Updated/Created: {updated_count} / {len(list_rows)}", flush=True)
     return stats
 
 
@@ -799,13 +955,19 @@ def _sections_from_semas(row: PolicyProgramPage) -> list[dict[str, str | None]]:
         text_value = _clean_text(_as_text(section.get("body") or section.get("text")))
         if not text_value:
             continue
-        sections.append(
-            {
-                "title": title or row.program_name,
-                "text": text_value,
-                "document_type": _document_type_for_title(title),
-            }
-        )
+            
+        sub_sections = _sections_from_sbiz24_text(text_value)
+        if sub_sections:
+            for sub in sub_sections:
+                sections.append(sub)
+        else:
+            sections.append(
+                {
+                    "title": title or row.program_name,
+                    "text": text_value,
+                    "document_type": _document_type_for_title(title),
+                }
+            )
     return _dedupe_sections(sections)
 
 
@@ -820,6 +982,7 @@ def _source_metadata(
     extra_texts: list[Any] | None = None,
     default_business_status_tags: list[str] | None = None,
     region_text: str | None = None,
+    attachment_texts: list[str] | None = None,
 ) -> dict[str, Any]:
     text_blob = _join_text(
         [
@@ -847,6 +1010,24 @@ def _source_metadata(
     )
     industry_tags = _tags_from_keyword_map(eligibility_text, INDUSTRY_KEYWORDS)
     required_documents = _extract_required_documents(sections, source)
+    
+    if attachment_texts:
+        for att_text in attachment_texts:
+            for line in _split_requirement_lines(att_text):
+                for name in _split_document_names(line):
+                    if _is_weak_document_name(name):
+                        continue
+                    required_documents.append(
+                        {
+                            "name": name,
+                            "description": "",
+                            "source": source,
+                            "confidence": 0.7,
+                            "extraction_method": "attachment_rule",
+                        }
+                    )
+        required_documents = _dedupe_dicts(required_documents, "name")
+
     application_text = _join_text(
         [
             _first_section_text_by_type(sections, "application"),
@@ -855,21 +1036,71 @@ def _source_metadata(
     )
     contacts_text = _first_section_text_by_type(sections, "contact")
 
+    target_val = _first_text(_first_section_text_by_type(sections, "eligibility"), target_text)
+    if not target_val and content_text:
+        target_pattern = re.compile(
+            r"(?:신청\s*대상|지원\s*대상|이용\s*대상|가입\s*대상|가입\s*기준|신청\s*자격|지원\s*자격)\s*[:：\s]*(.*?)(?:\n\s*\n|\n\s*(?:[○\-\d]|\w+\s*[:：]|\bQ\d|\b[A-Za-z]+)\s*|$)",
+            re.DOTALL | re.IGNORECASE
+        )
+        match = target_pattern.search(content_text)
+        if match:
+            target_val = match.group(1).strip()
+
+    limits = {
+        "employee_limit": _extract_employee_limit(eligibility_text),
+        "sales_limit": _extract_sales_limit(eligibility_text),
+        "business_age_limit": _extract_business_age_limit(eligibility_text),
+    }
+    llm_fields = _limit_fields_requiring_llm(eligibility_text, limits)
+    if llm_fields and settings.REC_OLLAMA_BASE_URL:
+        label = _first_text(title, source) or source
+        print(f"  [Ollama] {source} '{label[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
+        llm_limits = _extract_limits_via_ollama(eligibility_text, llm_fields)
+        for field in llm_fields:
+            if llm_limits.get(field) is not None:
+                limits[field] = llm_limits[field]
+        filled = [field for field in llm_fields if limits[field] is not None]
+        print(f"  [Ollama] {source} '{label[:30]}' 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+
     return {
         "region": _extract_region_metadata(region_text if region_text is not None else eligibility_text),
         "summary_text": _first_section_text_by_type(sections, "summary"),
-        "target_text": _first_text(_first_section_text_by_type(sections, "eligibility"), target_text),
+        "target_text": target_val,
         "support_content_text": _first_section_text_by_type(sections, "support_content"),
         "required_documents": required_documents,
         "business_status_tags": business_status_tags,
         "industry_tags": industry_tags,
-        "employee_limit": _extract_employee_limit(eligibility_text),
-        "sales_limit": _extract_sales_limit(eligibility_text),
-        "business_age_limit": _extract_business_age_limit(eligibility_text),
+        "employee_limit": limits["employee_limit"],
+        "sales_limit": limits["sales_limit"],
+        "business_age_limit": limits["business_age_limit"],
         "money_conditions": _extract_money_conditions(text_blob),
         "application_methods": _extract_application_methods(application_text or text_blob),
         "contacts": _extract_contacts(_join_text([contacts_text, text_blob])),
     }
+
+
+def _safe_int(val: Any, max_limit: int = 2147483647) -> int | None:
+    if val is None:
+        return None
+    try:
+        i = int(val)
+        if -2147483648 <= i <= max_limit:
+            return i
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_bigint(val: Any) -> int | None:
+    if val is None:
+        return None
+    try:
+        i = int(val)
+        if -9223372036854775808 <= i <= 9223372036854775807:
+            return i
+        return None
+    except (ValueError, TypeError):
+        return None
 
 
 def _filter_columns_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -878,20 +1109,31 @@ def _filter_columns_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     employee_limit = metadata.get("employee_limit") or {}
     sales_limit = metadata.get("sales_limit") or {}
     business_age_limit = metadata.get("business_age_limit") or {}
+
+    # 업력 조건의 경우 100년을 초과하는 값이 오면 LLM 파싱 오동작(예: 매출액을 업력에 대입)으로 판단하여 제외합니다.
+    age_val = business_age_limit.get("value")
+    if age_val is not None:
+        try:
+            if int(age_val) > 100:
+                age_val = None
+        except (ValueError, TypeError):
+            age_val = None
+
     return {
         "matched_sidos": region.get("matched_sidos") or [],
         "region_confidence": region.get("confidence"),
         "application_methods": metadata.get("application_methods") or [],
         "contact_points": metadata.get("contacts") or [],
-        "employee_limit_value": employee_limit.get("value"),
+        "employee_limit_value": _safe_int(employee_limit.get("value")),
         "employee_limit_operator": employee_limit.get("operator"),
-        "sales_limit_amount_krw": sales_limit.get("amount_krw"),
+        "sales_limit_amount_krw": _safe_bigint(sales_limit.get("amount_krw")),
         "sales_limit_operator": sales_limit.get("operator"),
-        "business_age_limit_value": business_age_limit.get("value"),
-        "business_age_limit_operator": business_age_limit.get("operator"),
+        "business_age_limit_value": _safe_int(age_val),
+        "business_age_limit_operator": business_age_limit.get("operator") if age_val is not None else None,
         "required_document_count": len(required_documents),
         "has_required_documents": bool(required_documents),
     }
+
 
 
 def _documents_from_sections(
@@ -1016,6 +1258,17 @@ def _extract_region_metadata(value: str | None, default_scope: str = "unknown") 
             if sido not in matched_sidos:
                 matched_sidos.append(sido)
 
+    sigungu_val = None
+    if not matched_sidos:
+        for sigungu, sido in SIGUNGU_TO_SIDO.items():
+            pattern = rf"(?<![가-힣]){re.escape(sigungu)}(?:시|군|구)?(?![가-힣])"
+            match = re.search(pattern, text_value)
+            if match:
+                if sido not in matched_sidos:
+                    matched_sidos.append(sido)
+                sigungu_val = match.group(0)
+                break
+
     is_national = any(token in text_value for token in ("전국", "전 지역", "전국민", "전국 단위"))
     if matched_sidos:
         region_scope = "local"
@@ -1027,7 +1280,10 @@ def _extract_region_metadata(value: str | None, default_scope: str = "unknown") 
         region_scope = default_scope
         confidence = 0.5 if default_scope != "unknown" else 0.2
 
-    sigungu = _extract_sigungu_after_sido(text_value, matched_sidos) if matched_sidos else None
+    if sigungu_val is None:
+        sigungu = _extract_sigungu_after_sido(text_value, matched_sidos) if matched_sidos else None
+    else:
+        sigungu = sigungu_val
 
     return {
         "region_scope": region_scope,
@@ -1132,6 +1388,14 @@ def _is_weak_document_name(value: str) -> bool:
         "해당 없음",
         "없음",
         "사업별 공고",
+        "제출서류 안내",
+        "제출 서류 안내",
+        "제출서류 목록",
+        "제출 서류 목록",
+        "제출서류 리스트",
+        "제출 서류 리스트",
+        "제출서류 확인",
+        "제출 서류 확인",
     )
     if any(token in text_value for token in weak_tokens):
         return True
@@ -1151,11 +1415,12 @@ def _extract_employee_limit(value: str | None) -> dict[str, Any] | None:
         match = re.search(pattern, text_value)
         if not match:
             continue
+        operator, source_text = _operator_and_source_for_limit(text_value, match, match.group(3))
         return {
             "value": int(match.group(2)),
-            "operator": _operator_symbol(match.group(3)),
+            "operator": operator,
             "unit": "people",
-            "source_text": match.group(1),
+            "source_text": source_text,
             "extraction_method": "rule",
         }
     return None
@@ -1173,10 +1438,11 @@ def _extract_sales_limit(value: str | None) -> dict[str, Any] | None:
     match = pattern.search(text_value)
     if not match:
         return None
+    operator, source_text = _operator_and_source_for_limit(text_value, match, match.group(4) or "이하")
     return {
         "amount_krw": _money_to_krw(match.group(2), match.group(3)),
-        "operator": _operator_symbol(match.group(4) or "이하"),
-        "source_text": match.group(1),
+        "operator": operator,
+        "source_text": source_text,
         "extraction_method": "rule",
     }
 
@@ -1186,8 +1452,8 @@ def _extract_business_age_limit(value: str | None) -> dict[str, Any] | None:
     if not text_value:
         return None
     patterns = [
-        r"((?:창업|업력)[^0-9]{0,10}(\d+)\s*년\s*(이내|이하|미만|초과|경과하지\s*(?:않은|아니한)))",
-        r"((\d+)\s*년\s*(이내|이하|미만|초과|경과하지\s*(?:않은|아니한))[^.\n]{0,20}(?:창업|업력))",
+        r"((?:창업|업력)[^0-9]{0,10}(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)))",
+        r"((\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한))[^.\n]{0,20}(?:창업|업력))",
     ]
     for pattern in patterns:
         match = re.search(pattern, text_value)
@@ -1195,14 +1461,12 @@ def _extract_business_age_limit(value: str | None) -> dict[str, Any] | None:
             continue
         limit_years = int(match.group(2))
         op_text = match.group(3)
-        operator = _operator_symbol(op_text)
-        if op_text == "이내" or "경과하지" in op_text:
-            operator = "<="
+        operator, source_text = _operator_and_source_for_limit(text_value, match, op_text)
         return {
             "value": limit_years,
             "operator": operator,
             "unit": "years",
-            "source_text": match.group(1),
+            "source_text": source_text,
             "extraction_method": "rule",
         }
     return None
@@ -1272,6 +1536,26 @@ def _operator_symbol(value: str) -> str:
         "까지": "<=",
         "내외": "~",
     }.get(value, "<=")
+
+
+def _direct_exclusion_match(tail: str) -> re.Match[str] | None:
+    return re.search(
+        r"^\s*(?:인\s*)?(?:업소|업체|기업|사업체|대상자)?\s*"
+        r"(?:은|는|을|를)?\s*(?:지원\s*대상에서\s*)?"
+        r"(?:제외|지원\s*불가)(?!\s*업종)",
+        tail,
+    )
+
+
+def _operator_and_source_for_limit(text_value: str, match: re.Match[str], operator_text: str) -> tuple[str, str]:
+    operator = _operator_symbol(operator_text)
+    tail = text_value[match.end():match.end() + 40]
+    exclusion_match = _direct_exclusion_match(tail)
+    source_text = match.group(1)
+    if exclusion_match:
+        operator = {">=": "<", ">": "<=", "<=": ">", "<": ">="}.get(operator, operator)
+        source_text = _clean_text(f"{source_text}{exclusion_match.group(0)}") or source_text
+    return operator, source_text
 
 
 def _money_to_krw(number_text: str, unit: str) -> int:
@@ -1527,36 +1811,107 @@ def _parse_datetime(value: str | None, *, end_of_day: bool = False) -> datetime 
 
 
 def _parse_deadline_range(value: str | None) -> tuple[datetime | None, datetime | None]:
-    text_value = _clean_text(value)
-    if not text_value:
+    if not value:
         return None, None
-    matches = re.findall(r"(20\d{2})[.\-/년\s]+(\d{1,2})[.\-/월\s]+(\d{1,2})", text_value)
+        
+    text_value = value.strip().replace(" ", "")  # 공백 제거하여 매칭 확률 증가
+    
+    # 1. 4자리 연도 패턴 YYYY.MM.DD (ex: 2026.03.03)
+    matches_3_parts = re.findall(r"(20\d{2})[.\-/년]+(\d{1,2})[.\-/월]+(\d{1,2})", text_value)
+    
+    # 2. 2자리 연도 패턴 YY.MM.DD (ex: '25.2.24)
+    if not matches_3_parts:
+        matches_3_parts = []
+        for y, m, d in re.findall(r"\b(2\d|3\d)[.\-/년]+(\d{1,2})[.\-/월]+(\d{1,2})", text_value):
+            matches_3_parts.append((f"20{y}", m, d))
+            
     dates: list[datetime] = []
-    for year, month, day in matches[:2]:
+    for year, month, day in matches_3_parts[:2]:
         try:
             dates.append(datetime(int(year), int(month), int(day)))
         except ValueError:
             continue
-    if len(dates) == 1:
-        first_date = dates[0]
-        year = first_date.year
-        remaining_text = re.sub(r"20\d{2}[.\-/년\s]+\d{1,2}[.\-/월\s]+\d{1,2}", "", text_value, count=1)
-        second_match = re.search(r"(\d{1,2})[.\-/월\s]+(\d{1,2})", remaining_text)
-        if second_match:
+            
+    if dates:
+        if len(dates) == 1:
+            first_date = dates[0]
+            year = first_date.year
+            # 매칭된 부분 제거
+            remaining_text = re.sub(r"(?:20)?(?:2\d|3\d)[.\-/년]+\d{1,2}[.\-/월]+\d{1,2}", "", text_value, count=1)
+            # 종료일이 월/일만 있는지 확인 (ex: ~10.30)
+            second_match = re.search(r"(\d{1,2})[.\-/월]+(\d{1,2})", remaining_text)
+            if second_match:
+                try:
+                    second_date = datetime(year, int(second_match.group(1)), int(second_match.group(2)))
+                    if first_date <= second_date:
+                        return first_date, _as_end_of_day(second_date)
+                    else:
+                        return second_date, _as_end_of_day(first_date)
+                except ValueError:
+                    pass
+            if re.search(r"(?:예산|자금|보증규모|한도)?.{0,10}소진", remaining_text):
+                return first_date, None
+            return None, _as_end_of_day(first_date)
+        return dates[0], _as_end_of_day(dates[1])
+
+    # 3. 연/월만 명시된 경우 (YYYY.MM) 파싱 시도 (ex: 2026.2.~ / 2026년2월~12월)
+    matches_2_parts = re.findall(r"(20\d{2})[.\-/년]+(\d{1,2})[.\-/월]*", text_value)
+    if not matches_2_parts:
+        matches_2_parts = []
+        for y, m in re.findall(r"\b(2\d|3\d)[.\-/년]+(\d{1,2})[.\-/월]*", text_value):
+            matches_2_parts.append((f"20{y}", m))
+            
+    if matches_2_parts:
+        dates_2_parts = []
+        for year, month in matches_2_parts[:2]:
             try:
-                second_date = datetime(year, int(second_match.group(1)), int(second_match.group(2)))
-                if first_date <= second_date:
-                    return first_date, _as_end_of_day(second_date)
-                else:
-                    return second_date, _as_end_of_day(first_date)
+                dates_2_parts.append((int(year), int(month)))
             except ValueError:
-                pass
-        if re.search(r"(?:예산|자금|보증규모|한도)?.{0,10}소진\s*(?:시|때|까지)?", remaining_text):
-            return first_date, None
-        return None, _as_end_of_day(first_date)
-    if not dates:
-        return None, None
-    return dates[0], _as_end_of_day(dates[1])
+                continue
+        if dates_2_parts:
+            y1, m1 = dates_2_parts[0]
+            start_date = datetime(y1, m1, 1)
+            
+            # 남은 텍스트에서 두 번째 월이 있는지 확인
+            remaining_text = re.sub(r"(?:20)?(?:2\d|3\d)[.\-/년]+\d{1,2}[.\-/월]*", "", text_value, count=1)
+            
+            if len(dates_2_parts) == 2:
+                y2, m2 = dates_2_parts[1]
+                last_day = calendar.monthrange(y2, m2)[1]
+                end_date = datetime(y2, m2, last_day)
+                return start_date, _as_end_of_day(end_date)
+            else:
+                # 단독 월 추출 시도 (ex: ~12월)
+                month_match = re.search(r"(\d{1,2})[월\s]*", remaining_text)
+                if month_match:
+                    try:
+                        m2 = int(month_match.group(1))
+                        last_day = calendar.monthrange(y1, m2)[1]
+                        end_date = datetime(y1, m2, last_day)
+                        return start_date, _as_end_of_day(end_date)
+                    except ValueError:
+                        pass
+                if re.search(r"(?:예산|자금|보증규모|한도)?.{0,10}소진", remaining_text):
+                    return start_date, None
+                last_day = calendar.monthrange(y1, m1)[1]
+                return start_date, _as_end_of_day(datetime(y1, m1, last_day))
+
+    return None, None
+
+
+def _classify_deadline_type(value: str | None) -> str:
+    text_value = _clean_text(value) or ""
+    if not text_value:
+        return "unknown"
+    if any(token in text_value for token in ("상시", "연중", "소진", "매일", "항시")):
+        return "ongoing"
+    if any(token in text_value for token in ("상이", "구분", "별도", "공고별")):
+        return "various"
+    if any(token in text_value for token in ("불필요", "없음")):
+        return "none"
+    if re.search(r"\d{4}[.\-/년\s]+\d{1,2}", text_value) or re.search(r"\d{1,2}[.\-/월\s]+\d{1,2}", text_value):
+        return "fixed"
+    return "other"
 
 
 def _as_end_of_day(value: datetime) -> datetime:
@@ -1703,3 +2058,376 @@ def _guess_content_type(file_name: str) -> str | None:
         "xls": "application/vnd.ms-excel",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }.get(suffix, suffix)
+
+
+LIMIT_FIELD_SPECS: dict[str, dict[str, Any]] = {
+    "employee_limit": {
+        "keywords": ("근로자", "직원", "종업원", "고용인원", "상시인원"),
+        "numeric_unit_pattern": r"\d+(?:,\d{3})*\s*(?:명|인)(?=\s*(?:미만|이하|이상|초과|약|내외|규모|$))",
+        "maximum": 1_000_000,
+    },
+    "sales_limit": {
+        "keywords": ("매출", "매출액", "연매출"),
+        "numeric_unit_pattern": (
+            r"\d+(?:,\d{3})*(?:\.\d+)?\s*"
+            r"(?:억\s*원|억원|천만\s*원|천만원|백만\s*원|백만원|만\s*원|만원|원)"
+            r"(?=\s*(?:미만|이하|이상|초과|약|내외|범위|$))"
+        ),
+        "maximum": 9_000_000_000_000_000_000,
+    },
+    "business_age_limit": {
+        "keywords": ("업력", "창업", "사업개시", "사업 개시", "개업"),
+        "numeric_unit_pattern": r"\d+\s*년(?=\s*(?:미만|이하|이상|초과|이내|약|내외|경과|$))",
+        "maximum": 100,
+    },
+}
+
+
+def _limit_candidate_context(value: str | None, field: str) -> str | None:
+    text_value = _clean_text(value)
+    spec = LIMIT_FIELD_SPECS.get(field)
+    if not text_value or not spec:
+        return None
+
+    spans: list[tuple[int, int]] = []
+    qualifier_pattern = re.compile(r"미만|이하|이상|초과|이내|경과하지|약|내외|범위")
+    numeric_unit_pattern = re.compile(spec["numeric_unit_pattern"])
+    for keyword in spec["keywords"]:
+        for match in re.finditer(re.escape(keyword), text_value, re.IGNORECASE):
+            start = max(match.start() - 60, 0)
+            end = min(match.end() + 140, len(text_value))
+            window = text_value[start:end]
+            numeric_matches = list(numeric_unit_pattern.finditer(window))
+            if not numeric_matches:
+                continue
+            if not qualifier_pattern.search(window):
+                continue
+            keyword_start = match.start() - start
+            keyword_end = match.end() - start
+            is_near_keyword = any(
+                min(abs(number.start() - keyword_end), abs(keyword_start - number.end())) <= 60
+                for number in numeric_matches
+            )
+            if not is_near_keyword:
+                continue
+            spans.append((start, end))
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    windows = [text_value[start:end] for start, end in merged]
+    return _clean_text(" ... ".join(windows))
+
+
+def _limit_fields_requiring_llm(
+    text_value: str | None,
+    parsed_limits: dict[str, dict[str, Any] | None],
+) -> list[str]:
+    requested: list[str] = []
+    for field in LIMIT_FIELD_SPECS:
+        context = _limit_candidate_context(text_value, field)
+        if not context:
+            continue
+        parsed = parsed_limits.get(field)
+        numbers = re.findall(r"\d+(?:,\d{3})*(?:\.\d+)?", context)
+        has_lower = bool(re.search(r"이상|초과", context))
+        has_upper = bool(re.search(r"이하|미만|이내|경과하지", context))
+        is_two_sided_range = len(numbers) >= 2 and has_lower and has_upper
+        is_complex = bool(_complex_limit_payload(field, context))
+        if parsed is None or is_two_sided_range or is_complex:
+            requested.append(field)
+    return requested
+
+
+def _select_limit_context(text_value: str, requested_fields: list[str]) -> str:
+    selected = [
+        context
+        for field in requested_fields
+        if (context := _limit_candidate_context(text_value, field))
+    ]
+    context = _clean_text(" ... ".join(dict.fromkeys(selected))) or text_value
+    return context[: settings.NORMALIZE_LLM_MAX_CONTEXT_CHARS]
+
+
+def _coerce_limit_int(value: Any, maximum: int) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, float) and value.is_integer():
+        parsed = int(value)
+    elif isinstance(value, str):
+        compact = value.replace(",", "").strip()
+        if not re.fullmatch(r"\d+", compact):
+            return None
+        parsed = int(compact)
+    else:
+        return None
+    return parsed if 0 <= parsed <= maximum else None
+
+
+def _normalize_llm_operator(value: Any, side: str, evidence: str) -> str | None:
+    aliases = {
+        "이상": ">=",
+        "초과": ">",
+        "이하": "<=",
+        "미만": "<",
+        "이내": "<=",
+    }
+    operator = aliases.get(str(value).strip(), str(value).strip()) if value is not None else None
+    allowed = {">=", ">"} if side == "min" else {"<=", "<"}
+    if operator in allowed:
+        return operator
+    if side == "min":
+        if "초과" in evidence:
+            return ">"
+        if "이상" in evidence:
+            return ">="
+    else:
+        if "미만" in evidence:
+            return "<"
+        if any(token in evidence for token in ("이하", "이내", "경과하지")):
+            return "<="
+    return None
+
+
+def _bounds_from_evidence(field: str, evidence: str) -> dict[str, Any]:
+    bounds: dict[str, Any] = {
+        "min_value": None,
+        "min_operator": None,
+        "max_value": None,
+        "max_operator": None,
+        "constraints": [],
+        "has_alternatives": False,
+    }
+    if field == "employee_limit":
+        matches = re.finditer(r"(\d+)\s*(?:명|인)\s*(미만|이하|이상|초과)", evidence)
+        extracted = [
+            (int(match.group(1)), _operator_symbol(match.group(2)), match.group(0), match.end())
+            for match in matches
+        ]
+    elif field == "sales_limit":
+        matches = re.finditer(
+            r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*"
+            r"(억\s*원|억원|천만\s*원|천만원|백만\s*원|백만원|만\s*원|만원|원)\s*"
+            r"(미만|이하|이상|초과)",
+            evidence,
+        )
+        extracted = [
+            (
+                _money_to_krw(match.group(1), match.group(2)),
+                _operator_symbol(match.group(3)),
+                match.group(0),
+                match.end(),
+            )
+            for match in matches
+        ]
+    else:
+        matches = re.finditer(
+            r"(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한))",
+            evidence,
+        )
+        extracted = [
+            (int(match.group(1)), _operator_symbol(match.group(2)), match.group(0), match.end())
+            for match in matches
+        ]
+
+    side_values: dict[str, set[int]] = {"min": set(), "max": set()}
+    seen_constraints: set[tuple[int, str, str]] = set()
+    for value, operator, source_text, match_end in extracted:
+        tail = evidence[match_end:match_end + 40]
+        exclusion_match = _direct_exclusion_match(tail)
+        if exclusion_match:
+            operator = {">=": "<", ">": "<=", "<=": ">", "<": ">="}.get(operator, operator)
+            source_text = _clean_text(f"{source_text}{exclusion_match.group(0)}") or source_text
+        side = "min" if operator in {">", ">="} else "max"
+        side_values[side].add(value)
+        bounds[f"{side}_value"] = value
+        bounds[f"{side}_operator"] = operator
+        marker = (value, operator, source_text)
+        if marker in seen_constraints:
+            continue
+        seen_constraints.add(marker)
+        bounds["constraints"].append(
+            {"value": value, "operator": operator, "source_text": source_text}
+        )
+    min_value = bounds["min_value"]
+    max_value = bounds["max_value"]
+    bounds["has_alternatives"] = (
+        len(bounds["constraints"]) > 2
+        or any(len(values) > 1 for values in side_values.values())
+        or (min_value is not None and max_value is not None and min_value > max_value)
+    )
+    return bounds
+
+
+def _complex_limit_payload(field: str, text_value: str) -> dict[str, Any] | None:
+    context = _limit_candidate_context(text_value, field)
+    if not context:
+        return None
+    bounds = _bounds_from_evidence(field, context)
+    if not bounds["has_alternatives"]:
+        return None
+    result: dict[str, Any] = {
+        "constraints": bounds["constraints"],
+        "source_text": context,
+        "extraction_method": "rule_ambiguous",
+        "requires_manual_review": True,
+    }
+    if field == "sales_limit":
+        result["unit"] = "krw"
+    else:
+        result["unit"] = "people" if field == "employee_limit" else "years"
+    return result
+
+
+def _convert_llm_limit(
+    field: str,
+    raw_value: Any,
+    context: str,
+    model_name: str,
+) -> dict[str, Any] | None:
+    if not isinstance(raw_value, dict):
+        return None
+
+    evidence = _clean_text(_as_text(raw_value.get("evidence")))
+    if not evidence or evidence not in context:
+        return None
+    if not _limit_candidate_context(evidence, field):
+        return None
+
+    maximum = int(LIMIT_FIELD_SPECS[field]["maximum"])
+    evidence_bounds = _bounds_from_evidence(field, evidence)
+    min_value = _coerce_limit_int(evidence_bounds["min_value"], maximum)
+    max_value = _coerce_limit_int(evidence_bounds["max_value"], maximum)
+    if min_value is None:
+        min_value = _coerce_limit_int(raw_value.get("min"), maximum)
+    if max_value is None:
+        max_value = _coerce_limit_int(raw_value.get("max"), maximum)
+    min_operator = _as_text(evidence_bounds["min_operator"])
+    max_operator = _as_text(evidence_bounds["max_operator"])
+    if min_value is not None and min_operator is None:
+        min_operator = _normalize_llm_operator(raw_value.get("min_operator"), "min", evidence)
+    if max_value is not None and max_operator is None:
+        max_operator = _normalize_llm_operator(raw_value.get("max_operator"), "max", evidence)
+
+    if min_value is not None and min_operator is None:
+        min_value = None
+    if max_value is not None and max_operator is None:
+        max_value = None
+    if min_value is None and max_value is None:
+        return None
+    if min_value is not None and max_value is not None and min_value > max_value:
+        return None
+
+    result: dict[str, Any] = {
+        "min_value": min_value,
+        "min_operator": min_operator,
+        "max_value": max_value,
+        "max_operator": max_operator,
+        "source_text": evidence,
+        "extraction_method": "ollama_llm",
+        "model": model_name,
+    }
+    if field == "sales_limit":
+        result["min_amount_krw"] = min_value
+        result["max_amount_krw"] = max_value
+        if (min_value is None) != (max_value is None):
+            result["amount_krw"] = max_value if max_value is not None else min_value
+            result["operator"] = max_operator if max_value is not None else min_operator
+    else:
+        result["unit"] = "people" if field == "employee_limit" else "years"
+        if (min_value is None) != (max_value is None):
+            result["value"] = max_value if max_value is not None else min_value
+            result["operator"] = max_operator if max_value is not None else min_operator
+    return result
+
+
+def _extract_limits_via_ollama(
+    text_value: str | None,
+    requested_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """규칙으로 확정하지 못한 숫자 자격조건만 Ollama로 보수적으로 추출합니다."""
+    fallback_res = {field: None for field in LIMIT_FIELD_SPECS}
+    clean_txt = _clean_text(text_value)
+    if not clean_txt:
+        return fallback_res
+
+    fields = [field for field in (requested_fields or LIMIT_FIELD_SPECS.keys()) if field in LIMIT_FIELD_SPECS]
+    fields = [field for field in fields if _limit_candidate_context(clean_txt, field)]
+    if not fields:
+        return fallback_res
+
+    model_name = settings.NORMALIZE_LLM_MODEL
+    base_url = settings.REC_OLLAMA_BASE_URL
+    if not base_url:
+        return fallback_res
+
+    field_prompts = {
+        "employee_limit": (
+            "사업체 직원수 또는 상시근로자수 조건",
+            "입력 '상시근로자 5인 미만'이면 "
+            '{"min":null,"min_operator":null,"max":5,"max_operator":"<","evidence":"상시근로자 5인 미만"}',
+        ),
+        "sales_limit": (
+            "사업체의 연간 매출액 조건",
+            "입력 '연매출 10억원 이하'이면 "
+            '{"min":null,"min_operator":null,"max":1000000000,"max_operator":"<=","evidence":"연매출 10억원 이하"}',
+        ),
+        "business_age_limit": (
+            "사업체의 창업 후 업력 조건",
+            "입력 '창업 3년 이상 7년 이하'이면 "
+            '{"min":3,"min_operator":">=","max":7,"max_operator":"<=","evidence":"창업 3년 이상 7년 이하"}',
+        ),
+    }
+
+    for field in fields:
+        complex_payload = _complex_limit_payload(field, clean_txt)
+        if complex_payload is not None:
+            fallback_res[field] = complex_payload
+            print(f"  [Ollama Fallback] {field} 복합 조건은 평탄화하지 않음", flush=True)
+            continue
+        context = _select_limit_context(clean_txt, [field])
+        description, example = field_prompts[field]
+        system_prompt = (
+            f"당신은 소상공인 지원 공고에서 {description} 하나만 추출합니다. "
+            "반드시 min, min_operator, max, max_operator, evidence 키만 가진 단일 JSON 객체를 반환하세요. "
+            "미만은 <, 이하는 <=, 초과는 >, 이상은 >= 입니다. "
+            "명시된 숫자 조건이 없을 때만 min과 max를 null로 두세요. "
+            "소상공인이라는 단어만으로 기준을 추정하지 마세요. "
+            "지원금액, 대표자 나이, 예상 매출은 자격조건으로 해석하지 마세요. "
+            "매출액은 원 단위 정수로 환산하고, 양쪽 범위는 min과 max를 모두 보존하세요. "
+            "evidence는 입력에서 연속된 원문을 그대로 복사하세요. "
+            f"출력 예시: {example}. JSON 이외의 문장은 출력하지 마세요."
+        )
+        print(f"  [Ollama Fallback] {model_name} 호출: field={field}, chars={len(context)}", flush=True)
+        try:
+            response = httpx.post(
+                f"{base_url.rstrip('/')}/api/chat",
+                json={
+                    "model": model_name,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": context},
+                    ],
+                    "format": "json",
+                    "stream": False,
+                    "options": {"temperature": 0.0},
+                },
+                timeout=settings.NORMALIZE_LLM_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            response_text = payload.get("message", {}).get("content", "").strip()
+            data = json.loads(response_text)
+            if isinstance(data, dict) and isinstance(data.get(field), dict):
+                data = data[field]
+            fallback_res[field] = _convert_llm_limit(field, data, context, model_name)
+            if fallback_res[field] is None:
+                print(f"  [Ollama Fallback] 검증에서 거절된 응답: {response_text[:500]}", flush=True)
+        except Exception as exc:
+            print(f"  [Ollama Fallback] {field} 추출 실패: {exc}", flush=True)
+    return fallback_res

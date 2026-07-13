@@ -50,8 +50,9 @@ def _run_all_jobs() -> None:
     if settings.NORMALIZE_AFTER_CRAWL:
         try:
             stats = normalize_policy_sources_once()
+            result_label = "failed" if int(stats.get("errors", 0)) > 0 else "success"
             print(
-                "[normalizer] success "
+                f"[normalizer] {result_label} "
                 + json.dumps(stats, ensure_ascii=False, sort_keys=True),
                 flush=True,
             )
