@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from google_auth_oauthlib.flow import Flow
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.models.user import User, UserProfile
 import httpx
 from datetime import datetime, timezone
