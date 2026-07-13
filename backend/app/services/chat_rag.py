@@ -1,6 +1,7 @@
 import os
 import uuid
 import hashlib
+import re
 from functools import wraps
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -33,7 +34,7 @@ DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
 }
 
 KEYWORD_INTENTS: List[Tuple[str, Tuple[str, ...]]] = [
-    ("eligibility", ("지원대상", "신청대상", "대상자", "자격", "요건", "누가", "받을 수", "가능", "소상공인", "중소기업")),
+    ("eligibility", ("지원대상", "지원 대상", "신청대상", "신청 대상", "대상자", "자격", "요건", "누가", "누구", "받을 수", "가능", "소상공인", "중소기업")),
     ("requirements", ("제출서류", "구비서류", "필요서류", "첨부서류", "서류", "증빙")),
     ("application", ("신청", "접수", "온라인", "방문", "우편", "이메일", "제출")),
     ("deadline", ("마감", "기간", "접수기간", "신청기간", "시작일", "종료일")),
@@ -480,6 +481,7 @@ def retrieve_policy_chunk_sources(
     query: str,
     *,
     limit: Optional[int] = None,
+    policy_id: Optional[uuid.UUID] = None,
     embedding_model: Optional[EmbeddingModel] = None,
 ) -> Dict[str, Any]:
     model = embedding_model or create_embedding_model()
@@ -491,6 +493,7 @@ def retrieve_policy_chunk_sources(
         query=expanded_query,
         embedding_model=model,
         limit=max(requested_limit * 4, requested_limit),
+        policy_id=policy_id,
     )
     sources = [chunk_to_source(chunk, similarity) for chunk, similarity in results]
     sources = rerank_sources_by_intent(sources, intent_tags)[:requested_limit]
@@ -524,23 +527,125 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
     return "\n".join(blocks)
 
 
+FOCUSED_FALLBACK_SECTIONS: Dict[str, Tuple[str, ...]] = {
+    "eligibility": ("지원 대상", "지원대상", "신청 대상", "신청대상", "대상"),
+    "target": ("지원 대상", "지원대상", "신청 대상", "신청대상", "대상"),
+    "requirements": ("구비 서류", "구비서류", "필요 서류", "필요서류", "제출 서류", "제출서류"),
+    "documents": ("구비 서류", "구비서류", "필요 서류", "필요서류", "제출 서류", "제출서류"),
+    "application": ("신청 방법", "신청방법", "접수 방법", "접수방법", "신청"),
+    "apply_method": ("신청 방법", "신청방법", "접수 방법", "접수방법", "신청"),
+    "deadline": ("신청 기한", "신청기한", "신청 기간", "신청기간", "접수 기간", "접수기간", "마감"),
+    "schedule": ("신청 기한", "신청기한", "신청 기간", "신청기간", "접수 기간", "접수기간", "마감"),
+    "contact": ("문의처", "문의", "담당 기관", "담당기관", "접수처"),
+    "benefit": ("지원 내용", "지원내용", "혜택", "지원 금액", "지원금액"),
+    "support_content": ("지원 내용", "지원내용", "혜택", "지원 금액", "지원금액"),
+}
+
+
+SECTION_LABEL_PATTERN = re.compile(r"\[([^\[\]]{1,30})\]")
+
+
+def _normalize_space(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" \n\t:-")
+
+
+def _extract_bracket_sections(text: str) -> Dict[str, str]:
+    matches = list(SECTION_LABEL_PATTERN.finditer(text))
+    sections: Dict[str, str] = {}
+    for index, match in enumerate(matches):
+        label = _normalize_space(match.group(1))
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        content = _normalize_space(text[start:end])
+        if label and content:
+            sections.setdefault(label, content)
+    return sections
+
+
+def _section_value_for_intents(text: str, intents: Iterable[str]) -> Optional[str]:
+    sections = _extract_bracket_sections(text)
+    if not sections:
+        return None
+
+    for intent in intents:
+        for wanted_label in FOCUSED_FALLBACK_SECTIONS.get(intent, ()):
+            for label, content in sections.items():
+                normalized_label = label.replace(" ", "")
+                normalized_wanted = wanted_label.replace(" ", "")
+                if normalized_label == normalized_wanted or normalized_wanted in normalized_label:
+                    return content
+    return None
+
+
+def _fallback_points(value: str, limit: int = 5) -> List[str]:
+    cleaned = _normalize_space(value)
+    if not cleaned:
+        return []
+    if cleaned in {"해당없음", "해당 없음", "없음", "없습니다"}:
+        return [cleaned]
+
+    pieces = re.split(r"\s*(?:\|\||ㆍ|•|,|;| 또는 | 혹은 )\s*", cleaned)
+    points = [_normalize_space(piece) for piece in pieces if _normalize_space(piece)]
+    return _dedupe_preserve_order(points)[:limit] or [cleaned]
+
+
+def _friendly_heading(intent_tags: List[str]) -> str:
+    if any(tag in intent_tags for tag in ("eligibility", "target")):
+        return "지원 대상은 다음과 같아요."
+    if any(tag in intent_tags for tag in ("requirements", "documents")):
+        return "필요한 서류는 다음과 같아요."
+    if any(tag in intent_tags for tag in ("application", "apply_method")):
+        return "신청 방법은 다음과 같아요."
+    if any(tag in intent_tags for tag in ("deadline", "schedule")):
+        return "신청 기간은 다음과 같아요."
+    if "contact" in intent_tags:
+        return "문의처는 다음과 같아요."
+    if any(tag in intent_tags for tag in ("benefit", "support_content")):
+        return "지원 내용은 다음과 같아요."
+    return "공고문에서 확인한 내용이에요."
+
+
 def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> str:
     if not sources:
-        return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
+        return "공고문에서 관련 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요."
 
-    lines = [
-        "LLM 답변 생성이 비활성화되어 검색 근거를 먼저 정리합니다.",
-        f"질문: {query}",
-        "",
-        "관련 근거:",
-    ]
-    for index, source in enumerate(sources[:3], start=1):
-        lines.append(
-            f"{index}. {source.get('policy_title') or '정책명 없음'} "
-            f"({source.get('document_type')}, 유사도 {source.get('similarity'):.3f})"
+    intent_tags = infer_intent_tags(None, None, query)
+    best_source = sources[0]
+    policy_title = best_source.get("policy_title") or "이 공고"
+
+    focused_value = None
+    for source in sources:
+        chunk_text = str(source.get("chunk_text") or "")
+        focused_value = _section_value_for_intents(chunk_text, intent_tags)
+        if focused_value:
+            break
+
+    if focused_value:
+        points = _fallback_points(focused_value)
+        if len(points) == 1:
+            return f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}\n\n{points[0]}"
+        return "\n".join(
+            [
+                f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}",
+                "",
+                *[f"- {point}" for point in points],
+            ]
         )
-        lines.append(f"   - {source.get('chunk_text')}")
-    return "\n".join(lines)
+
+    snippets = _dedupe_preserve_order(
+        _normalize_space(str(source.get("chunk_text") or "")) for source in sources[:3]
+    )
+    if not snippets:
+        return "공고문에서 관련 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요."
+
+    first_snippet = snippets[0]
+    if len(first_snippet) > 420:
+        first_snippet = f"{first_snippet[:420].rstrip()}..."
+    return (
+        f"{policy_title} 공고문에서 가장 가까운 내용을 찾았어요.\n\n"
+        f"{first_snippet}\n\n"
+        "정확한 대상, 서류, 기간처럼 궁금한 항목을 한 번 더 물어보면 더 좁혀서 답변할게요."
+    )
 
 
 @traceable_if_enabled("chat-rag-answer")
@@ -589,8 +694,19 @@ def generate_chat_answer(query: str, sources: List[Dict[str, Any]]) -> str:
         return build_retrieval_only_answer(query, sources)
 
 
-def answer_policy_question(db: Session, query: str, *, limit: Optional[int] = None) -> Dict[str, Any]:
-    retrieval = retrieve_policy_chunk_sources(db=db, query=query, limit=limit)
+def answer_policy_question(
+    db: Session,
+    query: str,
+    *,
+    limit: Optional[int] = None,
+    policy_id: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
+    retrieval = retrieve_policy_chunk_sources(
+        db=db,
+        query=query,
+        limit=limit,
+        policy_id=policy_id,
+    )
     answer = generate_chat_answer(query, retrieval["sources"])
     return {
         **retrieval,

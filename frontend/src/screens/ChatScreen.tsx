@@ -1,9 +1,11 @@
 import { useRef, useState } from 'react'
-import { Bookmark, Bot, CalendarDays, Plus, Send } from 'lucide-react'
+import { Bookmark, Bot, CalendarDays, LoaderCircle, Plus, Send } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import { benefits, getBenefit } from '../data/benefits'
+import { apiFetch } from '../lib/api'
 import { useBookmarks } from '../lib/storage'
+import type { ChatAnswerResponse, ChatChunkSource } from '../types'
 
 interface Message {
   id: number
@@ -11,9 +13,13 @@ interface Message {
   text?: string
   benefitId?: string
   time?: string
+  sources?: ChatChunkSource[]
+  pending?: boolean
 }
 
 const QUICK = ['내 업종 지원금 찾아줘', '공고문 요약해줘', '세무 일정 알려줘']
+
+const DETAIL_QUICK = ['지원 대상이 누구야?', '필요한 서류가 뭐야?', '신청 기간은 언제까지야?']
 
 const initialMessages: Message[] = [
   {
@@ -29,8 +35,19 @@ export default function ChatScreen() {
   const [searchParams] = useSearchParams()
   const policyId = searchParams.get('policyId')
   const { has, toggle } = useBookmarks()
-  const [messages, setMessages] = useState<Message[]>(initialMessages)
+  const [messages, setMessages] = useState<Message[]>(() =>
+    policyId
+      ? [
+          {
+            id: 1,
+            role: 'bot',
+            text: '선택한 공고의 원문을 기준으로 답변해드릴게요. 지원 대상, 신청 기간, 필요 서류, 접수 방법 등을 물어보세요.',
+          },
+        ]
+      : initialMessages,
+  )
   const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
   const nextId = useRef(2)
 
   const push = (m: Omit<Message, 'id'>) => {
@@ -39,11 +56,55 @@ export default function ChatScreen() {
     return id
   }
 
+  const replace = (id: number, next: Omit<Message, 'id'>) => {
+    setMessages((prev) => prev.map((message) => (message.id === id ? { ...next, id } : message)))
+  }
+
+  const askSelectedPolicy = async (query: string) => {
+    if (!policyId) return
+
+    setSending(true)
+    const pendingId = push({
+      role: 'bot',
+      text: '공고문에서 답변 근거를 찾고 있어요.',
+      pending: true,
+    })
+
+    try {
+      const data = await apiFetch<ChatAnswerResponse>(
+        `/api/v1/chat/ask?policy_id=${encodeURIComponent(policyId)}`,
+        {
+          method: 'POST',
+          json: { query, limit: 6 },
+        },
+      )
+      replace(pendingId, {
+        role: 'bot',
+        text: data.answer || '공고문에서 답변을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해주세요.',
+        sources: data.sources,
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : ''
+      replace(pendingId, {
+        role: 'bot',
+        text: detail === '정책을 찾을 수 없습니다.' || detail.includes('로그인')
+          ? detail
+          : '공고 상담 API를 호출하지 못했어요. 잠시 후 다시 시도해주세요.',
+      })
+    } finally {
+      setSending(false)
+    }
+  }
+
   const send = (text: string) => {
     const t = text.trim()
-    if (!t) return
+    if (!t || (policyId && sending)) return
     push({ role: 'user', text: t })
     setInput('')
+    if (policyId) {
+      void askSelectedPolicy(t)
+      return
+    }
     // 간단한 목업 응답: 업종/지원금 관련이면 정책 카드 추천
     setTimeout(() => {
       if (t.includes('지원금') || t.includes('업종') || t.includes('찾')) {
@@ -100,10 +161,11 @@ export default function ChatScreen() {
 
         {/* 추천 질문 칩 */}
         <div className="flex flex-wrap gap-2 pt-1">
-          {QUICK.map((q) => (
+          {(policyId ? DETAIL_QUICK : QUICK).map((q) => (
             <button
               key={q}
               onClick={() => send(q)}
+              disabled={Boolean(policyId && sending)}
               className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-brand-dark/80 active:bg-black/5"
             >
               {q}
@@ -132,9 +194,10 @@ export default function ChatScreen() {
           />
           <button
             type="submit"
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95"
+            disabled={Boolean(policyId && sending)}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95 disabled:opacity-50"
           >
-            <Send size={18} />
+            {policyId && sending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
           </button>
         </form>
       </div>
@@ -162,8 +225,28 @@ function BotBubble({
       <div className="max-w-[82%] space-y-2">
         {m.text && (
           <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-brand-dark shadow-card">
-            {m.text}
+            <span className="flex items-start gap-2">
+              {m.pending && <LoaderCircle size={17} className="mt-0.5 flex-shrink-0 animate-spin" />}
+              <span>{m.text}</span>
+            </span>
           </p>
+        )}
+        {m.sources && m.sources.length > 0 && (
+          <div className="rounded-2xl border border-brand-light/30 bg-white p-3 shadow-card">
+            <p className="text-xs font-bold text-brand-dark/70">답변 근거</p>
+            <div className="mt-2 space-y-2">
+              {m.sources.slice(0, 3).map((source) => (
+                <div key={source.chunk_id} className="rounded-xl bg-cream px-3 py-2.5">
+                  <p className="text-xs font-semibold text-brand-dark/70">
+                    {source.document_title || source.document_type || '공고문'}
+                  </p>
+                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-brand-dark/55">
+                    {source.chunk_text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
         {benefit && (
           <div className="rounded-2xl bg-white p-4 shadow-card">

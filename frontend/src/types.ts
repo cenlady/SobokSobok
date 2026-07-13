@@ -193,3 +193,27 @@ export interface RecommendationExplanationResponse {
   aspects_to_check: string[]
   next_actions: string[]
 }
+
+export interface ChatChunkSource {
+  chunk_id: string
+  policy_id: string
+  document_id: string
+  chunk_index: number
+  similarity: number
+  rerank_score?: number | null
+  chunk_text: string
+  policy_title?: string | null
+  document_type?: string | null
+  document_title?: string | null
+  source_ref?: string | null
+}
+
+export interface ChatAnswerResponse {
+  query: string
+  expanded_query: string
+  intent_tags: string[]
+  sources: ChatChunkSource[]
+  answer: string
+  langsmith_enabled: boolean
+  langsmith_project?: string | null
+}

@@ -1,7 +1,10 @@
-from fastapi import APIRouter, Depends
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.normalized_policy import NormalizedPolicy
 from app.schemas.chat import (
     BuildPolicyChunksRequest,
     BuildPolicyChunksResponse,
@@ -58,9 +61,16 @@ def build_policy_chunk_embeddings(
 )
 def search_chat_policy_chunks(
     payload: ChatSearchRequest,
+    policy_id: UUID | None = Query(default=None, description="검색 범위를 제한할 정책 UUID"),
     db: Session = Depends(get_db),
 ):
-    return retrieve_policy_chunk_sources(db=db, query=payload.query, limit=payload.limit)
+    _ensure_policy_exists(db, policy_id)
+    return retrieve_policy_chunk_sources(
+        db=db,
+        query=payload.query,
+        limit=payload.limit,
+        policy_id=policy_id,
+    )
 
 
 @router.post(
@@ -70,6 +80,21 @@ def search_chat_policy_chunks(
 )
 def ask_policy_chatbot(
     payload: ChatAnswerRequest,
+    policy_id: UUID | None = Query(default=None, description="답변 근거를 제한할 정책 UUID"),
     db: Session = Depends(get_db),
 ):
-    return answer_policy_question(db=db, query=payload.query, limit=payload.limit)
+    _ensure_policy_exists(db, policy_id)
+    return answer_policy_question(
+        db=db,
+        query=payload.query,
+        limit=payload.limit,
+        policy_id=policy_id,
+    )
+
+
+def _ensure_policy_exists(db: Session, policy_id: UUID | None) -> None:
+    if policy_id is None:
+        return
+    exists = db.query(NormalizedPolicy.id).filter(NormalizedPolicy.id == policy_id).first()
+    if exists is None:
+        raise HTTPException(status_code=404, detail="정책을 찾을 수 없습니다.")
