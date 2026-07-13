@@ -17,7 +17,10 @@ import {
 export default function OnboardingScreen() {
   const navigate = useNavigate()
   const { profile, loading, saveProfile } = useProfile()
-  const { markOnboarded, logout } = useAuth()
+  const { markOnboarded, logout, onboarded } = useAuth()
+
+  // 이미 온보딩을 마친 사용자가 들어왔다면 '수정' 모드다(마이페이지 → 수정하기).
+  const isEditing = onboarded
 
   const [industry, setIndustry] = useState('')
   const [sido, setSido] = useState('서울특별시')
@@ -76,7 +79,9 @@ export default function OnboardingScreen() {
       })
       // 서버가 onboarded_at을 채웠다. 가드가 다시 온보딩으로 되돌리지 않도록 알린다.
       markOnboarded()
-      navigate('/', { replace: true })
+      // 수정한 경우엔 바뀐 프로필로 다시 계산된 추천을 바로 보여준다.
+      // (정책 찾기 화면은 마운트될 때 프로필을 새로 읽어 추천을 다시 요청한다)
+      navigate(isEditing ? '/policies' : '/', { replace: true })
     } catch {
       setError('저장에 실패했습니다. 잠시 후 다시 시도해주세요.')
       setSaving(false)
@@ -91,20 +96,27 @@ export default function OnboardingScreen() {
 
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col bg-cream">
-      {/* 헤더 — 온보딩은 로그인 직후 첫 화면이라 '뒤로'가 갈 곳이 없다.
-          아직 앱을 못 쓰는 상태이므로, 나가려면 로그아웃뿐이다. */}
+      {/* 이 화면은 두 가지로 쓰인다.
+          - 최초 온보딩: 로그인 직후 첫 화면이라 '뒤로'가 갈 곳이 없다. 나가려면 로그아웃뿐.
+          - 마이페이지 → 수정하기: 그냥 뒤로 가면 된다. */}
       <header className="flex items-center gap-2 px-4 py-4">
         <button
           onClick={() => {
-            logout()
-            navigate('/login', { replace: true })
+            if (isEditing) {
+              navigate(-1)
+            } else {
+              logout()
+              navigate('/login', { replace: true })
+            }
           }}
           className="p-1 text-brand-dark active:opacity-60"
-          aria-label="로그아웃"
+          aria-label={isEditing ? '뒤로' : '로그아웃'}
         >
           <ChevronLeft size={26} />
         </button>
-        <h1 className="text-lg font-semibold text-brand-dark">소복소복 내 정보 입력</h1>
+        <h1 className="text-lg font-semibold text-brand-dark">
+          {isEditing ? '내 정보 수정' : '소복소복 내 정보 입력'}
+        </h1>
       </header>
       <div className="h-px bg-black/5" />
 
@@ -252,7 +264,7 @@ export default function OnboardingScreen() {
           disabled={saving}
           className="w-full rounded-2xl bg-brand-dark py-4 text-lg font-bold text-white active:scale-[0.99] disabled:opacity-60"
         >
-          {saving ? '저장 중…' : '맞춤 혜택 찾기'}
+          {saving ? '저장 중…' : isEditing ? '저장하고 추천 다시 받기' : '맞춤 혜택 찾기'}
         </button>
       </div>
     </div>

@@ -27,13 +27,11 @@ export default function RequireAuth() {
     return <Navigate to="/login" replace />
   }
 
-  const isOnboarding = location.pathname === '/onboarding'
-  if (!onboarded && !isOnboarding) {
+  // 온보딩을 안 마쳤으면 어디를 가려 하든 온보딩으로 보낸다.
+  // 반대로, 마친 뒤에도 /onboarding에는 들어갈 수 있어야 한다 — 마이페이지의 '수정하기'가
+  // 그리로 보내기 때문. 막아두면 프로필을 영영 못 고치고 추천도 영영 그대로가 된다.
+  if (!onboarded && location.pathname !== '/onboarding') {
     return <Navigate to="/onboarding" replace />
-  }
-  // 온보딩을 이미 마쳤는데 /onboarding에 남아 있으면 홈으로 돌려보낸다.
-  if (onboarded && isOnboarding) {
-    return <Navigate to="/" replace />
   }
 
   return <Outlet />
