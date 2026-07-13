@@ -10,7 +10,7 @@ from typing import List, Optional
 import os
 
 from app.core.database import get_db
-from app.api.deps import get_current_user
+from app.core.deps import get_current_user
 from app.models.user import User
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.chat import PolicyChunk
@@ -208,11 +208,12 @@ async def get_calendar_coach_timeline(
     """
     # -------------------------------------------------------------
     # [이재혁 사장님 전용 - AI 코치 LLM 제공자 스위치 설정]
+    # - "gemini": Google Gemini 모델을 사용해 코칭 텍스트를 생성합니다.
     # - "openai": 유료 상용 모델(gpt-4o-mini)을 사용하여 고품질 완성형 비서 텍스트를 기동합니다.
     # - "ollama": 로컬 본체에 켜진 무료 한국어 모델(exaone3.5)을 사용해 100% 무료로 기동합니다.
-    # ➔ 평소 테스트 시에는 "ollama"로 무료 개발하시고, 실서비스 오픈 시에만 "openai"로 변경하세요!
+    # ➔ CHAT_COMPLETION_PROVIDER 설정을 따라갑니다.
     # -------------------------------------------------------------
-    COACH_LLM_PROVIDER = "openai"
+    COACH_LLM_PROVIDER = settings.CHAT_COMPLETION_PROVIDER.lower()
 
     # 1) 지원사업 조회 및 기본 검사
     policy = db.query(NormalizedPolicy).filter(NormalizedPolicy.id == policy_id).first()
@@ -290,16 +291,47 @@ async def get_calendar_coach_timeline(
         except Exception:
             pass  # 올라마 서버 에러 시 static fallback으로 우회
 
-    # 5-B) OpenAI 상용 유료 모드 실행 분기
+    # 5-B) Gemini 모드 실행 분기
+    elif COACH_LLM_PROVIDER == "gemini":
+        if settings.GEMINI_API_KEY:
+            try:
+                from google import genai
+                from google.genai import types
+
+                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                response = client.models.generate_content(
+                    model=settings.CHAT_COMPLETION_MODEL or settings.GEMINI_TEXT_MODEL,
+                    contents=f"{system_prompt}\n\n{user_prompt}",
+                    config=types.GenerateContentConfig(
+                        temperature=0.3,
+                    ),
+                )
+
+                ai_coach_timeline = response.text or ""
+                if ai_coach_timeline:
+                    return {
+                        "policy_title": policy.title,
+                        "deadline": deadline_str,
+                        "provider": "gemini",
+                        "coach_guide": ai_coach_timeline,
+                        "utilized_user_events": len(user_schedules)
+                    }
+            except Exception:
+                pass  # Gemini 에러 시 static fallback으로 우회
+
+    # 5-C) OpenAI 상용 유료 모드 실행 분기
     elif COACH_LLM_PROVIDER == "openai":
         openai_api_key = os.environ.get("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", None)
         if openai_api_key:
             try:
                 from openai import OpenAI
                 client = OpenAI(api_key=openai_api_key)
-                
+                openai_model = settings.CHAT_COMPLETION_MODEL
+                if openai_model.startswith("gemini"):
+                    openai_model = "gpt-4o-mini"
+
                 response = client.chat.completions.create(
-                    model=settings.CHAT_COMPLETION_MODEL,
+                    model=openai_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
@@ -318,7 +350,7 @@ async def get_calendar_coach_timeline(
             except Exception:
                 pass  # OpenAI 에러 시 static fallback으로 우회
 
-    # 5-C) 이중 안전망: LLM 통신 장애 및 설정 오류 시 작동하는 정적 Fallback 알고리즘
+    # 5-D) 이중 안전망: LLM 통신 장애 및 설정 오류 시 작동하는 정적 Fallback 알고리즘
     fallback_guide = (
         f"### 🤖 소복이 AI 일정 코칭 타임라인 (Fallback 모드)\n\n"
         f"사장님, **[{policy.title}]** 지원사업 마감일인 **{deadline_str}**에 늦지 않도록 준비 스케줄을 짜드릴게요!\n\n"

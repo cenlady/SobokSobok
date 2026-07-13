@@ -14,117 +14,22 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
+import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { NEED_OPTIONS } from '../lib/recommend'
 
 export default function ProfileScreen() {
   const navigate = useNavigate()
+  const { user, logout } = useAuth()
   const { profile } = useProfile()
   const [alarm, setAlarm] = useState(true)
 
-  // 구글 로그인 세션 상태 관리 (로컬스토리지 바인딩)
-  const [token, setToken] = useState<string | null>(localStorage.getItem('google_access_token'))
-  const [email, setEmail] = useState<string | null>(localStorage.getItem('user_email'))
-
-  // 1) 구글 로그인 성공 후 리다이렉션으로 넘어온 토큰 및 이메일 감지/저장
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const urlToken = params.get('token')
-    const urlEmail = params.get('email')
-
-    if (urlToken && urlEmail) {
-      localStorage.setItem('google_access_token', urlToken)
-      localStorage.setItem('user_email', urlEmail)
-      setToken(urlToken)
-      setEmail(urlEmail)
-      
-      // 주소창의 지저분한 토큰 파라미터 지우기 (세탁)
-      window.history.replaceState({}, document.title, window.location.pathname)
-    }
-  }, [])
-
-  // 2) 구글 로그인 리다이렉션 링크 획득 및 이동 핸들러
-  const handleGoogleLogin = async () => {
-    try {
-      const response = await fetch('http://localhost:8000/api/v1/auth/google/login-url')
-      if (!response.ok) throw new Error('Backend error')
-      const data = await response.json()
-      if (data.login_url) {
-        window.location.href = data.login_url // 구글 동의 페이지로 리다이렉션
-      }
-    } catch (err) {
-      alert('구글 로그인 URL을 가져오는 데 실패했습니다. 백엔드가 켜져 있는지 확인하세요.')
-    }
-  }
-
-  // 3) 로그아웃 핸들러
   const handleLogout = () => {
-    localStorage.removeItem('google_access_token')
-    localStorage.removeItem('user_email')
-    setToken(null)
-    setEmail(null)
-    alert('로그아웃되었습니다.')
+    logout()
+    navigate('/login', { replace: true })
   }
 
-  // A. 로그인이 되어 있지 않은 대기 상태 (구글 로그인 유도 컴포넌트 렌더링)
-  if (!token) {
-    return (
-      <div className="flex min-h-screen flex-col bg-cream pb-8">
-        <TopBar />
-        <div className="flex flex-1 flex-col items-center justify-center px-6 py-16">
-          {/* 모던 애니메이션 아이콘 */}
-          <div className="relative flex h-28 w-28 items-center justify-center rounded-full bg-brand-light/20 text-5xl animate-pulse">
-            👋
-            <span className="absolute -right-1 -top-1 flex h-4 w-4">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75"></span>
-              <span className="relative inline-flex h-4 w-4 rounded-full bg-brand"></span>
-            </span>
-          </div>
-
-          <h2 className="mt-8 text-center text-2xl font-extrabold tracking-tight text-brand-dark">
-            사장님, 반갑습니다!
-          </h2>
-          <p className="mt-3 text-center text-sm leading-relaxed text-brand-dark/70 max-w-xs">
-            구글 소셜 로그인을 완료하고 사장님만의 맞춤 지원사업 정보와 캘린더 연동 알림을 시작해 보세요.
-          </p>
-
-          {/* 구글 공식 브랜드 가이드라인 적용 모던 버튼 */}
-          <button
-            onClick={handleGoogleLogin}
-            className="mt-10 flex w-full max-w-sm items-center justify-center gap-3 rounded-2xl bg-white px-5 py-4 text-base font-bold text-brand-dark shadow-card hover:bg-neutral-50 transition-transform active:scale-[0.98] border border-black/5"
-          >
-            {/* 구글 SVG 로고 */}
-            <svg className="h-5 w-5" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l3.66-2.85z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.85c.87-2.6 3.3-4.53 6.16-4.53z"
-              />
-            </svg>
-            Google 계정으로 로그인
-          </button>
-
-          <p className="mt-4 text-xs text-brand-dark/40">
-            구글 보안 로그인 연동을 통해 사장님의 개인정보를 안전하게 매핑합니다.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  // B. 구글 로그인 인증이 완료된 상태 (사장님 프로필 대시보드 렌더링)
   return (
     <div className="pb-8 bg-cream min-h-screen">
       <TopBar />
@@ -144,9 +49,9 @@ export default function ProfileScreen() {
         </h2>
         
         {/* 로그인된 사용자 이메일 뱃지 노출 */}
-        {email && (
+        {user?.email && (
           <p className="mt-0.5 text-xs text-brand/80 font-semibold bg-brand/5 px-2 py-0.5 rounded-full border border-brand/10">
-            {email}
+            {user.email}
           </p>
         )}
         <p className="mt-1 text-sm text-brand-dark/50">{profile.storeName}</p>

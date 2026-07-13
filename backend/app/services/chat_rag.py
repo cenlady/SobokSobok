@@ -44,6 +44,33 @@ KEYWORD_INTENTS: List[Tuple[str, Tuple[str, ...]]] = [
     ("procedure", ("절차", "선정", "평가", "심사", "발표", "선발")),
 ]
 
+SMALL_BUSINESS_DOMAIN_KEYWORDS: Tuple[str, ...] = (
+    "소상공인",
+    "소기업",
+    "소공인",
+    "자영업",
+    "사업자",
+    "사업장",
+    "중소기업",
+    "전통시장",
+    "상점가",
+    "창업",
+    "폐업",
+    "재기",
+    "매출",
+    "점포",
+    "상권",
+    "경영",
+    "기업",
+    "노란우산",
+)
+
+NON_BUSINESS_POLICY_HINTS: Tuple[str, ...] = (
+    "자원봉사",
+    "봉사자",
+    "복지시설",
+)
+
 QUESTION_HINTS: Dict[str, List[str]] = {
     "summary": ["이 공고가 뭐야?", "핵심 내용만 요약해줘."],
     "support_content": ["무엇을 지원해줘?", "지원 내용이 뭐야?"],
@@ -167,6 +194,8 @@ def build_policy_document_metadata(
         "contact_points": _compact_list(policy.contact_points),
         "required_document_count": policy.required_document_count,
         "has_required_documents": policy.has_required_documents,
+        "industry_tags": _compact_list(policy.industry_tags),
+        "business_status_tags": _compact_list(policy.business_status_tags),
         "intent_tags": intent_tags,
         "question_hints": build_question_hints(intent_tags),
     }
@@ -197,12 +226,22 @@ def build_embedding_context(metadata: Dict[str, Any]) -> str:
     return "\n".join(part for part in parts if part and "None" not in part)
 
 
-def build_query_embedding_text(query: str) -> str:
+def build_query_embedding_text(query: str, *, policy_id: Optional[uuid.UUID] = None) -> str:
     intent_tags = infer_intent_tags(None, None, query)
     hints = build_question_hints(intent_tags)
+    domain_context = ""
+    if policy_id is None:
+        domain_context = (
+            "\n검색 도메인: 소상공인, 소기업, 자영업자, 사업자, 중소기업 대상 정책 공고"
+        )
     if not hints:
-        return query
-    return f"사용자 질문: {query}\n질문 의도: {', '.join(intent_tags)}\n관련 표현: {', '.join(hints)}"
+        return f"{query}{domain_context}"
+    return (
+        f"사용자 질문: {query}\n"
+        f"질문 의도: {', '.join(intent_tags)}\n"
+        f"관련 표현: {', '.join(hints)}"
+        f"{domain_context}"
+    )
 
 
 def ensure_policy_chunk_embedding_dimension(db: Session) -> Dict[str, Any]:
@@ -420,7 +459,15 @@ def get_policy_chunk_stats(db: Session) -> Dict[str, Any]:
 
 
 def chunk_to_source(chunk: PolicyChunk, similarity: float) -> Dict[str, Any]:
-    metadata = chunk.chunk_metadata or {}
+    metadata = dict(chunk.chunk_metadata or {})
+    policy = chunk.policy
+    if policy is not None:
+        metadata.setdefault("policy_title", policy.title)
+        metadata.setdefault("policy_summary", policy.summary)
+        metadata.setdefault("organization", policy.organization)
+        metadata.setdefault("support_type", policy.support_type)
+        metadata.setdefault("industry_tags", _compact_list(policy.industry_tags))
+        metadata.setdefault("business_status_tags", _compact_list(policy.business_status_tags))
     return {
         "chunk_id": str(chunk.id),
         "policy_id": str(chunk.policy_id),
@@ -443,6 +490,8 @@ def chunk_to_source(chunk: PolicyChunk, similarity: float) -> Dict[str, Any]:
 def rerank_sources_by_intent(
     sources: List[Dict[str, Any]],
     query_intent_tags: List[str],
+    *,
+    prefer_small_business_domain: bool = False,
 ) -> List[Dict[str, Any]]:
     query_intents = set(query_intent_tags)
     reranked = []
@@ -468,11 +517,36 @@ def rerank_sources_by_intent(
             bonus += 0.07
         if document_type == "body" and not intent_matches:
             bonus -= 0.02
+        if prefer_small_business_domain:
+            bonus += small_business_domain_bonus(source)
 
         source["rerank_score"] = source["similarity"] + bonus
         reranked.append(source)
 
     return sorted(reranked, key=lambda item: item["rerank_score"], reverse=True)
+
+
+def small_business_domain_bonus(source: Dict[str, Any]) -> float:
+    metadata = source.get("metadata") or {}
+    parts = [
+        source.get("policy_title"),
+        source.get("document_title"),
+        source.get("chunk_text"),
+        metadata.get("policy_summary"),
+        metadata.get("organization"),
+        metadata.get("support_type"),
+        " ".join(metadata.get("industry_tags") or []),
+        " ".join(metadata.get("business_status_tags") or []),
+    ]
+    searchable = " ".join(str(part) for part in parts if part).lower()
+    has_business_signal = any(keyword in searchable for keyword in SMALL_BUSINESS_DOMAIN_KEYWORDS)
+    has_non_business_signal = any(keyword in searchable for keyword in NON_BUSINESS_POLICY_HINTS)
+
+    if has_business_signal:
+        return 0.18
+    if has_non_business_signal:
+        return -0.18
+    return -0.08
 
 
 @traceable_if_enabled("chat-rag-retrieve")
@@ -484,8 +558,16 @@ def retrieve_policy_chunk_sources(
     policy_id: Optional[uuid.UUID] = None,
     embedding_model: Optional[EmbeddingModel] = None,
 ) -> Dict[str, Any]:
+    if is_out_of_policy_scope(query, policy_id=policy_id):
+        return {
+            "query": query,
+            "expanded_query": query,
+            "intent_tags": ["out_of_scope"],
+            "sources": [],
+        }
+
     model = embedding_model or create_embedding_model()
-    expanded_query = build_query_embedding_text(query)
+    expanded_query = build_query_embedding_text(query, policy_id=policy_id)
     intent_tags = infer_intent_tags(None, None, query)
     requested_limit = limit or settings.CHAT_RETRIEVAL_LIMIT
     results = search_policy_chunks(
@@ -496,7 +578,11 @@ def retrieve_policy_chunk_sources(
         policy_id=policy_id,
     )
     sources = [chunk_to_source(chunk, similarity) for chunk, similarity in results]
-    sources = rerank_sources_by_intent(sources, intent_tags)[:requested_limit]
+    sources = rerank_sources_by_intent(
+        sources,
+        intent_tags,
+        prefer_small_business_domain=policy_id is None,
+    )[:requested_limit]
     return {
         "query": query,
         "expanded_query": expanded_query,
@@ -547,6 +633,182 @@ SECTION_LABEL_PATTERN = re.compile(r"\[([^\[\]]{1,30})\]")
 
 def _normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip(" \n\t:-")
+
+
+POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
+    "정책",
+    "공고",
+    "공고문",
+    "지원",
+    "지원금",
+    "혜택",
+    "보조금",
+    "융자",
+    "대출",
+    "보증",
+    "소상공인",
+    "사업자",
+    "사업장",
+    "업종",
+    "매출",
+    "직원",
+    "신청",
+    "접수",
+    "서류",
+    "대상",
+    "자격",
+    "요건",
+    "조건",
+    "해당",
+    "받을 수",
+    "마감",
+    "기간",
+    "문의",
+    "기관",
+    "지역",
+    "노란우산",
+    "손실보상",
+    "전기요금",
+    "냉난방",
+)
+
+
+DETAIL_CONTEXT_KEYWORDS: Tuple[str, ...] = (
+    "이거",
+    "여기",
+    "이 정책",
+    "이 공고",
+    "요약",
+    "정리",
+    "설명",
+    "필요",
+    "준비",
+    "언제",
+    "어디",
+    "누구",
+    "얼마",
+    "방법",
+    "기간",
+    "서류",
+    "대상",
+    "문의",
+    "마감",
+    "조건",
+    "자격",
+    "해당",
+    "가능",
+    "받을 수",
+)
+
+
+OUT_OF_SCOPE_KEYWORDS: Tuple[str, ...] = (
+    "날씨",
+    "기온",
+    "습도",
+    "미세먼지",
+    "강수",
+    "비와",
+    "비 와",
+    "눈와",
+    "눈 와",
+    "더워",
+    "더운",
+    "덥냐",
+    "추워",
+    "추운",
+    "춥냐",
+    "우산 챙",
+    "우산 가져",
+    "점심",
+    "저녁",
+    "아침 뭐",
+    "뭐 먹",
+    "맛집",
+    "머리",
+    "단발",
+    "기를까",
+    "길러",
+    "염색",
+    "파마",
+    "헤어",
+    "미용실",
+    "옷",
+    "입을까",
+    "코디",
+    "연애",
+    "남친",
+    "여친",
+    "고백",
+    "이별",
+    "잠",
+    "졸려",
+    "피곤",
+    "농담",
+    "노래",
+    "영화",
+    "드라마",
+    "스포츠",
+    "연예",
+    "주식",
+    "비트코인",
+    "환율",
+    "코딩",
+    "파이썬",
+    "자바스크립트",
+)
+
+
+WEATHER_KEYWORDS: Tuple[str, ...] = (
+    "날씨",
+    "기온",
+    "습도",
+    "미세먼지",
+    "강수",
+    "비와",
+    "비 와",
+    "눈와",
+    "눈 와",
+    "더워",
+    "추워",
+    "우산 챙",
+    "우산 가져",
+)
+
+
+def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None) -> bool:
+    normalized = _normalize_space(query).lower()
+    if not normalized:
+        return False
+
+    has_policy_signal = any(keyword in normalized for keyword in POLICY_DOMAIN_KEYWORDS)
+    has_detail_context_signal = policy_id is not None and any(
+        keyword in normalized for keyword in DETAIL_CONTEXT_KEYWORDS
+    )
+    has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
+
+    if has_out_of_scope_signal and not has_policy_signal:
+        return True
+
+    if has_policy_signal or has_detail_context_signal:
+        return False
+
+    # RAG는 항상 뭔가를 찾아내므로, 정책 신호가 전혀 없는 일반 질문은 검색하지 않는다.
+    # 예: "나 머리 단발할까 기를까", "오늘 기분이 별로야", "뭐 하지?"
+    return True
+
+
+def build_out_of_scope_answer(query: str) -> str:
+    normalized = _normalize_space(query).lower()
+    if any(keyword in normalized for keyword in WEATHER_KEYWORDS):
+        return (
+            "날씨는 제가 정확히 확인해드릴 수 없어요. "
+            "저는 소상공인 정책 공고를 기준으로 지원 대상, 신청 기간, 필요 서류, 접수 방법을 안내하는 챗봇이에요.\n\n"
+            "정책과 관련해서 궁금한 내용을 물어보면 공고문 근거로 바로 찾아드릴게요."
+        )
+    return (
+        "저는 소상공인 정책 공고를 안내하는 챗봇이라 이 질문에는 정확히 답하기 어려워요.\n\n"
+        "지원 대상, 신청 기간, 필요 서류, 접수 방법처럼 정책과 관련된 질문을 해주시면 공고문 근거로 답변해드릴게요."
+    )
 
 
 def _extract_bracket_sections(text: str) -> Dict[str, str]:
@@ -632,6 +894,10 @@ def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> st
             ]
         )
 
+    candidate_answer = build_policy_candidate_fallback(query, sources, intent_tags)
+    if candidate_answer:
+        return candidate_answer
+
     snippets = _dedupe_preserve_order(
         _normalize_space(str(source.get("chunk_text") or "")) for source in sources[:3]
     )
@@ -648,15 +914,93 @@ def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> st
     )
 
 
+def build_policy_candidate_fallback(
+    query: str,
+    sources: List[Dict[str, Any]],
+    intent_tags: List[str],
+) -> Optional[str]:
+    del query
+    if not any(tag in intent_tags for tag in ("benefit", "eligibility", "target", "general")):
+        return None
+
+    candidates: List[Dict[str, Any]] = []
+    seen_policy_ids = set()
+    for source in sources:
+        policy_id = source.get("policy_id")
+        if not policy_id or policy_id in seen_policy_ids:
+            continue
+        seen_policy_ids.add(policy_id)
+        candidates.append(source)
+        if len(candidates) >= 3:
+            break
+
+    if len(candidates) < 2:
+        return None
+
+    lines = [
+        "관련성이 높은 소상공인 정책 후보를 찾았어요.",
+        "",
+    ]
+    for index, source in enumerate(candidates, start=1):
+        metadata = source.get("metadata") or {}
+        title = source.get("policy_title") or "정책명 확인 필요"
+        support_type = metadata.get("support_type") or source.get("document_title")
+        snippet = _normalize_space(str(source.get("chunk_text") or ""))
+        if len(snippet) > 90:
+            snippet = f"{snippet[:90].rstrip()}..."
+        suffix = f" ({support_type})" if support_type else ""
+        lines.append(f"{index}. {title}{suffix}")
+        if snippet:
+            lines.append(f"   - 근거: {snippet}")
+
+    lines.extend(
+        [
+            "",
+            "정확한 신청 가능 여부는 사업자 상태, 업종, 지역, 매출 조건에 따라 달라요. "
+            "궁금한 정책을 눌러 상세 화면에서 이어서 물어보면 더 정확히 좁혀드릴게요.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 @traceable_if_enabled("chat-rag-answer")
 def generate_chat_answer(query: str, sources: List[Dict[str, Any]]) -> str:
     if not sources:
         return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
 
-    if settings.CHAT_COMPLETION_PROVIDER.lower() == "disabled":
+    provider = settings.CHAT_COMPLETION_PROVIDER.lower()
+    if provider == "disabled":
         return build_retrieval_only_answer(query, sources)
 
-    if settings.CHAT_COMPLETION_PROVIDER.lower() != "openai":
+    context_text = build_context_text(sources)
+    user_prompt = (
+        f"사용자 질문:\n{query}\n\n"
+        f"검색 근거:\n{context_text}\n\n"
+        "위 근거만 사용해서 답변해줘. "
+        "가능하면 신청 대상/방법/기간/서류/문의처를 항목별로 정리해줘. "
+        "근거에 없는 내용은 추측하지 말고 모른다고 말해줘."
+    )
+
+    if provider == "gemini":
+        if not settings.GEMINI_API_KEY:
+            return build_retrieval_only_answer(query, sources)
+        try:
+            from google import genai
+            from google.genai import types
+
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model=settings.CHAT_COMPLETION_MODEL or settings.GEMINI_TEXT_MODEL,
+                contents=f"{settings.CHAT_SYSTEM_PROMPT}\n\n{user_prompt}",
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                ),
+            )
+            return (response.text or "").strip() or build_retrieval_only_answer(query, sources)
+        except Exception:
+            return build_retrieval_only_answer(query, sources)
+
+    if provider != "openai":
         return build_retrieval_only_answer(query, sources)
 
     try:
@@ -672,20 +1016,11 @@ def generate_chat_answer(query: str, sources: List[Dict[str, Any]]) -> str:
             except ImportError:
                 pass
 
-        context_text = build_context_text(sources)
         response = client.chat.completions.create(
             model=settings.CHAT_COMPLETION_MODEL,
             messages=[
                 {"role": "system", "content": settings.CHAT_SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": (
-                        f"사용자 질문:\n{query}\n\n"
-                        f"검색 근거:\n{context_text}\n\n"
-                        "위 근거만 사용해서 답변해줘. "
-                        "가능하면 신청 대상/방법/기간/서류/문의처를 항목별로 정리해줘."
-                    ),
-                },
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
         )
@@ -707,7 +1042,10 @@ def answer_policy_question(
         limit=limit,
         policy_id=policy_id,
     )
-    answer = generate_chat_answer(query, retrieval["sources"])
+    if "out_of_scope" in retrieval["intent_tags"]:
+        answer = build_out_of_scope_answer(query)
+    else:
+        answer = generate_chat_answer(query, retrieval["sources"])
     return {
         **retrieval,
         "answer": answer,
