@@ -7,6 +7,7 @@ from app import models  # noqa: F401
 from app.models.normalized_policy import ensure_normalized_policy_schema
 from app.models.recommend import ensure_recommendation_vector_schema
 from app.models.review import ensure_review_schema
+from app.models.user import ensure_user_schema
 
 
 app = FastAPI(
@@ -37,7 +38,13 @@ from sqlalchemy import text
 def create_tables() -> None:
     with engine.begin() as conn:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        # 구 스키마 정리는 create_all()보다 먼저. 호환되지 않는 옛 테이블을 버려야
+        # create_all()이 새 정의로 다시 만들 수 있다. (버린 뒤 만들지 않으면 테이블이 사라진다)
+        ensure_user_schema(conn)
+
     Base.metadata.create_all(bind=engine)
+
+    # 이하는 이미 존재하는 테이블에 컬럼/인덱스/제약을 덧붙이는 패치들이라 create_all() 이후.
     with engine.begin() as conn:
         ensure_normalized_policy_schema(conn)
         ensure_recommendation_vector_schema(conn)
