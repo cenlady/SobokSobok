@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     CHAT_CHUNK_OVERLAP: int = 40
     CHAT_RETRIEVAL_LIMIT: int = 6
     EMBED_CHAT_CHUNKS_AFTER_NORMALIZE: bool = True
-    CHAT_COMPLETION_PROVIDER: str = "openai"  # openai | disabled
-    CHAT_COMPLETION_MODEL: str = "gpt-4o-mini"
+    CHAT_COMPLETION_PROVIDER: str = "gemini"  # gemini | openai | disabled
+    CHAT_COMPLETION_MODEL: str = "gemini-2.5-flash"
     CHAT_MAX_CONTEXT_CHARS: int = 4500
     CHAT_SYSTEM_PROMPT: str = (
         "너는 소상공인 정책 공고 안내 챗봇이다. "
