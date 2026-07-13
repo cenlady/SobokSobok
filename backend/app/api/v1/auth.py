@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 # 파일 역할: [인증 도메인] 사용자 기본 로그인 및 Google OAuth 2.0 소셜 로그인 인증 처리 라우터
 
+import urllib.parse
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from google_auth_oauthlib.flow import Flow
@@ -12,6 +15,18 @@ import httpx
 from datetime import datetime, timezone
 
 router = APIRouter()
+
+
+def _front_redirect(**params: str) -> RedirectResponse:
+    """구글 콜백 처리 결과를 프론트엔드로 돌려보낸다.
+
+    콜백에는 사용자의 '브라우저'가 도착하므로 JSON을 반환하면 사용자가 날것의 JSON을
+    보게 되고 프론트는 토큰을 건네받을 방법이 없다. 그래서 프론트 라우트로 리다이렉트하며
+    쿼리스트링에 결과를 실어 보낸다. (구글 콘솔에 등록된 redirect_uri는 그대로 백엔드이므로
+    콘솔 재등록이 필요 없다.)
+    """
+    query = urllib.parse.urlencode(params)
+    return RedirectResponse(f"{settings.FRONTEND_URL}/auth/callback?{query}")
 
 @router.get("/test-auth", summary="인증 테스트용 임시 엔드포인트")
 def test_auth():
@@ -72,12 +87,11 @@ def google_callback(code: str, db: Session = Depends(get_db)):
     [이재혁 - 인증 영역]
     - 사용자가 구글 승인을 마친 후 구글 서버가 보내주는 인증 코드(code)를 수신합니다.
     - 수신한 code를 구글 토큰 서버로 보내 Access/Refresh Token을 획득하고, users 테이블에 저장한 후 로컬 JWT 토큰을 발행합니다.
+    - 결과(성공 토큰 / 실패 사유)는 프론트엔드로 리다이렉트하며 전달합니다.
+      이 엔드포인트에는 사용자의 '브라우저'가 도착하므로 JSON을 반환하면 안 됩니다.
     """
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Google OAuth credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) are not configured."
-        )
+        return _front_redirect(error="google_not_configured")
 
     # 1) 인증 코드로 구글 토큰 교환을 위한 Flow 설정
     scopes = [
@@ -104,10 +118,8 @@ def google_callback(code: str, db: Session = Depends(get_db)):
         flow.fetch_token(code=code)
         credentials = flow.credentials
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to exchange authorization code for Google token: {e}"
-        )
+        print(f"[auth] 구글 토큰 교환 실패: {e}", flush=True)
+        return _front_redirect(error="token_exchange_failed")
 
     # 2) 획득한 Access Token을 사용하여 구글 유저 정보(이메일) 획득
     try:
@@ -119,10 +131,8 @@ def google_callback(code: str, db: Session = Depends(get_db)):
         if not user_email:
             raise ValueError("Email not found in Google userinfo response.")
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to retrieve user profile from Google: {e}"
-        )
+        print(f"[auth] 구글 사용자 정보 조회 실패: {e}", flush=True)
+        return _front_redirect(error="userinfo_failed")
 
     # 3) DB에서 유저 조회 및 자동 회원가입
     user = db.query(User).filter(User.email == user_email).first()
@@ -136,16 +146,9 @@ def google_callback(code: str, db: Session = Depends(get_db)):
         db.add(user)
         db.flush()  # ID 발급을 위해 DB 반영
 
-        # 신규 유저 프로필 자동 생성
-        profile = UserProfile(
-            user_id=user.id,
-            industry=[],
-            region="",
-            sales=0,
-            employees=0,
-            available_time_preference={}
-        )
-        db.add(profile)
+        # 프로필 껍데기만 만들어 둔다. 온보딩을 마쳐야 onboarded_at이 채워지고,
+        # 그 전까지 프론트는 사용자를 /onboarding으로 보낸다.
+        db.add(UserProfile(user_id=user.id))
 
     # 4) 구글 연동 토큰 정보 DB 업데이트
     user.google_access_token = credentials.token
@@ -161,10 +164,14 @@ def google_callback(code: str, db: Session = Depends(get_db)):
     db.commit()
 
     # 5) 우리 백엔드 세션용 자체 로그인 JWT 토큰 발행
+    #
+    # 구글 access token을 프론트에 넘기지 않는다. 그 토큰은 사용자의 구글 캘린더를
+    # 직접 읽고 쓸 수 있어서, 브라우저에 두면 XSS·히스토리·Referer로 새는 순간 피해가
+    # 우리 서비스 밖으로 번진다. 수명도 1시간이라 세션으로 쓰기에 너무 짧다.
+    # 캘린더 API가 필요로 하는 구글 토큰은 users 테이블에 있고, calendar.py의
+    # get_valid_google_token()이 만료 시 refresh_token으로 갱신해 쓴다 — 서버 안에서만.
     local_access_token = create_access_token(subject=user.email)
 
-    return {
-        "access_token": local_access_token,
-        "token_type": "bearer",
-        "email": user.email
-    }
+    # 6) 프론트로 우리 JWT를 넘긴다. 프론트는 /auth/callback에서 저장하고
+    #    onboarded 여부에 따라 /onboarding 또는 / 로 보낸다.
+    return _front_redirect(token=local_access_token)

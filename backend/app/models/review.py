@@ -73,7 +73,21 @@ class ReviewUpload(Base):
     extracted_text = Column(Text, nullable=True, comment="kordoc/OCR로 추출된 서류 본문")
     extraction_status = Column(String(30), nullable=False, default="pending", comment="추출 상태 (pending, success, empty, unsupported, failed)")
 
+    # review_status와 extraction_status는 서로 다른 것을 말한다.
+    #   review_status     = 어디까지 왔나 (진행 단계) — 폴링으로 진행률을 보여주는 데 쓴다
+    #   extraction_status = 왜 못 읽었나 (실패 원인) — 사용자에게 사유를 안내하는 데 쓴다
+    # 하나로 합치면 "요건 대조 중"과 "AI 진단 중"을 구분할 수 없어 가짜 진행률이 된다.
+    review_status = Column(
+        String(20), nullable=False, default="queued",
+        comment="검토 진행 단계 (queued, extracting, matching, diagnosing, done, failed)",
+    )
+
     diagnosis = Column(JSON, nullable=True, comment="LLM 진단 결과 {document_type, typos[], missing_fields[], format_issues[], improvement_points[], overall}")
+    # 비동기 폴링에서는 결과를 나중에 조회하므로, 메모리로만 반환하면 요건 대조 근거가 유실된다.
+    requirement_matches = Column(
+        JSON, nullable=True,
+        comment="요건별 임베딩 대조 근거 [{document_name, best_similarity, likely_covered}]",
+    )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -108,6 +122,23 @@ REVIEW_SCHEMA_SQL = [
     "CREATE UNIQUE INDEX IF NOT EXISTS uk_review_vectors_policy_doc ON review_vectors (policy_id, document_type, document_name)",
     # 서류 자체 검토로 전환하며 policy_id를 선택으로 변경 (#23)
     "ALTER TABLE review_uploads ALTER COLUMN policy_id DROP NOT NULL",
+    # 비동기 검토 전환 (#31)
+    "ALTER TABLE review_uploads ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) NOT NULL DEFAULT 'queued'",
+    "ALTER TABLE review_uploads ADD COLUMN IF NOT EXISTS requirement_matches JSON",
+    # 서버가 재시작되면 진행 중이던 검토는 살아남지 못한다. BackgroundTasks는 프로세스 안에서
+    # 돌기 때문에, 남은 행을 queued로 되돌려봐야 주워갈 워커가 없다 — 사용자는 '대기 중'을
+    # 영원히 보게 된다. 정직하게 실패로 표시하고 다시 시도하도록 안내한다.
+    """
+    UPDATE review_uploads
+       SET review_status = 'failed',
+           diagnosis = COALESCE(diagnosis, '{
+               "document_type": "unknown",
+               "typos": [], "missing_fields": [], "format_issues": [],
+               "missing_documents": [], "improvement_points": [],
+               "overall": "서버가 재시작되어 검토가 중단되었습니다. 다시 시도해주세요."
+           }'::json)
+     WHERE review_status IN ('queued', 'extracting', 'matching', 'diagnosing')
+    """,
 ]
 
 

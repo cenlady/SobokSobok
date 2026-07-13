@@ -1,67 +1,37 @@
+// 프로필과 저장 정책은 이제 서버가 소유한다(로그인 필수).
+// localStorage에는 JWT만 남는다 — lib/api.ts 참고.
+//
+// 기존 DEFAULT_PROFILE(김소복 베이커리 데모 데이터)은 제거했다. 그게 있으면 신규
+// 사용자도 남의 프로필로 추천을 받게 되고, 온보딩을 건너뛴 것을 눈치채지 못한다.
+
 import { useCallback, useEffect, useState } from 'react'
-import type { Profile, SavedPolicy } from '../types'
+import { apiFetch } from './api'
+import { EMPTY_PROFILE, toProfile, toServerProfile } from './profile'
+import type { Profile, SavedPolicy, ServerProfile } from '../types'
 
-// localStorage 기반 저장 (로그인 없이 로컬에만 보관)
-const PROFILE_KEY = 'sobok.profile'
+export { EMPTY_PROFILE } from './profile'
+
+// 목업 혜택 카드(data/benefits.ts) 북마크. 챗봇 화면이 아직 목업이라 남겨둔다.
+// 서버 즐겨찾기(useSavedPolicies)와는 다른 개념이다 — 저쪽은 실제 정책 UUID를 다룬다.
+// 챗봇 담당자가 RAG로 교체하면 이것도 함께 정리한다.
 const BOOKMARKS_KEY = 'sobok.bookmarks'
-const SAVED_POLICIES_KEY = 'sobok.savedPolicies'
-
-// 기본(데모) 프로필 — 목업 화면과 동일하게 초기 세팅
-export const DEFAULT_PROFILE: Profile = {
-  ownerName: '김소복',
-  storeName: '소복소복 베이커리 (마포본점)',
-  industry: '음식점업',
-  industryTags: ['restaurant'],
-  region: '서울특별시 마포구',
-  regionSido: '서울특별시',
-  regionSigungu: '마포구',
-  revenue: '2억 ~ 5억',
-  revenueRange: { min: 200_000_000, max: 500_000_000 },
-  employees: '상시 1~4인',
-  employeesRange: { min: 1, max: 4 },
-  businessStatus: '운영 중인 소상공인',
-  businessStatusTags: ['small_business', 'operating_business'],
-  businessAge: '1~3년',
-  businessAgeYears: { min: 1, max: 3 },
-  needTags: ['funding'],
-}
-
-function read<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as T) : fallback
-  } catch {
-    return fallback
-  }
-}
-
-function write<T>(key: string, value: T) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    // 저장 실패는 무시 (프라이빗 모드 등)
-  }
-}
-
-export function useProfile() {
-  const [profile, setProfileState] = useState<Profile>(() => ({
-    ...DEFAULT_PROFILE,
-    ...read<Partial<Profile>>(PROFILE_KEY, {}),
-  }))
-
-  const setProfile = useCallback((next: Profile) => {
-    setProfileState(next)
-    write(PROFILE_KEY, next)
-  }, [])
-
-  return { profile, setProfile }
-}
 
 export function useBookmarks() {
-  const [ids, setIds] = useState<string[]>(() => read<string[]>(BOOKMARKS_KEY, []))
+  const [ids, setIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(BOOKMARKS_KEY)
+      return raw ? (JSON.parse(raw) as string[]) : []
+    } catch {
+      return []
+    }
+  })
 
   useEffect(() => {
-    write(BOOKMARKS_KEY, ids)
+    try {
+      localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(ids))
+    } catch {
+      // 저장 실패는 무시 (프라이빗 모드 등)
+    }
   }, [ids])
 
   const toggle = useCallback((id: string) => {
@@ -73,50 +43,91 @@ export function useBookmarks() {
   return { ids, toggle, has }
 }
 
-export function useSavedPolicies() {
-  const [policies, setPolicies] = useState<SavedPolicy[]>(() =>
-    read<SavedPolicy[]>(SAVED_POLICIES_KEY, []),
-  )
+export function useProfile() {
+  const [profile, setProfileState] = useState<Profile>(EMPTY_PROFILE)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const server = await apiFetch<ServerProfile>('/api/v1/users/me/profile')
+      setProfileState(toProfile(server))
+    } catch {
+      setError('프로필을 불러오지 못했습니다.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    write(SAVED_POLICIES_KEY, policies)
-  }, [policies])
+    reload()
+  }, [reload])
+
+  /** 프로필을 서버에 저장한다. 최초 저장이면 서버가 온보딩 완료로 표시한다. */
+  const saveProfile = useCallback(async (next: Profile) => {
+    const server = await apiFetch<ServerProfile>('/api/v1/users/me/profile', {
+      method: 'PUT',
+      json: toServerProfile(next),
+    })
+    setProfileState(toProfile(server))
+  }, [])
+
+  return { profile, loading, error, saveProfile, reload }
+}
+
+export function useSavedPolicies() {
+  const [policies, setPolicies] = useState<SavedPolicy[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      setPolicies(await apiFetch<SavedPolicy[]>('/api/v1/favorites'))
+    } catch {
+      setPolicies([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
 
   const has = useCallback(
     (policyId: string) => policies.some((policy) => policy.policy_id === policyId),
     [policies],
   )
 
-  const get = useCallback(
-    (policyId: string) => policies.find((policy) => policy.policy_id === policyId),
-    [policies],
-  )
-
-  const save = useCallback((policy: SavedPolicy) => {
+  const save = useCallback(async (policyId: string) => {
+    const saved = await apiFetch<SavedPolicy>('/api/v1/favorites', {
+      method: 'POST',
+      json: { policy_id: policyId },
+    })
+    // 서버가 저장된 정책의 최신 내용을 돌려주므로 그것으로 목록을 갱신한다.
     setPolicies((prev) => {
-      const exists = prev.some((item) => item.policy_id === policy.policy_id)
-      if (exists) {
-        return prev.map((item) =>
-          item.policy_id === policy.policy_id ? { ...item, ...policy } : item,
-        )
-      }
-      return [...prev, policy]
+      const rest = prev.filter((p) => p.policy_id !== saved.policy_id)
+      return [saved, ...rest]
     })
   }, [])
 
-  const remove = useCallback((policyId: string) => {
+  const remove = useCallback(async (policyId: string) => {
+    await apiFetch<void>(`/api/v1/favorites/${policyId}`, { method: 'DELETE' })
     setPolicies((prev) => prev.filter((policy) => policy.policy_id !== policyId))
   }, [])
 
-  const toggle = useCallback((policy: SavedPolicy) => {
-    setPolicies((prev) => {
-      const exists = prev.some((item) => item.policy_id === policy.policy_id)
-      if (exists) {
-        return prev.filter((item) => item.policy_id !== policy.policy_id)
+  const toggle = useCallback(
+    async (policyId: string) => {
+      if (policies.some((p) => p.policy_id === policyId)) {
+        await remove(policyId)
+      } else {
+        await save(policyId)
       }
-      return [...prev, policy]
-    })
-  }, [])
+    },
+    [policies, remove, save],
+  )
 
-  return { policies, has, get, save, remove, toggle }
+  return { policies, loading, has, save, remove, toggle, reload }
 }

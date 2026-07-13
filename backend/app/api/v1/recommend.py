@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.deps import get_current_user
+from app.models.user import User
 from app.schemas.recommend import (
     RecommendationPreviewResponse,
     RecommendationProfileRequest,
@@ -13,10 +15,11 @@ from app.services.recommend import recommend_policies, explain_policy_recommenda
 router = APIRouter()
 
 
-@router.post("/preview", response_model=RecommendationPreviewResponse, summary="로컬 프로필 기반 맞춤 정책 추천")
+@router.post("/preview", response_model=RecommendationPreviewResponse, summary="프로필 기반 맞춤 정책 추천")
 def preview_recommendations(
     profile: RecommendationProfileRequest,
     limit: int = Query(default=15, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     results, vector_used, total_candidates = recommend_policies(
@@ -40,6 +43,7 @@ def preview_recommendations(
 def explain_recommendation(
     policy_id: UUID,
     profile: RecommendationProfileRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:

@@ -1,28 +1,46 @@
 import { Route, Routes } from 'react-router-dom'
 import AppLayout from './components/AppLayout'
+import RequireAuth from './components/RequireAuth'
+import { AuthProvider } from './lib/auth'
 import HomeScreen from './screens/HomeScreen'
-import CalendarScreen from './screens/CalendarScreen'
+import PolicySearchScreen from './screens/PolicySearchScreen'
+import ReviewScreen from './screens/ReviewScreen'
 import ChatScreen from './screens/ChatScreen'
 import ProfileScreen from './screens/ProfileScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
-import BenefitDetailScreen from './screens/BenefitDetailScreen'
 import PolicyDetailScreen from './screens/PolicyDetailScreen'
+import BenefitDetailScreen from './screens/BenefitDetailScreen'
+import LoginScreen from './screens/LoginScreen'
+import AuthCallbackScreen from './screens/AuthCallbackScreen'
 
 export default function App() {
   return (
-    <Routes>
-      {/* 하단 탭이 있는 화면 */}
-      <Route element={<AppLayout />}>
-        <Route path="/" element={<HomeScreen />} />
-        <Route path="/calendar" element={<CalendarScreen />} />
-        <Route path="/chat" element={<ChatScreen />} />
-        <Route path="/profile" element={<ProfileScreen />} />
-      </Route>
+    <AuthProvider>
+      <Routes>
+        {/* 인증 전 (가드 밖) */}
+        <Route path="/login" element={<LoginScreen />} />
+        <Route path="/auth/callback" element={<AuthCallbackScreen />} />
 
-      {/* 전체 화면 (탭 없음) */}
-      <Route path="/onboarding" element={<OnboardingScreen />} />
-      <Route path="/benefit/:id" element={<BenefitDetailScreen />} />
-      <Route path="/policy/:policyId" element={<PolicyDetailScreen />} />
-    </Routes>
+        {/* 이하 전부 로그인 필수. 온보딩을 안 마쳤으면 /onboarding으로 보낸다. */}
+        <Route element={<RequireAuth />}>
+          {/* 온보딩은 하단 탭 없이 전체 화면 */}
+          <Route path="/onboarding" element={<OnboardingScreen />} />
+
+          {/* 하단 탭이 있는 화면 */}
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<HomeScreen />} />
+            <Route path="/policies" element={<PolicySearchScreen />} />
+            <Route path="/review" element={<ReviewScreen />} />
+            <Route path="/chat" element={<ChatScreen />} />
+            <Route path="/profile" element={<ProfileScreen />} />
+          </Route>
+
+          {/* 상세는 탭 없이 전체 화면 */}
+          <Route path="/policy/:policyId" element={<PolicyDetailScreen />} />
+          {/* 챗봇(목업)이 링크하는 목업 혜택 상세. 챗봇 담당자가 RAG로 교체하면 함께 정리된다. */}
+          <Route path="/benefit/:id" element={<BenefitDetailScreen />} />
+        </Route>
+      </Routes>
+    </AuthProvider>
   )
 }
