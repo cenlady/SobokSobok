@@ -120,7 +120,7 @@ http://localhost:8000/docs
 
 ## 크롤러와 정규화 파이프라인
 
-크롤러 컨테이너는 같은 주기 안에서 소상공인24 공고, SEMAS 지원사업 안내 페이지, Gov24 OpenAPI 데이터를 순차적으로 수집합니다. 수집이 끝나면 `NORMALIZE_AFTER_CRAWL=true` 설정에 따라 정규화 파이프라인을 이어서 실행합니다.
+크롤러 컨테이너는 같은 주기 안에서 소상공인24 공고, SEMAS 지원사업 안내 페이지, Gov24 OpenAPI 데이터를 순차적으로 수집합니다. 이후 `1차 정규화(첨부 링크 동기화) → 첨부 본문 추출 → 추출 성공 시 2차 정규화 → 임베딩` 순서로 실행합니다. 따라서 새 첨부의 구비서류도 다음 수집 주기를 기다리지 않고 같은 주기에 반영됩니다.
 
 ```text
 CRAWL_INTERVAL_SECONDS=86400
@@ -167,6 +167,14 @@ docker compose run --rm crawler python -m app.jobs.crawl_gov24_once
 ```powershell
 docker compose run --rm crawler python -m app.jobs.normalize_policies_once
 ```
+
+실제 공고 50건 골드셋 기반 정규화 품질 측정:
+
+```powershell
+docker compose run --rm crawler python -m app.jobs.evaluate_normalization_quality
+```
+
+출력에는 지역·업종·구비서류의 precision/recall/F1, 조건 모드 정확도와 오답 목록이 포함됩니다. 골드셋은 `tests/fixtures/normalization_gold_cases.json`에 원천 ID와 검토 근거 문구를 함께 보관하며, 전체 테스트에서 최소 품질 기준을 검사합니다.
 
 ### 소상공인24 수집 조건
 
@@ -250,11 +258,16 @@ SEMAS
 ```text
 region
 - region_scope: national/local/unknown
+- condition_mode: restricted/unrestricted/unknown
 - sido, sigungu
 - matched_sidos: 권역 표현을 여러 시도로 푼 리스트
-- confidence, extraction_method
+- confidence, extraction_method, source_ref, evidence
 business_status_tags
 industry_tags
+industry_condition
+- mode: restricted/unrestricted/unknown
+- include_tags, exclude_tags
+- confidence, extraction_method, evidence
 employee_limit
 - value, operator, unit, source_text
 sales_limit
@@ -282,7 +295,7 @@ body            (공고문 본문 전체 백업)
 section         (기타 일반 세부 섹션)
 ```
 
-`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. Sbiz24/SEMAS처럼 서류 정보가 첨부파일 안에만 있거나 본문이 애매한 경우에는 빈 배열일 수 있고, 이 값은 추후 첨부파일 parser/OCR job에서 보강합니다.
+`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. 첨부 전문을 훑지 않고 `제출서류`, `구비서류`, `신청서류` 같은 명시적 제목 아래 구간만 읽으며, HTML 태그·발급 안내·일반 문장·`자료/서류` 같은 포괄어는 문서명에서 제외합니다. 첨부 parser/OCR가 새 본문을 만들면 같은 수집 주기의 2차 정규화에서 보강됩니다.
 
 ## 저장 테이블
 
@@ -556,6 +569,7 @@ backend/
     │   ├── crawl_policy_sources_loop.py
     │   ├── crawl_sbiz24_once.py
     │   ├── crawl_semas_once.py
+    │   ├── evaluate_normalization_quality.py
     │   └── normalize_policies_once.py
     ├── models/
     │   ├── chat.py
@@ -570,7 +584,18 @@ backend/
     │   └── policy.py
     ├── services/
     │   ├── gov24_ingest.py
-    │   ├── normalize_policies.py
+    │   ├── normalize_policies.py       # 정규화 잡 진입점·락 관리
+    │   ├── normalization/
+    │   │   ├── common.py               # 공통 텍스트·해시 유틸
+    │   │   ├── documents.py            # 섹션 유형·구비서류 추출
+    │   │   ├── field_extractors.py      # 연락처·신청방법·기본 수치 추출
+    │   │   ├── limit_rules.py           # 직원수·매출·업력 규칙 검증
+    │   │   ├── llm_limits.py            # Ollama 보완 추출·검증·캐시
+    │   │   ├── metadata.py              # 공통 메타데이터·날짜·필터 컬럼
+    │   │   ├── persistence.py           # 정책·문서·첨부파일 DB 반영
+    │   │   ├── regions.py               # 시도·시군구·권역 정규화
+    │   │   ├── source_documents.py      # 출처별 문서·섹션 구성
+    │   │   └── sources.py               # Sbiz24·SEMAS·Gov24 변환 어댑터
     │   ├── policy_ingest.py
     │   └── semas_ingest.py
     └── main.py
