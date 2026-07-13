@@ -55,12 +55,15 @@ export interface RecommendationResult {
   support_content?: string | null
   apply_url?: string | null
   apply_end?: string | null
-  match_status: 'eligible' | 'needs_review'
+  match_status: 'eligible' | 'needs_review' | 'near_match'
   confidence: 'high' | 'medium' | 'low'
   rank_score: number
   vector_similarity?: number | null
+  score_breakdown: Record<string, number>
   reasons: string[]
   warnings: string[]
+  unknown_conditions: string[]
+  unmet_conditions: string[]
   matched_tags: Record<string, string[]>
 }
 
@@ -114,7 +117,7 @@ export interface SavedPolicy {
   apply_end?: string | null
   apply_url?: string | null
   rank_score?: number
-  match_status?: 'eligible' | 'needs_review'
+  match_status?: 'eligible' | 'needs_review' | 'near_match'
   reasons?: string[]
   warnings?: string[]
   saved_at: string

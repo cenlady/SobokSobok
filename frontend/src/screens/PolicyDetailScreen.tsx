@@ -94,7 +94,9 @@ export default function PolicyDetailScreen() {
         
         const fallbackSummary = recommendation?.match_status === 'eligible'
           ? '지원 조건 충족률이 높은 추천 정책입니다.'
-          : '세부 조건 확인이 필요한 추천 정책입니다.'
+          : recommendation?.match_status === 'near_match'
+            ? '일부 선호 조건이 달라 참고용으로 제공한 유사 정책입니다.'
+            : '세부 조건 확인이 필요한 추천 정책입니다.'
         const fallbackStrengths = recommendation?.reasons && recommendation.reasons.length > 0
           ? recommendation.reasons
           : ['사용자 업종 및 사업자 정보에 부합하는 지원 정책입니다.']
@@ -167,9 +169,6 @@ export default function PolicyDetailScreen() {
       : policy.matched_sidos.length > 0
         ? policy.matched_sidos.join(', ')
         : [policy.sido, policy.sigungu].filter(Boolean).join(' ') || '확인 필요'
-  const primaryReasons = recommendation?.reasons ?? []
-  const warnings = recommendation?.warnings ?? []
-
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
       <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-4 py-4 backdrop-blur">

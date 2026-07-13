@@ -127,10 +127,16 @@ export default function HomeScreen() {
                         className={`rounded-lg px-2 py-0.5 text-xs font-bold ${
                           item.match_status === 'eligible'
                             ? 'bg-green-50 text-status-green'
-                            : 'bg-blue-50 text-status-blue'
+                            : item.match_status === 'needs_review'
+                              ? 'bg-blue-50 text-status-blue'
+                              : 'bg-amber-50 text-amber-700'
                         }`}
                       >
-                        {item.match_status === 'eligible' ? '추천 가능' : '확인 필요'}
+                        {item.match_status === 'eligible'
+                          ? '추천 가능'
+                          : item.match_status === 'needs_review'
+                            ? '확인 필요'
+                            : '유사 정책'}
                       </span>
                       {item.support_type && (
                         <span className="rounded-lg bg-brand-light/20 px-2 py-0.5 text-xs font-semibold text-brand">
