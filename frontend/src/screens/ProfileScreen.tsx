@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
+import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
 import { useState } from 'react'
 import { NEED_OPTIONS } from '../lib/recommend'
@@ -21,6 +22,7 @@ import { NEED_OPTIONS } from '../lib/recommend'
 export default function ProfileScreen() {
   const navigate = useNavigate()
   const { profile } = useProfile()
+  const { logout } = useAuth()
   const [alarm, setAlarm] = useState(true)
 
   return (
@@ -123,7 +125,15 @@ export default function ProfileScreen() {
         </div>
 
         <div className="mt-8 flex flex-col items-center gap-3">
-          <button className="text-sm font-medium text-brand-dark/50">로그아웃</button>
+          <button
+            onClick={() => {
+              logout()
+              navigate('/login', { replace: true })
+            }}
+            className="text-sm font-medium text-brand-dark/50 active:opacity-60"
+          >
+            로그아웃
+          </button>
           <button className="text-sm font-medium text-status-red">탈퇴하기</button>
         </div>
       </section>

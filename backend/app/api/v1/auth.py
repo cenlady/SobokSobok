@@ -164,8 +164,14 @@ def google_callback(code: str, db: Session = Depends(get_db)):
     db.commit()
 
     # 5) 우리 백엔드 세션용 자체 로그인 JWT 토큰 발행
+    #
+    # 구글 access token을 프론트에 넘기지 않는다. 그 토큰은 사용자의 구글 캘린더를
+    # 직접 읽고 쓸 수 있어서, 브라우저에 두면 XSS·히스토리·Referer로 새는 순간 피해가
+    # 우리 서비스 밖으로 번진다. 수명도 1시간이라 세션으로 쓰기에 너무 짧다.
+    # 캘린더 API가 필요로 하는 구글 토큰은 users 테이블에 있고, calendar.py의
+    # get_valid_google_token()이 만료 시 refresh_token으로 갱신해 쓴다 — 서버 안에서만.
     local_access_token = create_access_token(subject=user.email)
 
-    # 6) 프론트로 토큰을 넘긴다. 프론트는 /auth/callback에서 토큰을 localStorage에 저장하고
+    # 6) 프론트로 우리 JWT를 넘긴다. 프론트는 /auth/callback에서 저장하고
     #    onboarded 여부에 따라 /onboarding 또는 / 로 보낸다.
     return _front_redirect(token=local_access_token)
