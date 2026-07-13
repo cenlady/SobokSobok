@@ -183,6 +183,62 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(evaluation.status, "near_match")
         self.assertTrue(evaluation.soft_mismatches)
 
+    def test_low_confidence_title_region_never_hard_rejects(self) -> None:
+        policy = make_policy(
+            region_scope="local",
+            sido="부산광역시",
+            matched_sidos=["부산광역시"],
+            region_confidence=0.68,
+            eligibility={
+                "region": {
+                    "condition_mode": "restricted",
+                    "confidence": 0.68,
+                    "source_ref": "title",
+                }
+            },
+        )
+
+        evaluation = evaluate_policy(policy, make_profile())
+
+        self.assertEqual(evaluation.status, "needs_review")
+        self.assertFalse(any("지역 조건이 맞지" in reason for reason in evaluation.failed))
+
+    def test_explicit_excluded_industry_is_ineligible(self) -> None:
+        policy = make_policy(
+            industry_tags=[],
+            eligibility={
+                "industry_condition": {
+                    "mode": "restricted",
+                    "include_tags": [],
+                    "exclude_tags": ["restaurant"],
+                    "confidence": 0.9,
+                }
+            },
+        )
+
+        evaluation = evaluate_policy(policy, make_profile())
+
+        self.assertEqual(evaluation.status, "ineligible")
+        self.assertTrue(any("제외 업종" in reason for reason in evaluation.failed))
+
+    def test_explicit_unrestricted_industry_is_eligible(self) -> None:
+        policy = make_policy(
+            industry_tags=[],
+            eligibility={
+                "industry_condition": {
+                    "mode": "unrestricted",
+                    "include_tags": [],
+                    "exclude_tags": [],
+                    "confidence": 0.98,
+                }
+            },
+        )
+
+        evaluation = evaluate_policy(policy, make_profile())
+
+        self.assertEqual(evaluation.status, "eligible")
+        self.assertTrue(any("업종 제한이 없는" in reason for reason in evaluation.reasons))
+
     def test_operating_business_does_not_match_pre_founder_only_policy(self) -> None:
         policy = make_policy(business_status_tags=["pre_founder"])
 

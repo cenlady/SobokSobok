@@ -407,6 +407,19 @@ def _check_region(policy: NormalizedPolicy, profile: RecommendationProfileReques
     user_sido = profile.region.sido if profile.region else None
     user_sigungu = profile.region.sigungu if profile.region else None
     matched_sidos = set(policy.matched_sidos or [])
+    eligibility = getattr(policy, "eligibility", None) or {}
+    region_condition = eligibility.get("region") or {}
+    region_confidence = getattr(policy, "region_confidence", None)
+    if region_confidence is None:
+        region_confidence = region_condition.get("confidence")
+    condition_mode = region_condition.get("condition_mode")
+
+    if condition_mode == "unknown" or (
+        region_confidence is not None and float(region_confidence) < 0.8
+    ):
+        evaluation.warnings.append("공고의 지역 단서는 있으나 신청 제한조건으로 확정하기 어렵습니다.")
+        evaluation.unknown_conditions.append("지역")
+        return
     if policy.region_scope == "national":
         evaluation.reasons.append("전국 신청 가능 정책입니다.")
         return
@@ -491,18 +504,42 @@ def _check_business_status(policy: NormalizedPolicy, profile: RecommendationProf
 
 
 def _check_industry(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
+    eligibility = getattr(policy, "eligibility", None) or {}
+    condition = eligibility.get("industry_condition") or {}
+    mode = condition.get("mode")
     policy_tags = set(policy.industry_tags or [])
+    include_tags = set(condition.get("include_tags") or policy_tags)
+    exclude_tags = set(condition.get("exclude_tags") or [])
     user_tags = set(profile.industry_tags or [])
-    if not policy_tags:
-        evaluation.warnings.append("공고의 업종 조건이 명확하지 않습니다.")
-        evaluation.unknown_conditions.append("업종")
+
+    if mode == "unrestricted":
+        evaluation.reasons.append("업종 제한이 없는 정책입니다.")
         return
-    if not user_tags:
+    if not user_tags and (include_tags or exclude_tags):
         evaluation.warnings.append("사용자 업종이 없어 업종 적합도 확인이 필요합니다.")
         evaluation.unknown_conditions.append("사용자 업종")
         return
 
-    matched = sorted(policy_tags & user_tags)
+    excluded = sorted(exclude_tags & user_tags)
+    if excluded:
+        if float(condition.get("confidence") or 0) >= 0.85:
+            evaluation.failed.append(
+                f"지원 제외 업종에 해당합니다: {_labels(excluded, INDUSTRY_LABELS)}"
+            )
+        else:
+            evaluation.warnings.append("지원 제외 업종일 가능성이 있어 공고 확인이 필요합니다.")
+            evaluation.unknown_conditions.append("업종 제외조건")
+        return
+
+    if not include_tags and exclude_tags and user_tags:
+        evaluation.reasons.append("확인된 제외 업종에는 해당하지 않습니다.")
+        return
+    if not include_tags:
+        evaluation.warnings.append("공고의 업종 조건이 명확하지 않습니다.")
+        evaluation.unknown_conditions.append("업종")
+        return
+
+    matched = sorted(include_tags & user_tags)
     if matched:
         evaluation.reasons.append(f"업종과 관련된 정책입니다: {_labels(matched, INDUSTRY_LABELS)}")
         evaluation.matched_tags["industry_tags"] = matched
