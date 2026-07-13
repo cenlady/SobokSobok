@@ -542,13 +542,10 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         )
         gov_eligibility_blob = _join_text(
             [
-                list_row.service_name,
-                list_row.service_field,
-                list_row.support_type,
                 target_text,
                 _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
             ]
-        )
+        ) or body
         region = _extract_region_metadata(
             _join_text(
                 [
@@ -582,6 +579,17 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "business_age_limit": gov_age,
         }
         llm_fields = _limit_fields_requiring_llm(gov_eligibility_blob, gov_limits)
+        complex_fields: list[str] = []
+        for field in llm_fields:
+            complex_payload = _complex_limit_payload(field, gov_eligibility_blob)
+            if complex_payload is not None:
+                gov_limits[field] = complex_payload
+                complex_fields.append(field)
+        if complex_fields:
+            print(
+                f"  [LLM Structure] gov24 '{list_row.service_name[:30]}' 복합 조건 구조화 요청: {complex_fields}",
+                flush=True,
+            )
         if llm_fields and settings.REC_OLLAMA_BASE_URL:
             print(f"  [Ollama] gov24 '{list_row.service_name[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
             llm_limits = _extract_limits_via_ollama(gov_eligibility_blob, llm_fields)
@@ -995,14 +1003,10 @@ def _source_metadata(
             *[section.get("text") for section in sections],
         ]
     ) or ""
-    eligibility_text = _join_text(
-        [
-            title,
-            category,
-            target_text,
-            _first_section_text_by_type(sections, "eligibility"),
-        ]
-    ) or text_blob
+    eligibility_section = _first_section_text_by_type(sections, "eligibility")
+    # 제목·카테고리에는 "창업", "현금" 같은 단어가 자격조건과 무관하게
+    # 들어갈 수 있으므로 숫자 조건 파싱 문맥에서 제외한다.
+    eligibility_text = _join_text([target_text, eligibility_section]) or text_blob
 
     business_status_tags = _merge_unique_lists(
         default_business_status_tags or [],
@@ -1052,6 +1056,15 @@ def _source_metadata(
         "business_age_limit": _extract_business_age_limit(eligibility_text),
     }
     llm_fields = _limit_fields_requiring_llm(eligibility_text, limits)
+    complex_fields: list[str] = []
+    for field in llm_fields:
+        complex_payload = _complex_limit_payload(field, eligibility_text)
+        if complex_payload is not None:
+            limits[field] = complex_payload
+            complex_fields.append(field)
+    if complex_fields:
+        label = _first_text(title, source) or source
+        print(f"  [LLM Structure] {source} '{label[:30]}' 복합 조건 구조화 요청: {complex_fields}", flush=True)
     if llm_fields and settings.REC_OLLAMA_BASE_URL:
         label = _first_text(title, source) or source
         print(f"  [Ollama] {source} '{label[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
@@ -1110,8 +1123,16 @@ def _filter_columns_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     sales_limit = metadata.get("sales_limit") or {}
     business_age_limit = metadata.get("business_age_limit") or {}
 
+    # 복합/분기 조건은 eligibility JSON에만 보존하고 단일 필터 컬럼에는 쓰지 않는다.
+    # 그렇지 않으면 OR 분기의 숫자 하나가 전체 정책의 필수조건처럼 동작한다.
+    flat_employee_limit = {} if employee_limit.get("requires_manual_review") else employee_limit
+    flat_sales_limit = {} if sales_limit.get("requires_manual_review") else sales_limit
+    flat_business_age_limit = (
+        {} if business_age_limit.get("requires_manual_review") else business_age_limit
+    )
+
     # 업력 조건의 경우 100년을 초과하는 값이 오면 LLM 파싱 오동작(예: 매출액을 업력에 대입)으로 판단하여 제외합니다.
-    age_val = business_age_limit.get("value")
+    age_val = flat_business_age_limit.get("value")
     if age_val is not None:
         try:
             if int(age_val) > 100:
@@ -1124,12 +1145,12 @@ def _filter_columns_from_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "region_confidence": region.get("confidence"),
         "application_methods": metadata.get("application_methods") or [],
         "contact_points": metadata.get("contacts") or [],
-        "employee_limit_value": _safe_int(employee_limit.get("value")),
-        "employee_limit_operator": employee_limit.get("operator"),
-        "sales_limit_amount_krw": _safe_bigint(sales_limit.get("amount_krw")),
-        "sales_limit_operator": sales_limit.get("operator"),
+        "employee_limit_value": _safe_int(flat_employee_limit.get("value")),
+        "employee_limit_operator": flat_employee_limit.get("operator"),
+        "sales_limit_amount_krw": _safe_bigint(flat_sales_limit.get("amount_krw")),
+        "sales_limit_operator": flat_sales_limit.get("operator"),
         "business_age_limit_value": _safe_int(age_val),
-        "business_age_limit_operator": business_age_limit.get("operator") if age_val is not None else None,
+        "business_age_limit_operator": flat_business_age_limit.get("operator") if age_val is not None else None,
         "required_document_count": len(required_documents),
         "has_required_documents": bool(required_documents),
     }
@@ -1410,6 +1431,7 @@ def _extract_employee_limit(value: str | None) -> dict[str, Any] | None:
     patterns = [
         r"((?:상시\s*)?근로자\s*수?[^0-9]{0,12}(\d+)\s*(?:명|인)\s*(미만|이하|이상|초과))",
         r"((\d+)\s*(?:명|인)\s*(미만|이하|이상|초과)[^.\n]{0,20}(?:근로자|사업장|업체))",
+        r"((?:[가-힣A-Za-z0-9·ㆍ/&()\-]+업)[^0-9]{0,10}(\d+)\s*(?:명|인)\s*(미만|이하|이상|초과))",
     ]
     for pattern in patterns:
         match = re.search(pattern, text_value)
@@ -1430,6 +1452,36 @@ def _extract_sales_limit(value: str | None) -> dict[str, Any] | None:
     text_value = _clean_text(value)
     if not text_value:
         return None
+
+    # ``1억 4백만원``처럼 억 단위와 하위 단위가 섞인 금액은 기존의
+    # 단일 숫자+단위 정규식으로는 1억원으로 잘려 저장된다.
+    mixed_pattern = re.compile(
+        r"((?:연\s*)?(?:전년도\s*)?(?:매출액?|연매출)[^0-9]{0,25}"
+        r"(\d+(?:,\d{3})*)\s*억\s*"
+        r"(?:(\d+(?:,\d{3})*)\s*(천만|백만|만)\s*원?)?"
+        r"\s*(미만|이하|이상|초과)?)"
+    )
+    mixed_match = mixed_pattern.search(text_value)
+    if mixed_match and mixed_match.group(3) and mixed_match.group(4):
+        amount = int(mixed_match.group(2).replace(",", "")) * 100_000_000
+        subunit_multiplier = {
+            "천만": 10_000_000,
+            "백만": 1_000_000,
+            "만": 10_000,
+        }[mixed_match.group(4)]
+        amount += int(mixed_match.group(3).replace(",", "")) * subunit_multiplier
+        operator, source_text = _operator_and_source_for_limit(
+            text_value,
+            mixed_match,
+            mixed_match.group(5) or "이하",
+        )
+        return {
+            "amount_krw": amount,
+            "operator": operator,
+            "source_text": source_text,
+            "extraction_method": "rule",
+        }
+
     pattern = re.compile(
         r"((?:연\s*)?(?:전년도\s*)?(?:매출액?|연매출)[^0-9]{0,25}"
         r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(억\s*원|억원|천만\s*원|천만원|백만\s*원|백만원|만\s*원|만원|원)"
@@ -1452,8 +1504,12 @@ def _extract_business_age_limit(value: str | None) -> dict[str, Any] | None:
     if not text_value:
         return None
     patterns = [
-        r"((?:창업|업력)[^0-9]{0,10}(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)))",
-        r"((\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한))[^.\n]{0,20}(?:창업|업력))",
+        r"((?:창업|업력|영업기간|운영기간|영업개시|설립|개업일|등록일)[^0-9]{0,12}"
+        r"(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)|경과))",
+        r"((?:사업자\s*등록(?:일)?|사업\s*개시일?|사업개시일)"
+        r"(?:\s*(?:후|부터|로부터|기준|경과))?[^0-9]{0,12}"
+        r"(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)|경과))",
+        r"((\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)|경과)[^.\n]{0,20}(?:창업|업력|사업자\s*등록|사업\s*개시))",
     ]
     for pattern in patterns:
         match = re.search(pattern, text_value)
@@ -1532,6 +1588,7 @@ def _operator_symbol(value: str) -> str:
         "이하": "<=",
         "초과": ">",
         "이상": ">=",
+        "경과": ">=",
         "한도": "<=",
         "까지": "<=",
         "내외": "~",
@@ -2062,7 +2119,21 @@ def _guess_content_type(file_name: str) -> str | None:
 
 LIMIT_FIELD_SPECS: dict[str, dict[str, Any]] = {
     "employee_limit": {
-        "keywords": ("근로자", "직원", "종업원", "고용인원", "상시인원"),
+        # 공고마다 같은 개념을 ``근로자``, ``종사자``, ``상시인원`` 등으로
+        # 다르게 표현하므로 현재 수집된 업종명만 나열하지 않습니다.
+        "keywords": (
+            "근로자",
+            "상시근로자수",
+            "직원",
+            "종업원",
+            "종사자",
+            "고용인원",
+            "상시인원",
+            "근로 인원",
+            "근무자",
+        ),
+        # 업종별 인원 기준은 업종명이 새로 추가되어도 후보로 보냅니다.
+        "anchor_pattern": r"[가-힣A-Za-z0-9·ㆍ/&()\-]+업",
         "numeric_unit_pattern": r"\d+(?:,\d{3})*\s*(?:명|인)(?=\s*(?:미만|이하|이상|초과|약|내외|규모|$))",
         "maximum": 1_000_000,
     },
@@ -2076,7 +2147,21 @@ LIMIT_FIELD_SPECS: dict[str, dict[str, Any]] = {
         "maximum": 9_000_000_000_000_000_000,
     },
     "business_age_limit": {
-        "keywords": ("업력", "창업", "사업개시", "사업 개시", "개업"),
+        "keywords": (
+            "업력",
+            "창업",
+            "사업개시",
+            "사업 개시",
+            "사업자등록",
+            "사업자 등록",
+            "개업",
+            "영업기간",
+            "운영기간",
+            "영업개시",
+            "설립",
+            "개업일",
+            "등록일",
+        ),
         "numeric_unit_pattern": r"\d+\s*년(?=\s*(?:미만|이하|이상|초과|이내|약|내외|경과|$))",
         "maximum": 100,
     },
@@ -2090,7 +2175,7 @@ def _limit_candidate_context(value: str | None, field: str) -> str | None:
         return None
 
     spans: list[tuple[int, int]] = []
-    qualifier_pattern = re.compile(r"미만|이하|이상|초과|이내|경과하지|약|내외|범위")
+    qualifier_pattern = re.compile(r"미만|이하|이상|초과|이내|경과|약|내외|범위")
     numeric_unit_pattern = re.compile(spec["numeric_unit_pattern"])
     for keyword in spec["keywords"]:
         for match in re.finditer(re.escape(keyword), text_value, re.IGNORECASE):
@@ -2109,6 +2194,19 @@ def _limit_candidate_context(value: str | None, field: str) -> str | None:
                 for number in numeric_matches
             )
             if not is_near_keyword:
+                continue
+            spans.append((start, end))
+
+    # 일부 공고는 "상시근로자"라는 말을 생략하고
+    # "도소매·서비스업(5인 미만), 제조·건설업(10인 미만)"처럼 쓴다.
+    # 업종 앵커가 있는 경우에만 직원 수 후보로 추가한다.
+    if field == "employee_limit" and spec.get("anchor_pattern"):
+        for match in re.finditer(spec["anchor_pattern"], text_value):
+            start = max(match.start() - 20, 0)
+            end = min(match.end() + 80, len(text_value))
+            window = text_value[start:end]
+            numeric_matches = list(numeric_unit_pattern.finditer(window))
+            if not numeric_matches or not qualifier_pattern.search(window):
                 continue
             spans.append((start, end))
 
@@ -2184,7 +2282,7 @@ def _normalize_llm_operator(value: Any, side: str, evidence: str) -> str | None:
     if side == "min":
         if "초과" in evidence:
             return ">"
-        if "이상" in evidence:
+        if "이상" in evidence or ("경과" in evidence and "경과하지" not in evidence):
             return ">="
     else:
         if "미만" in evidence:
@@ -2192,6 +2290,40 @@ def _normalize_llm_operator(value: Any, side: str, evidence: str) -> str | None:
         if any(token in evidence for token in ("이하", "이내", "경과하지")):
             return "<="
     return None
+
+
+def _numeric_match_has_field_context(
+    field: str,
+    evidence: str,
+    numeric_match: re.Match[str],
+    *,
+    max_distance: int = 60,
+) -> bool:
+    spec = LIMIT_FIELD_SPECS[field]
+    separators = re.compile(r"[。.!?;]|(?:①|②|③|④|⑤|⑥|⑦|⑧|⑨|○|◦|▪|▶|▷|▸)")
+    for keyword in spec["keywords"]:
+        for keyword_match in re.finditer(re.escape(keyword), evidence, re.IGNORECASE):
+            distance = min(
+                abs(numeric_match.start() - keyword_match.end()),
+                abs(keyword_match.start() - numeric_match.end()),
+            )
+            if distance > max_distance:
+                continue
+            start = min(keyword_match.end(), numeric_match.end())
+            end = max(keyword_match.start(), numeric_match.start())
+            between = evidence[start:end]
+            if separators.search(between):
+                continue
+            if field == "sales_limit" and re.search(
+                r"임차료|지원금|지원액|보증한도|대출한도|융자한도|자금한도|사업비",
+                between,
+            ):
+                continue
+            if field == "sales_limit" and "억" in evidence[max(0, numeric_match.start() - 6):numeric_match.start()]:
+                # ``1억 4백만원``의 4백만원만 별도 매출액으로 해석하지 않는다.
+                continue
+            return True
+    return False
 
 
 def _bounds_from_evidence(field: str, evidence: str) -> dict[str, Any]:
@@ -2208,6 +2340,7 @@ def _bounds_from_evidence(field: str, evidence: str) -> dict[str, Any]:
         extracted = [
             (int(match.group(1)), _operator_symbol(match.group(2)), match.group(0), match.end())
             for match in matches
+            if _numeric_match_has_field_context(field, evidence, match)
         ]
     elif field == "sales_limit":
         matches = re.finditer(
@@ -2224,22 +2357,38 @@ def _bounds_from_evidence(field: str, evidence: str) -> dict[str, Any]:
                 match.end(),
             )
             for match in matches
+            if _numeric_match_has_field_context(field, evidence, match)
         ]
+        direct_sales = _extract_sales_limit(evidence)
+        if direct_sales and not any(
+            item[0] == direct_sales["amount_krw"] and item[1] == direct_sales["operator"]
+            for item in extracted
+        ):
+            extracted.insert(
+                0,
+                (
+                    direct_sales["amount_krw"],
+                    direct_sales["operator"],
+                    direct_sales["source_text"],
+                    -1,
+                ),
+            )
     else:
         matches = re.finditer(
-            r"(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한))",
+            r"(\d+)\s*년\s*(이내|이하|미만|이상|초과|경과하지\s*(?:않은|아니한)|경과)",
             evidence,
         )
         extracted = [
             (int(match.group(1)), _operator_symbol(match.group(2)), match.group(0), match.end())
             for match in matches
+            if _numeric_match_has_field_context(field, evidence, match)
         ]
 
     side_values: dict[str, set[int]] = {"min": set(), "max": set()}
     seen_constraints: set[tuple[int, str, str]] = set()
     for value, operator, source_text, match_end in extracted:
-        tail = evidence[match_end:match_end + 40]
-        exclusion_match = _direct_exclusion_match(tail)
+        tail = evidence[match_end:match_end + 40] if match_end >= 0 else ""
+        exclusion_match = _direct_exclusion_match(tail) if tail else None
         if exclusion_match:
             operator = {">=": "<", ">": "<=", "<=": ">", "<": ">="}.get(operator, operator)
             source_text = _clean_text(f"{source_text}{exclusion_match.group(0)}") or source_text
@@ -2264,18 +2413,62 @@ def _bounds_from_evidence(field: str, evidence: str) -> dict[str, Any]:
     return bounds
 
 
+def _branching_limit_reason(context: str, field: str) -> str | None:
+    """단일 숫자로 평탄화하면 의미가 바뀌는 분기/관계 조건을 찾습니다."""
+    all_required = bool(re.search(r"(?:모두|전부|모든).{0,12}(?:충족|해당|요건)", context))
+    branch_markers = (
+        "각 호 중",
+        "다음 각 호",
+        "중 1개",
+        "중 하나",
+        "어느 하나",
+        "자금별",
+        "유형별",
+        "업종별",
+    )
+    if any(marker in context for marker in branch_markers):
+        return "branching_condition"
+    if not all_required and re.search(r"(?:^|\s)(?:①|②|③|④|⑤|⑥|⑦|⑧|⑨)", context) and len(
+        re.findall(r"(?:①|②|③|④|⑤|⑥|⑦|⑧|⑨)", context)
+    ) >= 2:
+        return "numbered_alternatives"
+    if len(re.findall(r"(?:창업|경영개선|점포임차|대환|일반|우대)\s*자금\s*:", context)) >= 2:
+        return "named_alternatives"
+    if "또는" in context:
+        return "or_condition"
+    if field == "employee_limit" and any(
+        marker in context for marker in ("과반수", "비율", "고용하고 유지", "고용하여 유지")
+    ):
+        return "relational_employee_condition"
+    if field == "business_age_limit" and any(
+        marker in context for marker in ("예비창업자", "사업자등록 말소", "최근")
+    ):
+        return "temporal_or_status_condition"
+    return None
+
+
 def _complex_limit_payload(field: str, text_value: str) -> dict[str, Any] | None:
     context = _limit_candidate_context(text_value, field)
     if not context:
         return None
     bounds = _bounds_from_evidence(field, context)
-    if not bounds["has_alternatives"]:
+    branch_reason = _branching_limit_reason(context, field)
+    # 후보 문맥 앞부분이 잘려 ①·②만 남는 경우가 있어, 전체 자격문맥에서
+    # "모두 충족/모두 해당"이면 numbered_alternatives 오탐을 해제한다.
+    if branch_reason == "numbered_alternatives" and re.search(
+        r"(?:모두|전부|모든).{0,16}(?:충족|해당|요건)",
+        _clean_text(text_value) or "",
+    ):
+        branch_reason = None
+    if not bounds["has_alternatives"] and not branch_reason:
         return None
     result: dict[str, Any] = {
         "constraints": bounds["constraints"],
         "source_text": context,
         "extraction_method": "rule_ambiguous",
         "requires_manual_review": True,
+        "logic": "any_of" if branch_reason else "all_of",
+        "review_reason": branch_reason or "multiple_numeric_constraints",
     }
     if field == "sales_limit":
         result["unit"] = "krw"
@@ -2301,11 +2494,36 @@ def _convert_llm_limit(
 
     maximum = int(LIMIT_FIELD_SPECS[field]["maximum"])
     evidence_bounds = _bounds_from_evidence(field, evidence)
+    classification = (_as_text(raw_value.get("classification")) or "direct").lower()
+    logic = (_as_text(raw_value.get("logic")) or "all_of").lower()
+    scope = (_as_text(raw_value.get("scope")) or "global").lower()
+    if classification in {"unrelated", "none", "not_eligibility"}:
+        return None
+    if classification in {"alternative", "complex", "relational"} or scope != "global":
+        result: dict[str, Any] = {
+            "constraints": evidence_bounds["constraints"],
+            "source_text": evidence,
+            "extraction_method": "ollama_structure",
+            "model": model_name,
+            "requires_manual_review": True,
+            "logic": logic if logic in {"all_of", "any_of"} else "any_of",
+            "review_reason": classification,
+            "scope": scope,
+        }
+        result["unit"] = (
+            "krw"
+            if field == "sales_limit"
+            else "people" if field == "employee_limit" else "years"
+        )
+        return result
+
     min_value = _coerce_limit_int(evidence_bounds["min_value"], maximum)
     max_value = _coerce_limit_int(evidence_bounds["max_value"], maximum)
-    if min_value is None:
+    # evidence에서 하나라도 유효한 경계를 복구했다면, 모델이 별도로 생성한
+    # 반대쪽 숫자는 신뢰하지 않는다. 다른 금액(임차료·지원금)을 min/max로
+    # 끌어오는 소형 모델의 오탐을 막기 위한 규칙이다.
+    if not evidence_bounds["constraints"]:
         min_value = _coerce_limit_int(raw_value.get("min"), maximum)
-    if max_value is None:
         max_value = _coerce_limit_int(raw_value.get("max"), maximum)
     min_operator = _as_text(evidence_bounds["min_operator"])
     max_operator = _as_text(evidence_bounds["max_operator"])
@@ -2350,7 +2568,7 @@ def _extract_limits_via_ollama(
     text_value: str | None,
     requested_fields: list[str] | None = None,
 ) -> dict[str, Any]:
-    """규칙으로 확정하지 못한 숫자 자격조건만 Ollama로 보수적으로 추출합니다."""
+    """규칙으로 확정하지 못한 조건을 구조화하되, 근거는 코드로 재검증합니다."""
     fallback_res = {field: None for field in LIMIT_FIELD_SPECS}
     clean_txt = _clean_text(text_value)
     if not clean_txt:
@@ -2370,40 +2588,43 @@ def _extract_limits_via_ollama(
         "employee_limit": (
             "사업체 직원수 또는 상시근로자수 조건",
             "입력 '상시근로자 5인 미만'이면 "
-            '{"min":null,"min_operator":null,"max":5,"max_operator":"<","evidence":"상시근로자 5인 미만"}',
+            '{"classification":"direct","logic":"all_of","scope":"global",'
+            '"min":null,"min_operator":null,"max":5,"max_operator":"<","evidence":"상시근로자 5인 미만"}',
         ),
         "sales_limit": (
             "사업체의 연간 매출액 조건",
             "입력 '연매출 10억원 이하'이면 "
-            '{"min":null,"min_operator":null,"max":1000000000,"max_operator":"<=","evidence":"연매출 10억원 이하"}',
+            '{"classification":"direct","logic":"all_of","scope":"global",'
+            '"min":null,"min_operator":null,"max":1000000000,"max_operator":"<=","evidence":"연매출 10억원 이하"}',
         ),
         "business_age_limit": (
             "사업체의 창업 후 업력 조건",
             "입력 '창업 3년 이상 7년 이하'이면 "
-            '{"min":3,"min_operator":">=","max":7,"max_operator":"<=","evidence":"창업 3년 이상 7년 이하"}',
+            '{"classification":"direct","logic":"all_of","scope":"global",'
+            '"min":3,"min_operator":">=","max":7,"max_operator":"<=","evidence":"창업 3년 이상 7년 이하"}',
         ),
     }
 
     for field in fields:
         complex_payload = _complex_limit_payload(field, clean_txt)
-        if complex_payload is not None:
-            fallback_res[field] = complex_payload
-            print(f"  [Ollama Fallback] {field} 복합 조건은 평탄화하지 않음", flush=True)
-            continue
         context = _select_limit_context(clean_txt, [field])
         description, example = field_prompts[field]
         system_prompt = (
             f"당신은 소상공인 지원 공고에서 {description} 하나만 추출합니다. "
-            "반드시 min, min_operator, max, max_operator, evidence 키만 가진 단일 JSON 객체를 반환하세요. "
+            "반드시 classification, logic, scope, min, min_operator, max, max_operator, evidence 키를 가진 "
+            "단일 JSON 객체를 반환하세요. classification은 direct, alternative, relational, unrelated 중 하나입니다. "
+            "logic은 all_of 또는 any_of, scope는 global 또는 branch입니다. "
             "미만은 <, 이하는 <=, 초과는 >, 이상은 >= 입니다. "
             "명시된 숫자 조건이 없을 때만 min과 max를 null로 두세요. "
             "소상공인이라는 단어만으로 기준을 추정하지 마세요. "
             "지원금액, 대표자 나이, 예상 매출은 자격조건으로 해석하지 마세요. "
+            "각 호 중 하나, 또는, 자금별·업종별 조건은 direct로 평탄화하지 마세요. "
             "매출액은 원 단위 정수로 환산하고, 양쪽 범위는 min과 max를 모두 보존하세요. "
-            "evidence는 입력에서 연속된 원문을 그대로 복사하세요. "
+            "evidence는 해당 필드의 숫자 조건이 담긴 가장 짧은 연속 원문만 그대로 복사하고, "
+            "임차료·지원금·대표자 나이·신용점수 등 다른 숫자는 포함하지 마세요. "
             f"출력 예시: {example}. JSON 이외의 문장은 출력하지 마세요."
         )
-        print(f"  [Ollama Fallback] {model_name} 호출: field={field}, chars={len(context)}", flush=True)
+        print(f"  [Ollama Structure] {model_name} 호출: field={field}, chars={len(context)}", flush=True)
         try:
             response = httpx.post(
                 f"{base_url.rstrip('/')}/api/chat",
@@ -2425,9 +2646,20 @@ def _extract_limits_via_ollama(
             data = json.loads(response_text)
             if isinstance(data, dict) and isinstance(data.get(field), dict):
                 data = data[field]
-            fallback_res[field] = _convert_llm_limit(field, data, context, model_name)
+            converted = _convert_llm_limit(field, data, context, model_name)
+            if complex_payload is not None:
+                # 규칙 단계에서 복합 가능성이 확인된 필드는 모델이 direct라고
+                # 잘못 분류해도 단일 컬럼으로 평탄화하지 않는다.
+                fallback_res[field] = (
+                    converted
+                    if converted and converted.get("requires_manual_review")
+                    else complex_payload
+                )
+            else:
+                fallback_res[field] = converted
             if fallback_res[field] is None:
-                print(f"  [Ollama Fallback] 검증에서 거절된 응답: {response_text[:500]}", flush=True)
+                print(f"  [Ollama Structure] 검증에서 거절된 응답: {response_text[:500]}", flush=True)
         except Exception as exc:
-            print(f"  [Ollama Fallback] {field} 추출 실패: {exc}", flush=True)
+            fallback_res[field] = complex_payload
+            print(f"  [Ollama Structure] {field} 추출 실패: {exc}", flush=True)
     return fallback_res
