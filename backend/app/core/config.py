@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     REC_OLLAMA_MODEL: str = "bge-m3:latest"
     REC_OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     REC_OPENAI_MODEL: str = "text-embedding-3-small"
+
+    # 정책 정규화의 보조 추출은 짧은 JSON 응답만 필요하므로 경량 모델을 기본으로 쓴다.
+    NORMALIZE_LLM_MODEL: str = "qwen2.5:1.5b"
+    NORMALIZE_LLM_TIMEOUT_SECONDS: float = 30.0
+    NORMALIZE_LLM_MAX_CONTEXT_CHARS: int = 800
     GEMINI_API_KEY: str | None = None
     GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
 

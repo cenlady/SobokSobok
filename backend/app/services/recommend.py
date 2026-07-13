@@ -43,16 +43,6 @@ BUSINESS_STATUS_LABELS = {
     "small_medium_business": "중소기업",
 }
 
-BUSINESS_STATUS_COMPATIBILITY = {
-    "small_business": {"small_business", "small_medium_business"},
-    "small_medium_business": {"small_business", "small_medium_business"},
-    "operating_business": {"operating_business"},
-    "pre_founder": {"pre_founder"},
-    "closing_business": {"closing_business"},
-    "small_manufacturer": {"small_manufacturer", "manufacturing"},
-    "traditional_market": {"traditional_market", "market"},
-}
-
 NEED_TAG_KEYWORDS = {
     "funding": ("현금", "융자", "대출", "자금", "보조금", "지원금", "감면", "보험료", "장려금", "수수료", "바우처"),
     "education_consulting": ("교육", "역량강화", "아카데미", "강의", "훈련", "상담", "컨설팅", "멘토링", "코칭", "전문가", "자문"),
@@ -80,8 +70,25 @@ class MatchEvaluation:
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
-    score: float = 0.0
+    unknown_conditions: list[str] = field(default_factory=list)
+    soft_mismatches: list[str] = field(default_factory=list)
     matched_tags: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class NumericConstraintSet:
+    constraints: list[tuple[str, int]] = field(default_factory=list)
+    logic: str = "all_of"
+    requires_review: bool = False
+    review_reason: str | None = None
+
+
+MATCH_STATUS_PRIORITY = {
+    "eligible": 0,
+    "needs_review": 1,
+    "near_match": 2,
+    "ineligible": 3,
+}
 
 
 def recommend_policies(
@@ -92,36 +99,42 @@ def recommend_policies(
     policies = _candidate_query(db).all()
     vector_scores, vector_used = _vector_scores(db, profile) if profile.use_vectors else ({}, False)
 
-    results: list[RecommendationResult] = []
+    deduplicated: dict[str, RecommendationResult] = {}
     for policy in policies:
         evaluation = evaluate_policy(policy, profile)
         if evaluation.status == "ineligible":
             continue
 
         vector_similarity = vector_scores.get(policy.id)
-        rank_score = _rank_policy(policy, evaluation, profile, vector_similarity)
-        confidence = _confidence(evaluation, vector_similarity)
-        results.append(
-            RecommendationResult(
-                policy_id=policy.id,
-                title=policy.title,
-                summary=policy.summary,
-                organization=policy.organization,
-                support_type=policy.support_type,
-                support_content=policy.support_content,
-                apply_url=policy.apply_url,
-                apply_end=policy.apply_end,
-                match_status=evaluation.status,
-                confidence=confidence,
-                rank_score=round(rank_score, 3),
-                vector_similarity=round(vector_similarity, 4) if vector_similarity is not None else None,
-                reasons=evaluation.reasons[:6],
-                warnings=evaluation.warnings[:4],
-                matched_tags=evaluation.matched_tags,
-            )
+        rank_score, score_breakdown = _rank_policy(policy, evaluation, profile, vector_similarity)
+        result = RecommendationResult(
+            policy_id=policy.id,
+            title=policy.title,
+            summary=policy.summary,
+            organization=policy.organization,
+            support_type=policy.support_type,
+            support_content=policy.support_content,
+            apply_url=policy.apply_url,
+            apply_start=policy.apply_start,
+            apply_end=policy.apply_end,
+            match_status=evaluation.status,
+            confidence=_confidence(evaluation),
+            rank_score=round(rank_score, 3),
+            vector_similarity=round(vector_similarity, 4) if vector_similarity is not None else None,
+            score_breakdown=score_breakdown,
+            reasons=evaluation.reasons[:6],
+            warnings=evaluation.warnings[:4],
+            unknown_conditions=evaluation.unknown_conditions,
+            unmet_conditions=evaluation.soft_mismatches,
+            matched_tags=evaluation.matched_tags,
         )
 
-    results.sort(key=lambda item: item.rank_score, reverse=True)
+        duplicate_key = policy.duplicate_group_key or f"{policy.source}:{policy.source_pk}"
+        current = deduplicated.get(duplicate_key)
+        if current is None or _result_sort_key(result) < _result_sort_key(current):
+            deduplicated[duplicate_key] = result
+
+    results = sorted(deduplicated.values(), key=_result_sort_key)
     return results[:limit], vector_used, len(results)
 
 
@@ -138,6 +151,8 @@ def evaluate_policy(policy: NormalizedPolicy, profile: RecommendationProfileRequ
 
     if evaluation.failed:
         evaluation.status = "ineligible"
+    elif evaluation.soft_mismatches:
+        evaluation.status = "near_match"
     elif evaluation.warnings:
         evaluation.status = "needs_review"
     else:
@@ -160,7 +175,7 @@ def explain_policy_recommendation(
 
     fallback_summary = "지원 조건 충족률이 높습니다." if evaluation.status == "eligible" else "지원 조건 확인이 필요합니다."
     fallback_strengths = evaluation.reasons
-    fallback_aspects_to_check = evaluation.warnings
+    fallback_aspects_to_check = evaluation.failed + evaluation.soft_mismatches + evaluation.warnings
     
     fallback_next_actions = []
     if policy.apply_end:
@@ -390,24 +405,56 @@ def _embedding_model():
 
 def _check_region(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
     user_sido = profile.region.sido if profile.region else None
+    user_sigungu = profile.region.sigungu if profile.region else None
     matched_sidos = set(policy.matched_sidos or [])
+    eligibility = getattr(policy, "eligibility", None) or {}
+    region_condition = eligibility.get("region") or {}
+    region_confidence = getattr(policy, "region_confidence", None)
+    if region_confidence is None:
+        region_confidence = region_condition.get("confidence")
+    condition_mode = region_condition.get("condition_mode")
+
+    if condition_mode == "unknown" or (
+        region_confidence is not None and float(region_confidence) < 0.8
+    ):
+        evaluation.warnings.append("공고의 지역 단서는 있으나 신청 제한조건으로 확정하기 어렵습니다.")
+        evaluation.unknown_conditions.append("지역")
+        return
     if policy.region_scope == "national":
         evaluation.reasons.append("전국 신청 가능 정책입니다.")
-        evaluation.score += 18
         return
     if policy.region_scope == "unknown":
         evaluation.warnings.append("공고의 지역 조건이 명확하지 않습니다.")
-        evaluation.score += 4
+        evaluation.unknown_conditions.append("지역")
         return
     if not user_sido:
         evaluation.warnings.append("사용자 지역이 없어 지역 조건 확인이 필요합니다.")
+        evaluation.unknown_conditions.append("사용자 지역")
         return
-    if user_sido in matched_sidos or user_sido == policy.sido:
-        evaluation.reasons.append(f"{user_sido} 지역에서 신청 가능한 정책입니다.")
-        evaluation.score += 18
-        evaluation.matched_tags["region"] = [user_sido]
+
+    if not matched_sidos and not policy.sido:
+        evaluation.warnings.append("지역 정책이지만 대상 시·도를 확인할 수 없습니다.")
+        evaluation.unknown_conditions.append("정책 대상 지역")
         return
-    evaluation.failed.append("지역 조건이 맞지 않습니다.")
+
+    if user_sido not in matched_sidos and user_sido != policy.sido:
+        evaluation.failed.append("지역 조건이 맞지 않습니다.")
+        return
+
+    if policy.sigungu:
+        if not user_sigungu:
+            evaluation.warnings.append(f"{policy.sigungu} 대상 정책으로 시·군·구 확인이 필요합니다.")
+            evaluation.unknown_conditions.append("시·군·구")
+            return
+        if user_sigungu != policy.sigungu:
+            evaluation.failed.append(f"{policy.sigungu} 대상 정책으로 사용자 지역과 맞지 않습니다.")
+            return
+        evaluation.reasons.append(f"{user_sido} {user_sigungu}에서 신청 가능한 정책입니다.")
+        evaluation.matched_tags["region"] = [user_sido, user_sigungu]
+        return
+
+    evaluation.reasons.append(f"{user_sido} 지역에서 신청 가능한 정책입니다.")
+    evaluation.matched_tags["region"] = [user_sido]
 
 
 def _check_business_status(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
@@ -415,40 +462,89 @@ def _check_business_status(policy: NormalizedPolicy, profile: RecommendationProf
     user_tags = set(profile.business_status_tags or [])
     if not policy_tags:
         evaluation.warnings.append("공고의 사업자 상태 조건이 명확하지 않습니다.")
-        evaluation.score += 3
+        evaluation.unknown_conditions.append("사업자 상태")
         return
     if not user_tags:
         evaluation.warnings.append("사용자 사업자 상태가 없어 대상 조건 확인이 필요합니다.")
+        evaluation.unknown_conditions.append("사용자 사업자 상태")
         return
 
-    expanded_user_tags = _expand_business_status(user_tags)
-    matched = sorted(policy_tags & expanded_user_tags)
-    if matched:
-        evaluation.reasons.append(f"사업자 상태가 맞습니다: {_labels(matched, BUSINESS_STATUS_LABELS)}")
-        evaluation.score += 18
-        evaluation.matched_tags["business_status_tags"] = matched
-        return
-    evaluation.failed.append("사업자 상태 조건이 맞지 않습니다.")
+    operating_tags = {"operating_business", "pre_founder", "closing_business"}
+    scale_tags = {"small_business", "small_medium_business"}
+    special_tags = {"small_manufacturer", "traditional_market"}
+    policy_operating = policy_tags & operating_tags
+    user_operating = user_tags & operating_tags
+    policy_scale = policy_tags & scale_tags
+    user_scale = user_tags & scale_tags
+    policy_special = policy_tags & special_tags
+    user_special = user_tags & special_tags
 
-
-def _check_industry(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
-    policy_tags = set(policy.industry_tags or [])
-    user_tags = set(profile.industry_tags or [])
-    if not policy_tags:
-        evaluation.warnings.append("공고의 업종 조건이 명확하지 않습니다.")
-        evaluation.score += 2
+    if policy_operating and user_operating and not (policy_operating & user_operating) and not (policy_scale & user_scale):
+        evaluation.failed.append("사업 운영 상태 조건이 맞지 않습니다.")
         return
-    if not user_tags:
-        evaluation.warnings.append("사용자 업종이 없어 업종 적합도 확인이 필요합니다.")
+
+    if policy_scale and not (policy_scale & user_scale):
+        if policy_scale == {"small_medium_business"} and "small_business" in user_tags:
+            evaluation.soft_mismatches.append("중소기업 대상 정책으로 소상공인 신청 가능 범위를 확인해야 합니다.")
+            return
+        evaluation.failed.append("사업자 규모 조건이 맞지 않습니다.")
+        return
+
+    if policy_special and not (policy_special & user_special):
+        evaluation.soft_mismatches.append("소공인·전통시장 등 특수 대상 여부를 추가로 확인해야 합니다.")
         return
 
     matched = sorted(policy_tags & user_tags)
     if matched:
+        evaluation.reasons.append(f"사업자 상태가 맞습니다: {_labels(matched, BUSINESS_STATUS_LABELS)}")
+        evaluation.matched_tags["business_status_tags"] = matched
+        return
+
+    evaluation.failed.append("사업자 대상 조건이 맞지 않습니다.")
+
+
+def _check_industry(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
+    eligibility = getattr(policy, "eligibility", None) or {}
+    condition = eligibility.get("industry_condition") or {}
+    mode = condition.get("mode")
+    policy_tags = set(policy.industry_tags or [])
+    include_tags = set(condition.get("include_tags") or policy_tags)
+    exclude_tags = set(condition.get("exclude_tags") or [])
+    user_tags = set(profile.industry_tags or [])
+
+    if mode == "unrestricted":
+        evaluation.reasons.append("업종 제한이 없는 정책입니다.")
+        return
+    if not user_tags and (include_tags or exclude_tags):
+        evaluation.warnings.append("사용자 업종이 없어 업종 적합도 확인이 필요합니다.")
+        evaluation.unknown_conditions.append("사용자 업종")
+        return
+
+    excluded = sorted(exclude_tags & user_tags)
+    if excluded:
+        if float(condition.get("confidence") or 0) >= 0.85:
+            evaluation.failed.append(
+                f"지원 제외 업종에 해당합니다: {_labels(excluded, INDUSTRY_LABELS)}"
+            )
+        else:
+            evaluation.warnings.append("지원 제외 업종일 가능성이 있어 공고 확인이 필요합니다.")
+            evaluation.unknown_conditions.append("업종 제외조건")
+        return
+
+    if not include_tags and exclude_tags and user_tags:
+        evaluation.reasons.append("확인된 제외 업종에는 해당하지 않습니다.")
+        return
+    if not include_tags:
+        evaluation.warnings.append("공고의 업종 조건이 명확하지 않습니다.")
+        evaluation.unknown_conditions.append("업종")
+        return
+
+    matched = sorted(include_tags & user_tags)
+    if matched:
         evaluation.reasons.append(f"업종과 관련된 정책입니다: {_labels(matched, INDUSTRY_LABELS)}")
-        evaluation.score += 18
         evaluation.matched_tags["industry_tags"] = matched
     else:
-        evaluation.warnings.append("업종 태그가 직접 일치하지 않아 세부 확인이 필요합니다.")
+        evaluation.soft_mismatches.append("업종 태그가 직접 일치하지 않는 유사 정책입니다.")
 
 
 def _check_employee_limit(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
@@ -456,8 +552,12 @@ def _check_employee_limit(policy: NormalizedPolicy, profile: RecommendationProfi
         label="직원수",
         unit="명",
         user_value=profile.employees,
-        operator=policy.employee_limit_operator,
-        limit_value=policy.employee_limit_value,
+        constraints=_numeric_constraints(
+            policy,
+            eligibility_key="employee_limit",
+            flat_operator=policy.employee_limit_operator,
+            flat_value=policy.employee_limit_value,
+        ),
         evaluation=evaluation,
     )
 
@@ -467,8 +567,12 @@ def _check_sales_limit(policy: NormalizedPolicy, profile: RecommendationProfileR
         label="연매출",
         unit="원",
         user_value=profile.annual_sales_krw,
-        operator=policy.sales_limit_operator,
-        limit_value=policy.sales_limit_amount_krw,
+        constraints=_numeric_constraints(
+            policy,
+            eligibility_key="sales_limit",
+            flat_operator=policy.sales_limit_operator,
+            flat_value=policy.sales_limit_amount_krw,
+        ),
         evaluation=evaluation,
     )
 
@@ -478,8 +582,12 @@ def _check_business_age_limit(policy: NormalizedPolicy, profile: RecommendationP
         label="업력",
         unit="년",
         user_value=profile.business_age_years,
-        operator=policy.business_age_limit_operator,
-        limit_value=policy.business_age_limit_value,
+        constraints=_numeric_constraints(
+            policy,
+            eligibility_key="business_age_limit",
+            flat_operator=policy.business_age_limit_operator,
+            flat_value=policy.business_age_limit_value,
+        ),
         evaluation=evaluation,
     )
 
@@ -488,37 +596,65 @@ def _check_numeric_limit(
     label: str,
     unit: str,
     user_value: NumberRangeInput | int | None,
-    operator: str | None,
-    limit_value: int | None,
+    constraints: NumericConstraintSet,
     evaluation: MatchEvaluation,
 ) -> None:
-    if limit_value is None or not operator:
+    if constraints.requires_review:
+        evaluation.warnings.append(f"{label} 조건이 분기·비율·예외를 포함해 추가 확인이 필요합니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
         return
-    bounds = _range_bounds(user_value)
-    if bounds is None:
+    if not constraints.constraints:
+        return
+    if user_value is None:
         evaluation.warnings.append(f"{label} 입력 정보가 없어 추가 확인이 필요합니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
         return
 
-    lower, upper = bounds
-    result = _compare_range(lower, upper, operator, limit_value)
     limit_operator_korean = {
         "<=": "이하",
         "<": "미만",
         ">=": "이상",
         ">": "초과"
-    }.get(operator, operator)
+    }
 
-    limit_text = f"{label} {limit_value:,}{unit} {limit_operator_korean}"
-    if result is True:
-        evaluation.reasons.append(f"{limit_text} 기준에 부합합니다.")
-        evaluation.score += 3
-    elif result is False:
-        # 수치 제한(근로자수, 매출액, 업력 등) 미충족 시 가차없이 배제하지 않고
-        # '확인 필요' 상태로 우회하여 예외 조항(예: 청년창업 특례 3년 등)이 있는지 AI가 상세 페이지에서 최종 판단하도록 유도합니다.
-        evaluation.warnings.append(f"공고상의 일반 {label} 기준({limit_value:,}{unit} {limit_operator_korean})과 차이가 있어 세부 확인이 필요합니다.")
-    else:
-        evaluation.warnings.append(f"공고상의 {limit_text} 조건과 일부 구간만 겹쳐 세부 확인이 필요합니다.")
-        evaluation.score += 1
+    evaluated: list[tuple[bool | None, str]] = []
+    for operator, limit_value in constraints.constraints:
+        operator_text = limit_operator_korean.get(operator, operator)
+        limit_text = f"{label} {limit_value:,}{unit} {operator_text}"
+        result = _compare_user_range(user_value, operator, limit_value)
+        evaluated.append((result, limit_text))
+
+    if constraints.logic == "any_of":
+        matched = [text for result, text in evaluated if result is True]
+        if matched:
+            evaluation.reasons.append(f"선택 조건 중 {' · '.join(matched)} 기준에 부합합니다.")
+            return
+        if all(result is False for result, _ in evaluated):
+            evaluation.failed.append(
+                f"선택 조건({' 또는 '.join(text for _, text in evaluated)}) 중 충족하는 기준이 없습니다."
+            )
+            return
+        evaluation.warnings.append(f"{label} 선택 조건의 충족 여부를 추가로 확인해야 합니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
+        return
+
+    failed_texts = [text for result, text in evaluated if result is False]
+    if failed_texts:
+        evaluation.failed.append(f"{failed_texts[0]} 기준에 맞지 않습니다.")
+        return
+    uncertain_texts = [text for result, text in evaluated if result is None]
+    matched_texts = [text for result, text in evaluated if result is True]
+
+    if uncertain_texts:
+        evaluation.warnings.append(f"공고상의 {' · '.join(uncertain_texts)} 조건과 입력 범위가 일부만 겹칩니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
+        return
+    if matched_texts:
+        evaluation.reasons.append(f"{' · '.join(matched_texts)} 기준에 부합합니다.")
 
 
 def _check_need_tags(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
@@ -528,23 +664,33 @@ def _check_need_tags(policy: NormalizedPolicy, profile: RecommendationProfileReq
     matched = sorted(policy_need_tags & set(profile.need_tags))
     if matched:
         evaluation.reasons.append(f"원하는 지원 유형과 맞습니다: {_labels(matched, NEED_TAG_LABELS)}")
-        evaluation.score += min(6, 3 * len(matched))
         evaluation.matched_tags["need_tags"] = matched
 
 
 def _check_apply_status(policy: NormalizedPolicy, evaluation: MatchEvaluation) -> None:
+    now = datetime.now()
+    if policy.status == "closed" or (policy.apply_end and policy.apply_end < now):
+        evaluation.failed.append("신청 기간이 종료된 정책입니다.")
+        return
+    if policy.apply_start and policy.apply_start > now:
+        evaluation.soft_mismatches.append(
+            f"{policy.apply_start.strftime('%Y-%m-%d')}부터 신청 가능한 예정 정책입니다."
+        )
+        return
+
     if policy.status == "open":
         evaluation.reasons.append("현재 접수 가능 상태입니다.")
-        evaluation.score += 4
     elif policy.status == "notice":
         evaluation.warnings.append("안내/공고 상태라 실제 신청 가능 여부 확인이 필요합니다.")
-        evaluation.score += 1
+        evaluation.unknown_conditions.append("신청 가능 상태")
+    elif not policy.status:
+        evaluation.warnings.append("현재 신청 가능 상태가 명확하지 않습니다.")
+        evaluation.unknown_conditions.append("신청 가능 상태")
 
     if policy.apply_end:
-        days_left = (policy.apply_end - datetime.now()).days
+        days_left = (policy.apply_end - now).days
         if 0 <= days_left <= 14:
             evaluation.reasons.append(f"마감까지 {days_left}일 남았습니다.")
-            evaluation.score += 3
 
 
 def classify_need_tags(policy: NormalizedPolicy) -> list[str]:
@@ -554,6 +700,7 @@ def classify_need_tags(policy: NormalizedPolicy) -> list[str]:
             policy.title,
             policy.summary,
             policy.support_type,
+            policy.support_content,
         ]
         if value
     )
@@ -569,91 +716,181 @@ def _rank_policy(
     evaluation: MatchEvaluation,
     profile: RecommendationProfileRequest,
     vector_similarity: float | None,
-) -> float:
-    score = evaluation.score
+) -> tuple[float, dict[str, float]]:
+    policy_need_tags = set(classify_need_tags(policy))
+    requested_need_tags = set(profile.need_tags)
+    if not requested_need_tags:
+        need_match = 20.0
+    else:
+        need_match = 35.0 * len(policy_need_tags & requested_need_tags) / len(requested_need_tags)
+
+    policy_industries = set(policy.industry_tags or [])
+    user_industries = set(profile.industry_tags or [])
+    if policy_industries and user_industries and policy_industries & user_industries:
+        industry_relevance = 20.0
+    elif not policy_industries:
+        industry_relevance = 12.0
+    else:
+        industry_relevance = 2.0
+
+    now = datetime.now()
+    if policy.apply_start and policy.apply_start > now:
+        actionability = 4.0
+    elif policy.status == "open":
+        actionability = 15.0
+    elif policy.status == "notice":
+        actionability = 7.0
+    else:
+        actionability = 5.0
+    if policy.apply_end:
+        days_left = (policy.apply_end - now).days
+        if 0 <= days_left <= 30:
+            actionability += 5.0
+        elif days_left > 30:
+            actionability += 3.0
+
+    data_quality = max(
+        2.0,
+        15.0 - (3.0 * len(evaluation.unknown_conditions)) - (2.0 * len(evaluation.soft_mismatches)),
+    )
+    semantic = 5.0 if vector_similarity is None else max(0.0, min(vector_similarity, 1.0)) * 10.0
+
+    breakdown = {
+        "need_match": round(need_match, 3),
+        "industry_relevance": round(industry_relevance, 3),
+        "actionability": round(min(actionability, 20.0), 3),
+        "data_quality": round(data_quality, 3),
+        "semantic_similarity": round(semantic, 3),
+    }
+    return min(sum(breakdown.values()), 100.0), breakdown
+
+
+def _confidence(evaluation: MatchEvaluation) -> str:
     if evaluation.status == "eligible":
-        score += 5
-    elif evaluation.status == "needs_review":
-        score += 1
-
-    if vector_similarity is not None:
-        score += max(0.0, min(vector_similarity, 1.0)) * 15
-
-    if policy.source == "sbiz24":
-        score += 1
-    if profile.need_tags and not evaluation.matched_tags.get("need_tags"):
-        score -= 2
-
-    return max(0.0, min(score, 100.0))
-
-
-def _confidence(evaluation: MatchEvaluation, vector_similarity: float | None) -> str:
-    if evaluation.status == "eligible" and len(evaluation.warnings) == 0:
         return "high"
-    if vector_similarity is not None and vector_similarity >= 0.75 and len(evaluation.warnings) <= 2:
-        return "medium"
-    if evaluation.status == "eligible":
+    if evaluation.status == "needs_review" and len(evaluation.unknown_conditions) <= 2:
         return "medium"
     return "low"
 
 
-def _compare_range(lower: int, upper: int, operator: str, limit_value: int) -> bool | None:
+def _result_sort_key(item: RecommendationResult) -> tuple[int, float]:
+    return MATCH_STATUS_PRIORITY[item.match_status], -item.rank_score
+
+
+def _compare_user_range(
+    value: NumberRangeInput | int,
+    operator: str,
+    limit_value: int,
+) -> bool | None:
+    lower, upper = _range_bounds(value)
     if operator == "<=":
-        if upper <= limit_value:
+        if upper is not None and upper <= limit_value:
             return True
-        if lower > limit_value:
+        if lower is not None and lower > limit_value:
             return False
         return None
     if operator == "<":
-        if upper < limit_value:
+        if upper is not None and upper < limit_value:
             return True
-        if lower >= limit_value:
+        if lower is not None and lower >= limit_value:
             return False
         return None
     if operator == ">=":
-        if lower >= limit_value:
+        if lower is not None and lower >= limit_value:
             return True
-        if upper < limit_value:
+        if upper is not None and upper < limit_value:
             return False
         return None
     if operator == ">":
-        if lower > limit_value:
+        if lower is not None and lower > limit_value:
             return True
-        if upper <= limit_value:
+        if upper is not None and upper <= limit_value:
             return False
         return None
     return None
 
 
-def _range_bounds(value: NumberRangeInput | int | None) -> tuple[int, int] | None:
-    if value is None:
+def _numeric_constraints(
+    policy: NormalizedPolicy,
+    *,
+    eligibility_key: str,
+    flat_operator: str | None,
+    flat_value: int | None,
+) -> NumericConstraintSet:
+    eligibility = policy.eligibility or {}
+    raw = eligibility.get(eligibility_key)
+    result = NumericConstraintSet()
+    if isinstance(raw, dict):
+        result.logic = raw.get("logic") if raw.get("logic") in {"all_of", "any_of"} else "all_of"
+        result.requires_review = bool(raw.get("requires_manual_review"))
+        result.review_reason = raw.get("review_reason")
+        if result.requires_review:
+            return result
+        min_value = raw.get("min_amount_krw", raw.get("min_value"))
+        max_value = raw.get("max_amount_krw", raw.get("max_value"))
+        min_operator = raw.get("min_operator")
+        max_operator = raw.get("max_operator")
+        parsed_min = _coerce_int(min_value)
+        parsed_max = _coerce_int(max_value)
+        if parsed_min is not None and min_operator in {">", ">="}:
+            result.constraints.append((min_operator, parsed_min))
+        if parsed_max is not None and max_operator in {"<", "<="}:
+            result.constraints.append((max_operator, parsed_max))
+
+        if not result.constraints and isinstance(raw.get("constraints"), list):
+            for item in raw["constraints"]:
+                if not isinstance(item, dict):
+                    continue
+                operator = item.get("operator")
+                value = _coerce_int(item.get("value"))
+                if value is not None and operator in {"<", "<=", ">", ">="}:
+                    result.constraints.append((operator, value))
+
+    if not result.constraints and flat_value is not None and flat_operator in {"<", "<=", ">", ">="}:
+        result.constraints.append((flat_operator, int(flat_value)))
+    return result
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
         return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _range_bounds(value: NumberRangeInput | int | None) -> tuple[int | None, int | None]:
+    if value is None:
+        return None, None
     if isinstance(value, int):
         return value, value
-    lower = value.min if value.min is not None else value.max
-    upper = value.max if value.max is not None else value.min
-    if lower is None or upper is None:
-        return None
-    return lower, upper
+    return value.min, value.max
 
 
 def _range_text(value: NumberRangeInput | int | None, unit: str) -> str | None:
-    bounds = _range_bounds(value)
-    if bounds is None:
+    lower, upper = _range_bounds(value)
+    if lower is None and upper is None:
         return None
-    lower, upper = bounds
     if lower == upper:
         return f"{lower:,}{unit}"
+    if lower is None:
+        return f"{upper:,}{unit} 이하"
+    if upper is None:
+        return f"{lower:,}{unit} 이상"
     return f"{lower:,}~{upper:,}{unit}"
 
 
 def _money_range_text(value: NumberRangeInput | int | None) -> str | None:
-    bounds = _range_bounds(value)
-    if bounds is None:
+    lower, upper = _range_bounds(value)
+    if lower is None and upper is None:
         return None
-    lower, upper = bounds
     if lower == upper:
         return _money_text(lower)
+    if lower is None:
+        return f"{_money_text(upper)} 이하"
+    if upper is None:
+        return f"{_money_text(lower)} 이상"
     return f"{_money_text(lower)}~{_money_text(upper)}"
 
 
@@ -663,13 +900,6 @@ def _money_text(value: int) -> str:
     if value >= 10_000:
         return f"{value / 10_000:g}만원"
     return f"{value:,}원"
-
-
-def _expand_business_status(tags: set[str]) -> set[str]:
-    expanded = set(tags)
-    for tag in tags:
-        expanded.update(BUSINESS_STATUS_COMPATIBILITY.get(tag, set()))
-    return expanded
 
 
 def _labels(tags: list[str] | set[str], label_map: dict[str, str]) -> str:

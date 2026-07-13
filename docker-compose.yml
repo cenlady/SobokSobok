@@ -108,6 +108,9 @@ services:
       REC_OLLAMA_MODEL: ${REC_OLLAMA_MODEL:-bge-m3:latest}
       REC_OLLAMA_BASE_URL: ${REC_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       REC_OPENAI_MODEL: ${REC_OPENAI_MODEL:-text-embedding-3-small}
+      NORMALIZE_LLM_MODEL: ${NORMALIZE_LLM_MODEL:-qwen2.5:1.5b}
+      NORMALIZE_LLM_TIMEOUT_SECONDS: ${NORMALIZE_LLM_TIMEOUT_SECONDS:-30}
+      NORMALIZE_LLM_MAX_CONTEXT_CHARS: ${NORMALIZE_LLM_MAX_CONTEXT_CHARS:-800}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ./backend/storage:/app/storage
