@@ -11,7 +11,7 @@ from app.services.normalization.documents import _document_name_key
 
 
 DOCUMENT_LLM_CACHE_KEY = "required_documents"
-DOCUMENT_LLM_PROMPT_VERSION = "document-candidate-v3"
+DOCUMENT_LLM_PROMPT_VERSION = "document-candidate-v4"
 MAX_DOCUMENT_LLM_CANDIDATES = 8
 
 

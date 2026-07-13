@@ -8,6 +8,7 @@ from app.jobs.crawl_policy_sources_loop import _needs_post_extraction_refresh
 from app.jobs.evaluate_normalization_quality import evaluate_normalization_quality
 from app.services.normalization.documents import (
     _extract_required_documents_from_attachment,
+    _required_documents_from_gov24,
 )
 from app.services.normalization.field_extractors import _extract_industry_condition
 from app.services.normalization.metadata import INDUSTRY_KEYWORDS
@@ -120,6 +121,142 @@ class RequiredDocumentQualityTests(unittest.TestCase):
         documents = _extract_required_documents_from_attachment(text, "sbiz24")
 
         self.assertEqual([item["name"] for item in documents], ["통장사본"])
+
+    def test_document_variants_are_deduplicated_by_logical_name(self) -> None:
+        text = """
+        제출서류
+        사업자등록증명원(공고일 기준 1개월 이내)
+        사업자등록증명
+        사업자등록증(사본)
+        사업자등록증 1부
+        부가가치세과세표준증명원
+        부가가치세과세표준증명
+        건강보험(월별) 사업장 가입자별 부과현황(내역)
+        건강보험 월별 사업장 가입자별 부과내역
+        """
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual(
+            [item["name"] for item in documents],
+            [
+                "사업자등록증명원(공고일 기준 1개월 이내)",
+                "사업자등록증(사본)",
+                "부가가치세과세표준증명원",
+                "건강보험(월별) 사업장 가입자별 부과현황(내역)",
+            ],
+        )
+
+    def test_video_explanation_is_not_counted_as_a_document(self) -> None:
+        text = """
+        신청서류
+        사장님 영상 설명서
+        소상공인 사업계획서[참고용]
+        교육 수료 및 수료증 발급 대상이 대표자 명의여야 함
+        우측 중간 수료증 출력
+        여성기업 확인서
+        """
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual([item["name"] for item in documents], ["여성기업 확인서"])
+
+    def test_public_mydata_financial_fields_are_not_documents(self) -> None:
+        text = """
+        제출서류
+        신청서
+        업체 소개서
+        교육신청 자가진단서
+        사업자등록증 또는 사업자등록증명원
+        중소기업(소상공인)확인서
+        대리수강 증빙자료
+        공공 마이데이터 본인정보 제공항목
+        첨부서류 7. 증명내용 표준대차대조표일반법인 표준대차대조표 좌
+        첨부서류 8. 증명내용 표준대차대조표일반법인 표준대차대조표 우
+        첨부서류 11. 증명내용 표준손익계산서일반법인 표준손익계산서 좌
+        첨부서류 15. 증명내용 부속명세서 제조원가명세서
+        """
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual(
+            [item["name"] for item in documents],
+            [
+                "신청서",
+                "사업자등록증",
+                "사업자등록증명원",
+                "중소기업(소상공인)확인서",
+                "대리수강 증빙자료",
+            ],
+        )
+
+    def test_standard_financial_statement_document_is_preserved(self) -> None:
+        text = "제출서류\n표준재무제표증명원"
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual([item["name"] for item in documents], ["표준재무제표증명원"])
+
+    def test_operational_manual_evidence_is_not_applicant_documents(self) -> None:
+        text = """
+        제출서류
+        신청서
+        사업자등록증명원
+        증빙서류
+        공통 사항
+        ▪ 사업비 전용 통장 입출금내역 사본
+        강사비
+        ▪ 본인 서명이 있는 인건비 지급내역서
+        ▪ 이체확인증
+        """
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual(
+            [item["name"] for item in documents],
+            ["신청서", "사업자등록증명원"],
+        )
+
+    def test_condition_sentences_and_reference_tables_are_not_documents(self) -> None:
+        text = """
+        제출서류
+        ‣ 도시형집적지구 내 지정 업종으로 사업자를 영위하는 소공인
+        □ 사업자등록증명원
+        별첨8] 주업종 영업 사실 확인서 작성하여
+        2026년 적용기준 중위소득 150% 이하 및 건강보험료 본인부담금 판정기준표
+        건강보험료 납부 기준
+        사업자등록사실여부사실증명원 마이데이터 수신불가
+        """
+
+        documents = _extract_required_documents_from_attachment(text, "sbiz24")
+
+        self.assertEqual(
+            [item["name"] for item in documents],
+            ["사업자등록증명원", "사업자등록사실여부사실증명원"],
+        )
+
+    def test_gov24_staff_verifiable_fields_are_not_applicant_documents(self) -> None:
+        class Detail:
+            required_docs = """
+            ○ 신청인 제출서류(공통)
+            - 사업자등록증명원
+            - 사업장 임대차계약서(사본)
+            ○ 직원 확인가능 서류(신청인 미제출 서류)
+            - 소득금액증명
+            - 표준재무제표증명(개인)
+            - 건강보험자격득실확인서
+            ○ 신청인 제출서류(법인사업자 추가서류)
+            - 법인등기사항전부증명
+            """
+            required_docs_by_official = "해당없음"
+            identity_required_docs = "해당없음"
+
+        documents = _required_documents_from_gov24(Detail())
+
+        self.assertEqual(
+            [item["name"] for item in documents],
+            ["사업자등록증명원", "사업장 임대차계약서(사본)", "법인등기사항전부증명"],
+        )
 
 
 class RegionQualityTests(unittest.TestCase):

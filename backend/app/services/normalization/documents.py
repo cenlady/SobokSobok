@@ -105,6 +105,14 @@ _DOCUMENT_NAME_TOKENS = (
     "허가증",
     "면허증",
     "견적서",
+    "추천서",
+    "보고서",
+    "수료증",
+    "자격증",
+    "영수증",
+    "내역서",
+    "명부",
+    "사진",
     "등본",
     "초본",
     "사본",
@@ -218,6 +226,8 @@ def _extract_required_documents_from_attachment(
     """
     values: list[dict[str, Any]] = []
     for requirement_text in _requirement_sections_from_attachment(value):
+        if _is_internal_requirement_section(requirement_text):
+            continue
         values.extend(
             _document_items_from_text(
                 requirement_text,
@@ -241,7 +251,11 @@ def _extract_required_document_llm_candidates(
         if (section.get("document_type") or _document_type_for_title(section.get("title"))) == "requirements"
     ]
     for attachment_text in attachment_texts or []:
-        candidate_texts.extend(_requirement_sections_from_attachment(attachment_text))
+        candidate_texts.extend(
+            section
+            for section in _requirement_sections_from_attachment(attachment_text)
+            if not _is_internal_requirement_section(section)
+        )
 
     values: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -323,6 +337,32 @@ def _document_items_from_text(
     return values
 
 
+_INTERNAL_REQUIREMENT_MARKERS = (
+    "사업비",
+    "교육기관",
+    "e나라도움",
+    "정산",
+    "강사비",
+    "상담비",
+    "실습재료비",
+    "임차사용료",
+    "수행보고서",
+    "집행증빙",
+    "참여인력",
+)
+
+
+def _is_internal_requirement_section(value: str | None) -> bool:
+    """Reject operational/settlement sections from applicant requirements."""
+    lines = _plain_text_lines(value)
+    if not lines:
+        return False
+    # A requirement section can bleed into a later appendix or sanctions table.
+    # Only the opening context decides whether the section belongs to operations.
+    opening = "\n".join(lines[:12])
+    return any(marker in opening for marker in _INTERNAL_REQUIREMENT_MARKERS)
+
+
 def _split_document_names(value: str) -> list[str]:
     text_value = _clean_text(value)
     if not text_value:
@@ -349,10 +389,16 @@ def _normalize_document_name(value: str | None) -> str | None:
     if not text_value:
         return None
     text_value = text_value.lstrip("# ")
-    text_value = re.sub(r"^\[(?:서식|별지|붙임)\s*\d+[^]]*]\s*", "", text_value)
-    text_value = re.sub(r"^(?:유효기간\s*내|최근\s*\d+개월\s*이내\s*발급(?:분)?)\s*", "", text_value)
     text_value = re.sub(
-        r"^(?:[-–—*※○◦▪▶]+|[①-⑳]+|\(\d{1,2}\)|\d{1,2}[.)]|[가-하][.)])\s*",
+        r"^\[?(?:서식|별지|붙임|별첨)\s*\d+[^]]*\]?\s*",
+        "",
+        text_value,
+    )
+    text_value = re.sub(r"^(?:유효기간\s*내|최근\s*\d+개월\s*이내\s*발급(?:분)?)\s*", "", text_value)
+    text_value = re.sub(r"^\(?최근\s*\d+개월\s*이내\)?\s*", "", text_value)
+    text_value = re.sub(r"^(?:또는|및)\s*", "", text_value)
+    text_value = re.sub(
+        r"^(?:[-–—*※○◦▪▶►‣❍□]+|[①-⑳]+|\(\d{1,2}\)|\d{1,2}[.)]|[가-하][.)])\s*",
         "",
         text_value,
     )
@@ -367,6 +413,11 @@ def _normalize_document_name(value: str | None) -> str | None:
             text_value = name_part
     text_value = re.sub(r"^.*?인\s*경우(?:에는?)?\s*", "", text_value)
     text_value = re.sub(r"^(?:이\s*)?경우\s*", "", text_value)
+    text_value = re.sub(
+        r"\s+(?:공공\s*)?마이데이터\s+(?:수신|조회)\s*(?:불가|불가능).*$",
+        "",
+        text_value,
+    )
     text_value = re.sub(r"\s+(?:제출|필요|제출\s*필수)$", "", text_value)
     text_value = re.sub(r"\s+등\s*(?:필요|제출)?$", "", text_value)
     text_value = re.sub(r"\s+등\s+\d{4}년.*$", "", text_value)
@@ -421,6 +472,30 @@ def _is_unsafe_document_name(value: str) -> bool:
     if text_value.count("(") != text_value.count(")"):
         return True
     if re.search(r"<[^>]*>|(?:th|td|tr)>|https?://|www\.", text_value, re.IGNORECASE):
+        return True
+    # 공공 마이데이터의 표준재무제표증명 응답 필드가 표에서 분리되면
+    # ``증명내용 표준대차대조표...`` 같은 문자열이 제출서류명처럼 보인다.
+    # 이 값들은 신청자가 제출하는 문서가 아니라 API 응답의 세부 필드명이다.
+    if text_value.startswith(("증명내용", "부속명세서")):
+        return True
+    if re.search(
+        r"(?:표준대차대조표|표준손익계산서|표준원가명세서|"
+        r"제조원가명세서|공사원가명세서|임대원가명세서|분양원가명세서|"
+        r"운송원가명세서|기타원가명세서).*(?:좌|우|개인\s*[12]|법인)",
+        text_value,
+    ):
+        return True
+    if re.search(
+        r"(?:영위하는|작성하여|제출하여|확인할\s*수|판정기준표|"
+            r"중위소득|본인부담금|건강보험료\s*납부\s*기준)",
+        text_value,
+    ):
+        return True
+    if re.search(r"(?:사장님\s*)?(?:영상|동영상)\s*설명서", text_value):
+        return True
+    if re.search(r"수료증.*(?:발급\s*대상|출력|명의)", text_value):
+        return True
+    if "판정기준표" in text_value or "중위소득" in text_value:
         return True
     weak_tokens = (
         "자세한",
@@ -544,7 +619,7 @@ def _required_documents_from_gov24(detail: Gov24ServiceDetail | None) -> list[di
         return []
     values = []
     for source, text_value in (
-        ("required_docs", detail.required_docs),
+        ("required_docs", _gov24_applicant_required_text(detail.required_docs)),
         ("required_docs_by_official", detail.required_docs_by_official),
         ("identity_required_docs", detail.identity_required_docs),
     ):
@@ -557,6 +632,27 @@ def _required_documents_from_gov24(detail: Gov24ServiceDetail | None) -> list[di
             )
         )
     return _dedupe_document_items(values)
+
+
+def _gov24_applicant_required_text(value: str | None) -> str | None:
+    """Keep Gov24 applicant-upload sections, excluding staff-verifiable fields."""
+    lines = _plain_text_lines(value)
+    if not lines:
+        return value
+
+    kept: list[str] = []
+    skip_section = False
+    for line in lines:
+        compact = re.sub(r"\s+", "", line)
+        is_section_heading = line.lstrip().startswith(("○", "ㅇ", "◦"))
+        if "직원확인가능서류" in compact or "신청인미제출서류" in compact:
+            skip_section = True
+            continue
+        if skip_section and is_section_heading:
+            skip_section = False
+        if not skip_section:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def _dedupe_document_items(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -573,4 +669,21 @@ def _dedupe_document_items(values: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _document_name_key(value: str | None) -> str:
     text_value = (_clean_text(value) or "").replace("・", "·").replace("ㆍ", "·")
-    return re.sub(r"\s+", "", text_value).lower()
+    if not text_value:
+        return ""
+    # 같은 제출물을 발급 시점·원본/사본·수량·별지 표기만 달리해 반복하는
+    # 공고가 많다. 표시명은 보존하되 dedupe key에서만 이런 부가 표기를 제거한다.
+    text_value = re.sub(r"\[?별지\s*\d+[^\]]*\]?", "", text_value)
+    text_value = re.sub(
+        r"\([^)]*(?:사본|원본|공고일|신청일|발급|유효|이내|기간|\d+\s*시간\s*이상)[^)]*\)",
+        "",
+        text_value,
+    )
+    text_value = re.sub(r"(?:각\s*)?\d+\s*부\b", "", text_value)
+    text_value = text_value.replace("(내역)", "")
+    text_value = text_value.replace("부과현황", "부과내역")
+    text_value = text_value.replace("부과내역내역", "부과내역")
+    text_value = re.sub(r"(?:8개\s*은행권|은행\s*발급)", "", text_value)
+    text_value = text_value.replace("증명원", "증명")
+    text_value = re.sub(r"[^0-9A-Za-z가-힣]", "", text_value)
+    return text_value.lower()
