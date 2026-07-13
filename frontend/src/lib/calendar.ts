@@ -1,4 +1,9 @@
-import type { SavedPolicy } from '../types'
+// 날짜 유틸.
+//
+// 구글 캘린더 등록은 더 이상 여기서 URL을 조립하지 않는다. 예전에는 구글의 "일정 추가"
+// 화면을 새 탭으로 여는 TEMPLATE URL을 만들었고, 사용자가 그 탭에서 '저장'을 한 번 더
+// 눌러야 실제로 등록됐다. 이제 서버가 Calendar API로 직접 등록한다.
+// → components/AddToCalendarButton.tsx, POST /api/v1/calendar/event
 
 export function localDateKey(date = new Date()) {
   const year = date.getFullYear()
@@ -21,30 +26,4 @@ export function addDays(dateKey: string, days: number) {
   const date = new Date(`${dateKey}T00:00:00`)
   date.setDate(date.getDate() + days)
   return localDateKey(date)
-}
-
-function googleDate(value: string) {
-  return value.replaceAll('-', '')
-}
-
-export function buildGoogleCalendarUrl(policy: SavedPolicy) {
-  const start = toDateKey(policy.apply_end) || toDateKey(policy.apply_start) || localDateKey()
-  const end = addDays(start, 1)
-  const details = [
-    policy.summary,
-    policy.organization ? `기관: ${policy.organization}` : null,
-    policy.support_type ? `지원유형: ${policy.support_type}` : null,
-    policy.apply_url ? `신청 페이지: ${policy.apply_url}` : null,
-  ]
-    .filter(Boolean)
-    .join('\n')
-
-  const params = new URLSearchParams({
-    action: 'TEMPLATE',
-    text: `[소복소복] ${policy.title}`,
-    dates: `${googleDate(start)}/${googleDate(end)}`,
-    details,
-  })
-
-  return `https://calendar.google.com/calendar/render?${params.toString()}`
 }

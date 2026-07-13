@@ -9,8 +9,9 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
-import { buildGoogleCalendarUrl, formatDate, toDateKey } from '../lib/calendar'
+import { formatDate, toDateKey } from '../lib/calendar'
 import { ddayLabel, statusMeta, TODAY } from '../lib/format'
 import { useSavedPolicies } from '../lib/storage'
 import type { BenefitStatus, SavedPolicy } from '../types'
@@ -282,21 +283,14 @@ function DeadlineCard({ policy }: { policy: SavedPolicy }) {
         <p className="mt-1 text-sm text-brand-dark/50">
           {formatDate(policy.apply_start)} ~ {formatDate(policy.apply_end)}
         </p>
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="mt-3 grid grid-cols-2 items-start gap-2">
           <button
             onClick={() => navigate(`/policy/${policy.policy_id}`)}
             className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
           >
             상세보기 <ArrowRight size={13} />
           </button>
-          <button
-            onClick={() =>
-              window.open(buildGoogleCalendarUrl(policy), '_blank', 'noopener,noreferrer')
-            }
-            className="flex items-center justify-center gap-1 rounded-xl bg-accent-soft px-3 py-2 text-xs font-bold text-accent"
-          >
-            캘린더 추가
-          </button>
+          <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
         </div>
       </div>
     </article>

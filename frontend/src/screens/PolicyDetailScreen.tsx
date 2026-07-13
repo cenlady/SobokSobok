@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ArrowRight,
   Bot,
@@ -16,15 +16,15 @@ import {
   Download,
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import AddToCalendarButton from '../components/AddToCalendarButton'
 import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
-import { buildGoogleCalendarUrl, formatDate } from '../lib/calendar'
+import { formatDate } from '../lib/calendar'
 import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
 import type {
   PolicyDetailResponse,
   RecommendationResult,
-  SavedPolicy,
   RecommendationExplanationResponse,
 } from '../types'
 
@@ -129,12 +129,6 @@ export default function PolicyDetailScreen() {
     }
   }, [policyId, policy, profile, profileLoading, recommendation])
 
-  // 구글 캘린더 URL을 만들기 위한 최소 정보. 저장 여부와 무관하게 정책만 있으면 만들 수 있다.
-  const calendarPolicy = useMemo(
-    () => (policy ? toSavedPolicy(policy) : null),
-    [policy],
-  )
-
   const isSaved = policy ? has(policy.id) : false
 
   const toggleSave = async () => {
@@ -145,11 +139,6 @@ export default function PolicyDetailScreen() {
     } finally {
       setSavePending(false)
     }
-  }
-
-  const openGoogleCalendar = () => {
-    if (!calendarPolicy) return
-    window.open(buildGoogleCalendarUrl(calendarPolicy), '_blank', 'noopener,noreferrer')
   }
 
   if (loading) {
@@ -350,12 +339,7 @@ export default function PolicyDetailScreen() {
           >
             <Bot size={17} /> AI 상담
           </button>
-          <button
-            onClick={openGoogleCalendar}
-            className="flex items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-brand-dark shadow-card active:scale-[0.99]"
-          >
-            <CalendarDays size={17} /> 구글 캘린더
-          </button>
+          <AddToCalendarButton policyId={policy.id} applyEnd={policy.apply_end} variant="full" />
         </div>
         <button
           disabled={!policy.apply_url}
@@ -368,21 +352,6 @@ export default function PolicyDetailScreen() {
       <BottomNav />
     </div>
   )
-}
-
-/** 구글 캘린더 URL 생성에 필요한 필드만 추린다. 저장은 이제 서버가 하므로 정책 스냅샷은 만들지 않는다. */
-function toSavedPolicy(policy: PolicyDetailResponse): SavedPolicy {
-  return {
-    policy_id: policy.id,
-    title: policy.title,
-    summary: policy.summary,
-    organization: policy.organization,
-    support_type: policy.support_type,
-    apply_start: policy.apply_start,
-    apply_end: policy.apply_end,
-    apply_url: policy.apply_url,
-    saved_at: new Date().toISOString(),
-  }
 }
 
 function StateScreen({ label }: { label: string }) {
