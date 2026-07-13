@@ -78,7 +78,12 @@ class FavoriteItem(BaseModel):
     summary: str | None = None
     organization: str | None = None
     support_type: str | None = None
+    region_scope: str
+    sido: str | None = None
+    sigungu: str | None = None
+    status: str | None = None
     apply_start: datetime | None = None
     apply_end: datetime | None = None
     apply_url: str | None = None
     saved_at: datetime
+    categories: list[str] = Field(default_factory=list)

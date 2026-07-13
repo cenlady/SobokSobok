@@ -10,6 +10,7 @@ from app.core.deps import get_current_user
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.user import Favorite, User
 from app.schemas.user import FavoriteCreateRequest, FavoriteItem
+from app.services.recommend import classify_need_tags
 
 router = APIRouter()
 
@@ -38,10 +39,15 @@ def list_favorites(
             summary=policy.summary,
             organization=policy.organization,
             support_type=policy.support_type,
+            region_scope=policy.region_scope,
+            sido=policy.sido,
+            sigungu=policy.sigungu,
+            status=policy.status,
             apply_start=policy.apply_start,
             apply_end=policy.apply_end,
             apply_url=policy.apply_url,
             saved_at=favorite.created_at,
+            categories=classify_need_tags(policy),
         )
         for favorite, policy in rows
     ]
@@ -75,10 +81,15 @@ def add_favorite(
         summary=policy.summary,
         organization=policy.organization,
         support_type=policy.support_type,
+        region_scope=policy.region_scope,
+        sido=policy.sido,
+        sigungu=policy.sigungu,
+        status=policy.status,
         apply_start=policy.apply_start,
         apply_end=policy.apply_end,
         apply_url=policy.apply_url,
         saved_at=favorite.created_at,
+        categories=classify_need_tags(policy),
     )
 
 
