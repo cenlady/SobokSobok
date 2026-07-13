@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import BottomNav from '../components/BottomNav'
+import { API_BASE_URL, apiFetch } from '../lib/api'
 import { buildGoogleCalendarUrl, formatDate } from '../lib/calendar'
 import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
@@ -27,17 +28,16 @@ import type {
   RecommendationExplanationResponse,
 } from '../types'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
-
 export default function PolicyDetailScreen() {
   const { policyId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
+  // 추천 탭에서 넘어온 경우에만 채워진다. 없어도 서버가 설명을 만들어주므로 필수는 아니다.
   const recommendation = (location.state as { recommendation?: RecommendationResult } | null)
     ?.recommendation
   const { has, toggle } = useSavedPolicies()
   const [savePending, setSavePending] = useState(false)
-  const { profile } = useProfile()
+  const { profile, loading: profileLoading } = useProfile()
   const [policy, setPolicy] = useState<PolicyDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -50,11 +50,7 @@ export default function PolicyDetailScreen() {
     setLoading(true)
     setError(null)
 
-    fetch(`${API_BASE_URL}/api/v1/policies/normalized/${policyId}`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<PolicyDetailResponse>
-      })
+    apiFetch<PolicyDetailResponse>(`/api/v1/policies/normalized/${policyId}`)
       .then((data) => {
         if (!ignore) setPolicy(data)
       })
@@ -72,55 +68,56 @@ export default function PolicyDetailScreen() {
 
   useEffect(() => {
     if (!policyId || !policy) return
+    // 프로필은 서버에서 비동기로 온다. 빈 프로필로 요청하면 엉뚱한 설명이 나온다.
+    if (profileLoading) return
+
     let ignore = false
     setExplaining(true)
 
-    fetch(`${API_BASE_URL}/api/v1/recommend/explain/${policyId}`, {
+    // apiFetch를 써야 JWT가 붙는다. /recommend는 인증 가드가 걸려 있어
+    // 날것의 fetch로는 401이 나고 설명이 통째로 사라진다.
+    apiFetch<RecommendationExplanationResponse>(`/api/v1/recommend/explain/${policyId}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(buildRecommendationRequest(profile)),
+      json: buildRecommendationRequest(profile),
     })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        return response.json() as Promise<RecommendationExplanationResponse>
-      })
       .then((data) => {
         if (!ignore) setExplanation(data)
       })
       .catch((err) => {
-        console.error('Explanation fetch failed, fallback to local:', err)
+        console.error('추천 설명 생성 실패, 로컬 폴백 사용:', err)
         if (ignore) return
-        
-        const fallbackSummary = recommendation?.match_status === 'eligible'
-          ? '지원 조건 충족률이 높은 추천 정책입니다.'
-          : '세부 조건 확인이 필요한 추천 정책입니다.'
-        const fallbackStrengths = recommendation?.reasons && recommendation.reasons.length > 0
+
+        const fallbackSummary =
+          recommendation?.match_status === 'eligible'
+            ? '지원 조건 충족률이 높은 추천 정책입니다.'
+            : '세부 조건 확인이 필요한 정책입니다.'
+        const fallbackStrengths = recommendation?.reasons?.length
           ? recommendation.reasons
           : ['사용자 업종 및 사업자 정보에 부합하는 지원 정책입니다.']
-        const fallbackAspects = recommendation?.warnings && recommendation.warnings.length > 0
+        const fallbackAspects = recommendation?.warnings?.length
           ? recommendation.warnings
           : ['상세 공고의 세부 자격 조건을 다시 한번 확인해 보세요.']
-        
-        const fallbackNext = []
+
+        const fallbackNext: string[] = []
         if (policy.apply_end) {
-          const daysLeft = Math.ceil((new Date(policy.apply_end).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24))
-          if (daysLeft >= 0) {
-            fallbackNext.push(`마감일(${formatDate(policy.apply_end)})까지 ${daysLeft}일 남았으니 늦지 않게 신청해 보세요.`)
-          } else {
-            fallbackNext.push('신청 기간이 마감되었는지 확인해 보세요.')
-          }
+          const daysLeft = Math.ceil(
+            (new Date(policy.apply_end).getTime() - Date.now()) / 86_400_000,
+          )
+          fallbackNext.push(
+            daysLeft >= 0
+              ? `마감일(${formatDate(policy.apply_end)})까지 ${daysLeft}일 남았으니 늦지 않게 신청해 보세요.`
+              : '신청 기간이 마감되었는지 확인해 보세요.',
+          )
         } else {
           fallbackNext.push('신청 기한을 확인해 보세요.')
         }
-        fallbackNext.push("우측 하단의 'AI 상담' 버튼을 눌러 상세 지원 서류와 자격을 물어보세요.")
+        fallbackNext.push('챗봇 탭에서 상세 지원 서류와 자격을 물어보세요.')
 
         setExplanation({
           summary: fallbackSummary,
           strengths: fallbackStrengths,
           aspects_to_check: fallbackAspects,
-          next_actions: fallbackNext
+          next_actions: fallbackNext,
         })
       })
       .finally(() => {
@@ -130,7 +127,7 @@ export default function PolicyDetailScreen() {
     return () => {
       ignore = true
     }
-  }, [policyId, policy, profile, recommendation])
+  }, [policyId, policy, profile, profileLoading, recommendation])
 
   // 구글 캘린더 URL을 만들기 위한 최소 정보. 저장 여부와 무관하게 정책만 있으면 만들 수 있다.
   const calendarPolicy = useMemo(

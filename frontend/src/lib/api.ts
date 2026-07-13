@@ -2,7 +2,8 @@
 // 모든 요청에 JWT를 붙이고, 401이면 토큰을 버리고 로그인으로 보낸다.
 // 각 화면이 fetch를 직접 부르면 이 두 가지를 매번 잊게 된다.
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// 첨부파일 다운로드처럼 <a href>로 직접 거는 경로도 있어 밖에서 쓸 수 있게 열어둔다.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
 const TOKEN_KEY = 'sobok.token'
 

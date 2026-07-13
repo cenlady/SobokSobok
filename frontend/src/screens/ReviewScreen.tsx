@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
@@ -21,6 +21,33 @@ const POLL_INTERVAL_MS = 2500
 // 그래서 정책 선택을 기본값으로 두고, '정책 없이'는 명시적으로 고르게 한다.
 const NO_POLICY = '__none__'
 
+// 검토는 서버에서 도는데 upload_id를 컴포넌트 state에만 두면, 탭을 옮기는 순간
+// 돌아올 길이 사라진다. 진행 중인 검토를 찾아갈 수 있게 id를 남겨둔다.
+const ACTIVE_REVIEW_KEY = 'sobok.activeReview'
+
+interface ActiveReview {
+  uploadId: string
+  hasMatching: boolean
+}
+
+function readActiveReview(): ActiveReview | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_REVIEW_KEY)
+    return raw ? (JSON.parse(raw) as ActiveReview) : null
+  } catch {
+    return null
+  }
+}
+
+function writeActiveReview(value: ActiveReview | null) {
+  try {
+    if (value) localStorage.setItem(ACTIVE_REVIEW_KEY, JSON.stringify(value))
+    else localStorage.removeItem(ACTIVE_REVIEW_KEY)
+  } catch {
+    // 저장 실패해도 이번 화면에서는 폴링이 계속되므로 치명적이지 않다.
+  }
+}
+
 type Phase = 'idle' | 'running' | 'done'
 
 /** 서버의 review_status를 화면의 3단계로 접는다. */
@@ -40,13 +67,17 @@ export default function ReviewScreen() {
   const [policyId, setPolicyId] = useState<string>(preselected ?? '')
   const [file, setFile] = useState<File | null>(null)
 
-  const [phase, setPhase] = useState<Phase>('idle')
+  // 진행 중인 검토가 있으면 마운트 시 바로 그 상태로 복원한다(아래 effect에서).
+  const restored = useRef(readActiveReview())
+  const [phase, setPhase] = useState<Phase>(restored.current ? 'running' : 'idle')
   const [status, setStatus] = useState<ReviewStatus>('queued')
-  const [hasMatching, setHasMatching] = useState(false)
+  const [hasMatching, setHasMatching] = useState(restored.current?.hasMatching ?? false)
   const [review, setReview] = useState<ReviewResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const timer = useRef<number | null>(null)
+  // 언마운트 후에도 예약된 tick이 setState를 부르지 않게 막는다.
+  const alive = useRef(true)
 
   // 저장한 정책이 로드되면 첫 정책을 기본 선택한다(정책 선택을 기본 경로로 만들기 위해).
   useEffect(() => {
@@ -55,11 +86,47 @@ export default function ReviewScreen() {
     }
   }, [policies, policyId, preselected])
 
+  const poll = useCallback((uploadId: string) => {
+    const tick = async () => {
+      if (!alive.current) return
+      try {
+        const data = await apiFetch<ReviewResponse>(`/api/v1/review/${uploadId}`)
+        if (!alive.current) return
+
+        setStatus(data.review_status)
+
+        if (data.review_status === 'done' || data.review_status === 'failed') {
+          // 끝났으니 더 이상 '진행 중인 검토'가 아니다. 다음에 들어오면 결과가 아니라
+          // 새 업로드 화면을 봐야 한다.
+          writeActiveReview(null)
+          setReview(data)
+          setPhase('done')
+          return
+        }
+        timer.current = window.setTimeout(tick, POLL_INTERVAL_MS)
+      } catch (e) {
+        if (!alive.current) return
+        // 검토 기록을 못 찾으면(삭제 등) 붙잡고 있어봐야 소용없다.
+        writeActiveReview(null)
+        setError(e instanceof Error ? e.message : '검토 상태를 확인하지 못했습니다.')
+        setPhase('idle')
+      }
+    }
+    tick()
+  }, [])
+
+  // 다른 탭에 다녀와도 진행 중이던 검토를 다시 붙잡는다.
+  // 서버에서는 계속 돌고 있었으므로, upload_id만 알면 이어서 볼 수 있다.
   useEffect(() => {
+    alive.current = true
+    const active = restored.current
+    if (active) poll(active.uploadId)
+
     return () => {
+      alive.current = false
       if (timer.current) window.clearTimeout(timer.current)
     }
-  }, [])
+  }, [poll])
 
   const submit = async () => {
     if (!file) return
@@ -79,6 +146,10 @@ export default function ReviewScreen() {
         body: form,
       })
       setHasMatching(started.has_requirement_matching)
+      writeActiveReview({
+        uploadId: started.upload_id,
+        hasMatching: started.has_requirement_matching,
+      })
       poll(started.upload_id)
     } catch (e) {
       setError(e instanceof Error ? e.message : '검토 요청에 실패했습니다.')
@@ -86,28 +157,10 @@ export default function ReviewScreen() {
     }
   }
 
-  const poll = (uploadId: string) => {
-    const tick = async () => {
-      try {
-        const data = await apiFetch<ReviewResponse>(`/api/v1/review/${uploadId}`)
-        setStatus(data.review_status)
-
-        if (data.review_status === 'done' || data.review_status === 'failed') {
-          setReview(data)
-          setPhase('done')
-          return
-        }
-        timer.current = window.setTimeout(tick, POLL_INTERVAL_MS)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '검토 상태를 확인하지 못했습니다.')
-        setPhase('idle')
-      }
-    }
-    tick()
-  }
-
   const reset = () => {
     if (timer.current) window.clearTimeout(timer.current)
+    writeActiveReview(null)
+    restored.current = null
     setPhase('idle')
     setFile(null)
     setReview(null)

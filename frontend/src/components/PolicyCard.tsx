@@ -98,7 +98,13 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
 
       <button
         type="button"
-        onClick={() => navigate(`/policy/${policy.policy_id}`)}
+        onClick={() =>
+          navigate(`/policy/${policy.policy_id}`, {
+            // 추천 탭에서 온 경우 이유·경고를 함께 넘긴다. 서버 설명 생성이 실패했을 때
+            // 상세 화면이 이걸로 폴백한다. 다른 탭에서는 undefined라 폴백만 일반 문구가 된다.
+            state: policy.match_status ? { recommendation: policy } : undefined,
+          })
+        }
         className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-brand-dark py-2.5 text-sm font-semibold text-white active:scale-[0.99]"
       >
         상세보기 <ArrowRight size={15} />
