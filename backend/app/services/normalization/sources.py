@@ -554,7 +554,16 @@ def _record_progress(progress: dict[str, int], payload: dict) -> None:
         progress[key] += 1
     if industry.get("mode") in {"restricted", "unrestricted"}:
         progress["industry_known"] += 1
-    progress["llm_cached_fields"] += len(eligibility.get("llm_cache") or {})
+    progress["llm_cached_fields"] += _llm_cache_entry_count(
+        eligibility.get("llm_cache") or {}
+    )
+
+
+def _llm_cache_entry_count(cache: dict) -> int:
+    count = len([key for key in cache if key != "required_documents"])
+    document_cache = cache.get("required_documents") or {}
+    document_entries = document_cache.get("entries") or {}
+    return count + len(document_entries)
 
 
 def _log_progress(

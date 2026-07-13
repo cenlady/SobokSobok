@@ -18,6 +18,7 @@ from app.services.normalization.common import (
 )
 from app.services.normalization.documents import (
     _document_name_key,
+    _extract_required_document_llm_candidates,
     _extract_required_documents,
     _extract_required_documents_from_attachment,
     _first_section_text_by_type,
@@ -31,6 +32,9 @@ from app.services.normalization.field_extractors import (
     _extract_money_conditions,
     _extract_sales_limit,
     _tags_from_keyword_map,
+)
+from app.services.normalization.llm_documents import (
+    _resolve_required_documents_with_llm_cache,
 )
 from app.services.normalization.llm_limits import _resolve_limits_with_llm_cache
 from app.services.normalization.regions import _extract_region_metadata
@@ -94,6 +98,7 @@ def _source_metadata(
     industry_condition = _extract_industry_condition(eligibility_text, INDUSTRY_KEYWORDS)
     industry_tags = industry_condition["include_tags"]
     required_documents = _extract_required_documents(sections, source)
+    label = _first_text(title, source) or source
 
     if attachment_texts:
         for att_text in attachment_texts:
@@ -101,6 +106,19 @@ def _source_metadata(
                 required_documents,
                 _extract_required_documents_from_attachment(att_text, source),
             )
+
+    document_candidates = _extract_required_document_llm_candidates(
+        sections,
+        attachment_texts,
+    )
+    llm_documents, document_llm_cache = _resolve_required_documents_with_llm_cache(
+        document_candidates,
+        source=source,
+        source_hash=source_hash,
+        existing_llm_cache=existing_llm_cache,
+        log_label=f"{source} '{label[:30]}'",
+    )
+    required_documents = _merge_unique_document_items(required_documents, llm_documents)
 
     application_text = _join_text(
         [
@@ -125,14 +143,14 @@ def _source_metadata(
         "sales_limit": _extract_sales_limit(eligibility_text),
         "business_age_limit": _extract_business_age_limit(eligibility_text),
     }
-    label = _first_text(title, source) or source
-    limits, llm_cache = _resolve_limits_with_llm_cache(
+    limits, limit_llm_cache = _resolve_limits_with_llm_cache(
         eligibility_text,
         parsed_limits,
         source_hash=source_hash,
         existing_llm_cache=existing_llm_cache,
         log_label=f"{source} '{label[:30]}'",
     )
+    llm_cache = {**document_llm_cache, **limit_llm_cache}
 
     return {
         "region": _extract_region_metadata(

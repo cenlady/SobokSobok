@@ -128,7 +128,8 @@ _DOCUMENT_NAME_TOKENS = (
 )
 
 _REQUIREMENT_HEADING_RE = re.compile(
-    r"^(?:제출|구비|신청|필수|증빙|필요|첨부)\s*(?:서류|자료|양식)"
+    r"^(?:(?:제출|구비|신청|필수|증빙|필요|첨부|준비)\s*(?:서류|자료|양식)|"
+    r"신청\s*시\s*제출(?:할|하는)?\s*(?:서류|자료|양식))"
     r"(?:\s*(?:목록|안내))?\s*[:：]?\s*(.*)$"
 )
 
@@ -215,11 +216,60 @@ def _extract_required_documents_from_attachment(
     that entire text turns ordinary prose into fake document names, so a heading is a
     required boundary here.
     """
+    values: list[dict[str, Any]] = []
+    for requirement_text in _requirement_sections_from_attachment(value):
+        values.extend(
+            _document_items_from_text(
+                requirement_text,
+                source=source,
+                confidence=0.85,
+                extraction_method="attachment_requirement_section",
+            )
+        )
+
+    return _dedupe_document_items(values)
+
+
+def _extract_required_document_llm_candidates(
+    sections: list[dict[str, str | None]],
+    attachment_texts: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Return grounded, unresolved names from explicit requirement sections."""
+    candidate_texts = [
+        section.get("text")
+        for section in sections
+        if (section.get("document_type") or _document_type_for_title(section.get("title"))) == "requirements"
+    ]
+    for attachment_text in attachment_texts or []:
+        candidate_texts.extend(_requirement_sections_from_attachment(attachment_text))
+
+    values: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for candidate_text in candidate_texts:
+        context = _clean_text(_strip_markup(candidate_text))
+        if not context:
+            continue
+        for line in _split_requirement_lines(candidate_text):
+            for raw_name in _split_document_names(line):
+                name = _normalize_document_name(raw_name)
+                if not name or not _is_weak_document_name(name):
+                    continue
+                if not _is_safe_llm_document_candidate(name):
+                    continue
+                key = _document_name_key(name)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                values.append({"name": name, "context": context})
+    return values
+
+
+def _requirement_sections_from_attachment(value: str | None) -> list[str]:
     lines = _plain_text_lines(value)
     if not lines:
         return []
 
-    values: list[dict[str, Any]] = []
+    sections: list[str] = []
     index = 0
     while index < len(lines):
         match = _REQUIREMENT_HEADING_RE.match(lines[index])
@@ -242,16 +292,10 @@ def _extract_required_documents_from_attachment(
             section_lines.append(line)
             index += 1
 
-        values.extend(
-            _document_items_from_text(
-                "\n".join(section_lines),
-                source=source,
-                confidence=0.85,
-                extraction_method="attachment_requirement_section",
-            )
-        )
-
-    return _dedupe_document_items(values)
+        section_text = "\n".join(section_lines)
+        if section_text:
+            sections.append(section_text)
+    return sections
 
 
 def _document_items_from_text(
@@ -330,6 +374,47 @@ def _normalize_document_name(value: str | None) -> str | None:
 
 
 def _is_weak_document_name(value: str) -> bool:
+    return _is_unsafe_document_name(value) or not _contains_document_token(value)
+
+
+def _is_safe_llm_document_candidate(value: str) -> bool:
+    text_value = _clean_text(value) or ""
+    if _is_unsafe_document_name(text_value) or len(text_value) > 70:
+        return False
+    if len(text_value.split()) > 12:
+        return False
+    if re.search(r"(?:해야|하여|하고|바라|가능|필요|경우|대상|확인)$", text_value):
+        return False
+    return bool(re.search(r"[가-힣A-Za-z0-9]", text_value)) and _looks_like_document_noun(
+        text_value
+    )
+
+
+def _looks_like_document_noun(value: str) -> bool:
+    text_value = re.sub(r"\s*\([^)]{0,30}\)\s*$", "", value).strip()
+    if text_value.endswith(("세무서", "지원센터", "센터장", "에서")):
+        return False
+    document_suffixes = (
+        "서",
+        "증",
+        "증빙",
+        "명부",
+        "대장",
+        "내역",
+        "사진",
+        "도면",
+        "원본",
+        "포트폴리오",
+        "카탈로그",
+        "브로슈어",
+        "캡처본",
+        "캡쳐본",
+        "동의",
+    )
+    return text_value.endswith(document_suffixes)
+
+
+def _is_unsafe_document_name(value: str) -> bool:
     text_value = _clean_text(value) or ""
     if len(text_value) < 2 or len(text_value) > 90:
         return True
@@ -386,6 +471,8 @@ def _is_weak_document_name(value: str) -> bool:
         "공통서류 제출",
         "공통 서류 제출",
         "폐업하지 않은",
+        "신청 시 제출",
+        "제출할 자료",
     )
     if any(token in text_value for token in weak_tokens):
         return True
@@ -397,7 +484,7 @@ def _is_weak_document_name(value: str) -> bool:
         return True
     if re.search(r"(?:합니다|됩니다|있습니다|바랍니다|하세요|십시오)[.!?]?$", text_value):
         return True
-    return not any(token in text_value for token in _DOCUMENT_NAME_TOKENS)
+    return False
 
 
 def _split_requirement_lines(value: str | None) -> list[str]:
