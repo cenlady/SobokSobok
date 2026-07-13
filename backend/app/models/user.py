@@ -186,9 +186,31 @@ USER_LEGACY_CLEANUP_SQL = [
 ]
 
 
-def ensure_user_schema(bind) -> None:
+# 이미 존재하는 users 테이블에 컬럼을 덧붙이는 패치. create_all() '이후'에 실행한다.
+#
+# users는 구글 OAuth 컬럼이 모델에 추가되기 전에 이미 만들어져 있었고, create_all()은
+# 기존 테이블에 컬럼을 추가해주지 않는다. 그래서 이 컬럼들이 DB에 존재한 적이 없고,
+# 콜백이 user.google_access_token에 대입하는 순간 UndefinedColumn으로 죽었다.
+# (구글 로그인이 한 번도 동작한 적 없었던 이유)
+USER_SCHEMA_SQL = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_access_token VARCHAR(255)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_refresh_token VARCHAR(255)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_token_expires_at TIMESTAMPTZ",
+    "ALTER TABLE users ALTER COLUMN hashed_password DROP NOT NULL",
+]
+
+
+def ensure_user_legacy_cleanup(bind) -> None:
     """구 user_profiles 테이블을 정리한다. 반드시 create_all() 이전에 호출할 것."""
     if not settings.database_url.startswith("postgresql"):
         return
     for statement in USER_LEGACY_CLEANUP_SQL:
+        bind.execute(text(statement))
+
+
+def ensure_user_schema(bind) -> None:
+    """users 테이블에 누락된 컬럼을 덧붙인다. create_all() 이후에 호출할 것."""
+    if not settings.database_url.startswith("postgresql"):
+        return
+    for statement in USER_SCHEMA_SQL:
         bind.execute(text(statement))

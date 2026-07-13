@@ -14,7 +14,7 @@ from app.models.review import ReviewUpload, ReviewVector
 from app.services.extract_attachments import _run_kordoc, _is_unsupported_name
 
 
-def review_uploaded_document(
+def create_review_upload(
     db: Session,
     *,
     file_bytes: bytes,
@@ -22,51 +22,56 @@ def review_uploaded_document(
     content_type: str | None,
     policy: NormalizedPolicy | None = None,
     user_id: int | None = None,
+) -> ReviewUpload:
+    """업로드 파일을 저장하고 queued 상태의 ReviewUpload 행을 만든다.
+
+    검토 본체(run_review_pipeline)는 백그라운드에서 돈다. API는 이 행의 id만 즉시
+    돌려주고, 프론트는 그 id로 진행 상태를 폴링한다.
+    """
+    return _persist_upload(db, file_bytes, original_file_name, content_type, policy, user_id)
+
+
+def run_review_pipeline(
+    db: Session,
+    upload: ReviewUpload,
+    policy: NormalizedPolicy | None = None,
     embedding_model: EmbeddingModel | None = None,
-) -> tuple[ReviewUpload, list[dict]]:
-    """업로드 서류를 검토하고 결과를 저장해 반환한다. (하이브리드)
+) -> ReviewUpload:
+    """업로드 서류를 검토하고 결과를 저장한다. (하이브리드)
 
     흐름:
-      1. 업로드 파일 저장 + ReviewUpload 행 생성
-      2. kordoc으로 텍스트 추출
-      3. policy가 있으면: 업로드 청킹→임베딩→review_vectors 요건 대조(RAG)
-      4. exaone3.5 LLM이 [서류 원문 + 요건 대조 근거]로 종합 진단
-         - 자체 검토(오타·빈칸·형식) + 요건 대조(누락 서류)
+      1. kordoc으로 텍스트 추출                      (review_status=extracting)
+      2. policy가 있으면 청킹→임베딩→요건 대조(RAG)   (review_status=matching)
+      3. exaone3.5가 [서류 원문 + 요건 대조 근거]로 종합 진단 (review_status=diagnosing)
 
-    policy가 없으면 요건 대조는 건너뛰고 서류 자체 검토만 수행한다.
-    반환: (ReviewUpload, requirement_matches)
+    policy가 없으면 요건 대조를 건너뛰고 서류 자체 검토만 한다.
+
+    각 단계 진입 시 즉시 커밋한다. 커밋하지 않으면 트랜잭션이 끝나지 않아
+    폴링하는 쪽에서는 계속 queued만 보인다(진행률이 멈춘 것처럼 보인다).
     """
-    upload = _persist_upload(db, file_bytes, original_file_name, content_type, policy, user_id)
+    # 1) 텍스트 추출
+    _advance(db, upload, "extracting")
 
-    # 텍스트 추출
-    if _is_unsupported_name(original_file_name, content_type):
-        upload.extraction_status = "unsupported"
-        upload.diagnosis = _fallback_result("파일 형식을 읽을 수 없어 진단하지 못했습니다.")
-        db.commit()
-        return upload, []
+    if _is_unsupported_name(upload.original_file_name, upload.content_type):
+        return _fail(db, upload, "unsupported", "파일 형식을 읽을 수 없어 진단하지 못했습니다.")
 
     try:
         extracted = _run_kordoc(upload.storage_path)
     except Exception as exc:  # noqa: BLE001
-        upload.extraction_status = "failed"
-        upload.diagnosis = _fallback_result(f"서류 텍스트 추출에 실패했습니다: {exc}")
-        db.commit()
-        return upload, []
+        return _fail(db, upload, "failed", f"서류 텍스트 추출에 실패했습니다: {exc}")
 
     extracted = (extracted or "").strip()
     if not extracted:
-        upload.extraction_status = "empty"
-        upload.diagnosis = _fallback_result("서류에서 텍스트를 찾지 못했습니다(스캔 이미지일 수 있음).")
-        db.commit()
-        return upload, []
+        return _fail(db, upload, "empty", "서류에서 텍스트를 찾지 못했습니다(스캔 이미지일 수 있음).")
 
     upload.extracted_text = extracted
     upload.extraction_status = "success"
     db.commit()
 
-    # policy가 있으면 RAG 요건 대조
+    # 2) policy가 있으면 RAG 요건 대조
     matches: list[dict] = []
     if policy is not None:
+        _advance(db, upload, "matching")
         embedder = embedding_model or OllamaEmbeddingModel(
             model_name=settings.REVIEW_EMBEDDING_MODEL,
             base_url=settings.OLLAMA_BASE_URL,
@@ -79,10 +84,33 @@ def review_uploaded_document(
         chunk_vectors = embedder.embed_documents(chunks)
         matches = _match_requirements(db, policy, chunk_vectors)
 
-    # LLM 종합 진단
+    # 3) LLM 종합 진단 (파이프라인에서 가장 오래 걸리는 단계)
+    _advance(db, upload, "diagnosing")
     upload.diagnosis = _diagnose_with_llm(extracted, policy, matches)
+    upload.requirement_matches = matches
+    upload.review_status = "done"
     db.commit()
-    return upload, matches
+    return upload
+
+
+def _advance(db: Session, upload: ReviewUpload, stage: str) -> None:
+    """진행 단계를 기록하고 즉시 커밋한다. 폴링하는 쪽이 볼 수 있어야 한다."""
+    upload.review_status = stage
+    db.commit()
+
+
+def _fail(db: Session, upload: ReviewUpload, extraction_status: str, message: str) -> ReviewUpload:
+    """검토를 실패로 마감한다.
+
+    extraction_status에 '왜' 실패했는지를 남기고(unsupported/empty/failed),
+    review_status는 'failed'로 마감한다. 둘은 서로 다른 질문에 답한다.
+    """
+    upload.extraction_status = extraction_status
+    upload.review_status = "failed"
+    upload.diagnosis = _fallback_result(message)
+    upload.requirement_matches = []
+    db.commit()
+    return upload
 
 
 def _persist_upload(
@@ -107,6 +135,7 @@ def _persist_upload(
         content_type=content_type,
         file_size=len(file_bytes),
         extraction_status="pending",
+        review_status="queued",
     )
     db.add(upload)
     db.commit()
@@ -198,12 +227,20 @@ def _build_prompt(extracted: str, policy: NormalizedPolicy | None, matches: list
 
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 쓰지 마세요.
 해당 항목이 없으면 빈 배열([])로 두세요.
+
+★ missing_fields와 missing_documents를 절대 혼동하지 마세요.
+  - missing_fields    = "이 서류 안에서" 비어 있는 칸 (예: 연락처, 서명, 날짜)
+                        → 사용자가 이 서류에 직접 써 넣으면 해결되는 것
+  - missing_documents = "이 서류와 별개로" 따로 발급받아 제출해야 하는 다른 서류
+                        (예: 소득금액증명, 법인인감증명서)
+                        → 기관에서 발급받아야 하는 것. 서류명은 여기에만 넣으세요.
+
 {{
   "document_type": "서류로 추정되는 유형(예: 사업계획서, 지원신청서)",
   "typos": ["오타/맞춤법: '원문' → '제안'"],
-  "missing_fields": ["비어 있거나 빠진 항목"],
+  "missing_fields": ["이 서류 안의 빈칸만 (서류명은 넣지 말 것)"],
   "format_issues": ["형식/양식 오류"],
-  "missing_documents": ["정책 요구 서류 중 누락된 것 (요건 대조 시)"],
+  "missing_documents": ["따로 제출해야 하는 누락 서류명 (요건 대조 시)"],
   "improvement_points": ["보완이 필요한 점"],
   "overall": "1~2문장 종합 진단"
 }}"""
