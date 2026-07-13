@@ -220,6 +220,10 @@ BUSINESS_STATUS_KEYWORDS = {
     "traditional_market": ("전통시장", "상인회", "상점가"),
 }
 
+# LLM 프롬프트나 응답 계약을 바꿀 때 반드시 올립니다.
+# 원문이 같아도 이 값이 달라지면 기존 캐시를 사용하지 않습니다.
+NORMALIZE_LLM_PROMPT_VERSION = "limit-structure-v1"
+
 
 def normalize_policy_sources_once() -> dict[str, int | bool]:
     print("[normalizer] Starting policy normalization job...", flush=True)
@@ -294,6 +298,8 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
         sections = _sections_from_sbiz24_text(row.content_text)
         metadata = _source_metadata(
             source="sbiz24",
+            source_hash=row.content_hash,
+            existing_llm_cache=_llm_cache_from_policy(existing_policy),
             title=row.title,
             category=row.category,
             target_text=row.target,
@@ -351,6 +357,7 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
                 "money_conditions": metadata["money_conditions"],
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
+                "llm_cache": metadata["llm_cache"],
                 "extraction_method": "rule",
                 "deadline_type": _classify_deadline_type(_join_text([row.apply_start, row.apply_end, row.status])),
             },
@@ -403,6 +410,8 @@ def _normalize_semas(db: Session) -> dict[str, int]:
         sections = _sections_from_semas(row)
         metadata = _source_metadata(
             source="semas",
+            source_hash=row.content_hash,
+            existing_llm_cache=_llm_cache_from_policy(existing_policy),
             title=row.program_name,
             category=row.category,
             target_text=None,
@@ -464,6 +473,7 @@ def _normalize_semas(db: Session) -> dict[str, int]:
                 "money_conditions": metadata["money_conditions"],
                 "application_methods": metadata["application_methods"],
                 "contacts": metadata["contacts"],
+                "llm_cache": metadata["llm_cache"],
                 "extraction_method": "rule",
                 "deadline_text": deadline_text,
                 "deadline_type": _classify_deadline_type(deadline_text),
@@ -499,6 +509,21 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
     for list_row in list_rows:
         detail = db.get(Gov24ServiceDetail, list_row.service_id)
         condition = db.get(Gov24SupportCondition, list_row.service_id)
+        source_hash = _make_hash(
+            [
+                list_row.content_hash,
+                detail.content_hash if detail else None,
+                condition.content_hash if condition else None,
+            ]
+        )
+        existing_policy = (
+            db.query(NormalizedPolicy)
+            .filter(
+                NormalizedPolicy.source == "gov24",
+                NormalizedPolicy.source_pk == list_row.service_id,
+            )
+            .first()
+        )
         docs_required = _required_documents_from_gov24(detail)
         target_text = _first_text(
             detail.support_target if detail else None,
@@ -573,31 +598,18 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         gov_emp = _extract_employee_limit(gov_eligibility_blob)
         gov_sales = _extract_sales_limit(gov_eligibility_blob)
         gov_age = _extract_business_age_limit(gov_eligibility_blob)
-        gov_limits = {
+        parsed_limits = {
             "employee_limit": gov_emp,
             "sales_limit": gov_sales,
             "business_age_limit": gov_age,
         }
-        llm_fields = _limit_fields_requiring_llm(gov_eligibility_blob, gov_limits)
-        complex_fields: list[str] = []
-        for field in llm_fields:
-            complex_payload = _complex_limit_payload(field, gov_eligibility_blob)
-            if complex_payload is not None:
-                gov_limits[field] = complex_payload
-                complex_fields.append(field)
-        if complex_fields:
-            print(
-                f"  [LLM Structure] gov24 '{list_row.service_name[:30]}' 복합 조건 구조화 요청: {complex_fields}",
-                flush=True,
-            )
-        if llm_fields and settings.REC_OLLAMA_BASE_URL:
-            print(f"  [Ollama] gov24 '{list_row.service_name[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
-            llm_limits = _extract_limits_via_ollama(gov_eligibility_blob, llm_fields)
-            for field in llm_fields:
-                if llm_limits.get(field) is not None:
-                    gov_limits[field] = llm_limits[field]
-            filled = [field for field in llm_fields if gov_limits[field] is not None]
-            print(f"  [Ollama] gov24 '{list_row.service_name[:30]}' 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+        gov_limits, llm_cache = _resolve_limits_with_llm_cache(
+            gov_eligibility_blob,
+            parsed_limits,
+            source_hash=source_hash,
+            existing_llm_cache=_llm_cache_from_policy(existing_policy),
+            log_label=f"gov24 '{list_row.service_name[:30]}'",
+        )
 
         gov_emp = gov_limits["employee_limit"]
         gov_sales = gov_limits["sales_limit"]
@@ -611,15 +623,9 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "employee_limit": gov_emp,
             "sales_limit": gov_sales,
             "business_age_limit": gov_age,
+            "llm_cache": llm_cache,
         }
         filter_columns = _filter_columns_from_metadata(gov_metadata)
-        source_hash = _make_hash(
-            [
-                list_row.content_hash,
-                detail.content_hash if detail else None,
-                condition.content_hash if condition else None,
-            ]
-        )
         payload = {
             "source": "gov24",
             "source_pk": list_row.service_id,
@@ -666,6 +672,7 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
                 "age": condition_payload["age"],
                 "income_ranges": condition_payload["income_ranges"],
                 "target_traits": condition_payload["target_traits"],
+                "llm_cache": gov_metadata["llm_cache"],
                 "extraction_method": "gov24_detail_and_condition_codes",
                 "deadline_type": _classify_deadline_type(application_deadline),
             },
@@ -982,6 +989,8 @@ def _sections_from_semas(row: PolicyProgramPage) -> list[dict[str, str | None]]:
 def _source_metadata(
     *,
     source: str,
+    source_hash: str,
+    existing_llm_cache: dict[str, Any] | None,
     title: str | None,
     category: str | None,
     target_text: str | None,
@@ -1050,30 +1059,19 @@ def _source_metadata(
         if match:
             target_val = match.group(1).strip()
 
-    limits = {
+    parsed_limits = {
         "employee_limit": _extract_employee_limit(eligibility_text),
         "sales_limit": _extract_sales_limit(eligibility_text),
         "business_age_limit": _extract_business_age_limit(eligibility_text),
     }
-    llm_fields = _limit_fields_requiring_llm(eligibility_text, limits)
-    complex_fields: list[str] = []
-    for field in llm_fields:
-        complex_payload = _complex_limit_payload(field, eligibility_text)
-        if complex_payload is not None:
-            limits[field] = complex_payload
-            complex_fields.append(field)
-    if complex_fields:
-        label = _first_text(title, source) or source
-        print(f"  [LLM Structure] {source} '{label[:30]}' 복합 조건 구조화 요청: {complex_fields}", flush=True)
-    if llm_fields and settings.REC_OLLAMA_BASE_URL:
-        label = _first_text(title, source) or source
-        print(f"  [Ollama] {source} '{label[:30]}' 규칙 판정 보완: {llm_fields}", flush=True)
-        llm_limits = _extract_limits_via_ollama(eligibility_text, llm_fields)
-        for field in llm_fields:
-            if llm_limits.get(field) is not None:
-                limits[field] = llm_limits[field]
-        filled = [field for field in llm_fields if limits[field] is not None]
-        print(f"  [Ollama] {source} '{label[:30]}' 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+    label = _first_text(title, source) or source
+    limits, llm_cache = _resolve_limits_with_llm_cache(
+        eligibility_text,
+        parsed_limits,
+        source_hash=source_hash,
+        existing_llm_cache=existing_llm_cache,
+        log_label=f"{source} '{label[:30]}'",
+    )
 
     return {
         "region": _extract_region_metadata(region_text if region_text is not None else eligibility_text),
@@ -1089,6 +1087,7 @@ def _source_metadata(
         "money_conditions": _extract_money_conditions(text_blob),
         "application_methods": _extract_application_methods(application_text or text_blob),
         "contacts": _extract_contacts(_join_text([contacts_text, text_blob])),
+        "llm_cache": llm_cache,
     }
 
 
@@ -2477,6 +2476,154 @@ def _complex_limit_payload(field: str, text_value: str) -> dict[str, Any] | None
     return result
 
 
+def _llm_cache_from_policy(policy: NormalizedPolicy | None) -> dict[str, Any] | None:
+    if policy is None or not isinstance(policy.eligibility, dict):
+        return None
+    cache = policy.eligibility.get("llm_cache")
+    return cache if isinstance(cache, dict) else None
+
+
+def _llm_cache_context(text_value: str, field: str) -> str:
+    return _select_limit_context(text_value, [field])
+
+
+def _read_llm_cache_entry(
+    existing_cache: dict[str, Any] | None,
+    *,
+    field: str,
+    source_hash: str,
+    context: str,
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None]:
+    if not isinstance(existing_cache, dict):
+        return False, None, None
+    entry = existing_cache.get(field)
+    if not isinstance(entry, dict) or "result" not in entry:
+        return False, None, None
+    if entry.get("source_hash") != source_hash:
+        return False, None, None
+    if entry.get("context_hash") != _make_hash(context):
+        return False, None, None
+    if entry.get("model") != settings.NORMALIZE_LLM_MODEL:
+        return False, None, None
+    if entry.get("prompt_version") != NORMALIZE_LLM_PROMPT_VERSION:
+        return False, None, None
+    result = entry.get("result")
+    if result is not None and not isinstance(result, dict):
+        return False, None, None
+    return True, result, dict(entry)
+
+
+def _make_llm_cache_entry(
+    *,
+    source_hash: str,
+    context: str,
+    result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "source_hash": source_hash,
+        "context_hash": _make_hash(context),
+        "model": settings.NORMALIZE_LLM_MODEL,
+        "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
+        "result": result,
+    }
+
+
+def _apply_llm_limit_result(
+    limits: dict[str, dict[str, Any] | None],
+    *,
+    field: str,
+    result: dict[str, Any] | None,
+    complex_payload: dict[str, Any] | None,
+) -> None:
+    if result is None:
+        return
+    if complex_payload is not None and not result.get("requires_manual_review"):
+        limits[field] = complex_payload
+        return
+    limits[field] = result
+
+
+def _resolve_limits_with_llm_cache(
+    text_value: str,
+    parsed_limits: dict[str, dict[str, Any] | None],
+    *,
+    source_hash: str,
+    existing_llm_cache: dict[str, Any] | None,
+    log_label: str,
+) -> tuple[dict[str, dict[str, Any] | None], dict[str, Any]]:
+    limits = dict(parsed_limits)
+    llm_fields = _limit_fields_requiring_llm(text_value, limits)
+    if not llm_fields:
+        return limits, {}
+
+    complex_payloads: dict[str, dict[str, Any] | None] = {}
+    complex_fields: list[str] = []
+    for field in llm_fields:
+        complex_payload = _complex_limit_payload(field, text_value)
+        complex_payloads[field] = complex_payload
+        if complex_payload is not None:
+            limits[field] = complex_payload
+            complex_fields.append(field)
+    if complex_fields:
+        print(
+            f"  [LLM Structure] {log_label} 복합 조건 구조화 요청: {complex_fields}",
+            flush=True,
+        )
+
+    llm_cache: dict[str, Any] = {}
+    cache_hits: list[str] = []
+    pending_fields: list[str] = []
+    for field in llm_fields:
+        context = _llm_cache_context(text_value, field)
+        hit, cached_result, cache_entry = _read_llm_cache_entry(
+            existing_llm_cache,
+            field=field,
+            source_hash=source_hash,
+            context=context,
+        )
+        if not hit or cache_entry is None:
+            pending_fields.append(field)
+            continue
+        llm_cache[field] = cache_entry
+        cache_hits.append(field)
+        _apply_llm_limit_result(
+            limits,
+            field=field,
+            result=cached_result,
+            complex_payload=complex_payloads[field],
+        )
+
+    if cache_hits:
+        print(f"  [LLM Cache] {log_label} 결과 재사용: {cache_hits}", flush=True)
+
+    if pending_fields and settings.REC_OLLAMA_BASE_URL:
+        print(f"  [Ollama] {log_label} 규칙 판정 보완: {pending_fields}", flush=True)
+        cacheable_fields: set[str] = set()
+        llm_limits = _extract_limits_via_ollama(
+            text_value,
+            pending_fields,
+            cacheable_fields=cacheable_fields,
+        )
+        for field in pending_fields:
+            result = llm_limits.get(field)
+            _apply_llm_limit_result(
+                limits,
+                field=field,
+                result=result,
+                complex_payload=complex_payloads[field],
+            )
+            if field in cacheable_fields:
+                llm_cache[field] = _make_llm_cache_entry(
+                    source_hash=source_hash,
+                    context=_llm_cache_context(text_value, field),
+                    result=result,
+                )
+        filled = [field for field in pending_fields if limits[field] is not None]
+        print(f"  [Ollama] {log_label} 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+
+    return limits, llm_cache
+
+
 def _convert_llm_limit(
     field: str,
     raw_value: Any,
@@ -2505,6 +2652,7 @@ def _convert_llm_limit(
             "source_text": evidence,
             "extraction_method": "ollama_structure",
             "model": model_name,
+            "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
             "requires_manual_review": True,
             "logic": logic if logic in {"all_of", "any_of"} else "any_of",
             "review_reason": classification,
@@ -2549,6 +2697,7 @@ def _convert_llm_limit(
         "source_text": evidence,
         "extraction_method": "ollama_llm",
         "model": model_name,
+        "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
     }
     if field == "sales_limit":
         result["min_amount_krw"] = min_value
@@ -2564,9 +2713,25 @@ def _convert_llm_limit(
     return result
 
 
+def _is_explicit_llm_no_match(field: str, raw_value: Any, context: str) -> bool:
+    if not isinstance(raw_value, dict):
+        return False
+    classification = (_as_text(raw_value.get("classification")) or "").lower()
+    if classification not in {"unrelated", "none", "not_eligibility"}:
+        return False
+    evidence = _clean_text(_as_text(raw_value.get("evidence")))
+    return bool(
+        evidence
+        and evidence in context
+        and _limit_candidate_context(evidence, field)
+    )
+
+
 def _extract_limits_via_ollama(
     text_value: str | None,
     requested_fields: list[str] | None = None,
+    *,
+    cacheable_fields: set[str] | None = None,
 ) -> dict[str, Any]:
     """규칙으로 확정하지 못한 조건을 구조화하되, 근거는 코드로 재검증합니다."""
     fallback_res = {field: None for field in LIMIT_FIELD_SPECS}
@@ -2646,6 +2811,7 @@ def _extract_limits_via_ollama(
             data = json.loads(response_text)
             if isinstance(data, dict) and isinstance(data.get(field), dict):
                 data = data[field]
+            explicit_no_match = _is_explicit_llm_no_match(field, data, context)
             converted = _convert_llm_limit(field, data, context, model_name)
             if complex_payload is not None:
                 # 규칙 단계에서 복합 가능성이 확인된 필드는 모델이 direct라고
@@ -2657,7 +2823,12 @@ def _extract_limits_via_ollama(
                 )
             else:
                 fallback_res[field] = converted
-            if fallback_res[field] is None:
+            # HTTP 호출과 JSON 파싱까지 성공했다면 검증 거절도 안전한 음성 결과로
+            # 캐시합니다. 거절된 값 자체는 적용하지 않으며, 원문·모델·프롬프트가
+            # 바뀌면 캐시 키가 달라져 다시 호출됩니다.
+            if cacheable_fields is not None:
+                cacheable_fields.add(field)
+            if fallback_res[field] is None and not explicit_no_match:
                 print(f"  [Ollama Structure] 검증에서 거절된 응답: {response_text[:500]}", flush=True)
         except Exception as exc:
             fallback_res[field] = complex_payload

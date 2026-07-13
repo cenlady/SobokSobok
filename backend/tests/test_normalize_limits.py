@@ -8,6 +8,7 @@ from app.services.normalize_policies import (
     _extract_limits_via_ollama,
     _extract_sales_limit,
     _limit_fields_requiring_llm,
+    _resolve_limits_with_llm_cache,
 )
 
 
@@ -84,6 +85,135 @@ class NormalizeLimitTests(unittest.TestCase):
         result = _extract_limits_via_ollama(f"지원대상: {evidence}", ["employee_limit"])
         self.assertEqual(result["employee_limit"]["value"], 5)
         self.assertEqual(result["employee_limit"]["operator"], "<")
+
+    @patch("app.services.normalize_policies.httpx.post")
+    def test_llm_cache_reuses_validated_result_until_source_changes(self, mock_post) -> None:
+        evidence = "종사자 5인 미만"
+        mock_post.return_value = FakeOllamaResponse(
+            {
+                "classification": "direct",
+                "logic": "all_of",
+                "scope": "global",
+                "min": None,
+                "min_operator": None,
+                "max": 5,
+                "max_operator": "<",
+                "evidence": evidence,
+            }
+        )
+        parsed = {
+            "employee_limit": None,
+            "sales_limit": None,
+            "business_age_limit": None,
+        }
+
+        first_limits, cache = _resolve_limits_with_llm_cache(
+            evidence,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=None,
+            log_label="test",
+        )
+        second_limits, reused_cache = _resolve_limits_with_llm_cache(
+            evidence,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=cache,
+            log_label="test",
+        )
+
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertEqual(first_limits, second_limits)
+        self.assertEqual(cache, reused_cache)
+
+        _resolve_limits_with_llm_cache(
+            evidence,
+            parsed,
+            source_hash="source-b",
+            existing_llm_cache=cache,
+            log_label="test",
+        )
+        self.assertEqual(mock_post.call_count, 2)
+
+    @patch("app.services.normalize_policies.httpx.post")
+    def test_llm_cache_reuses_explicit_no_match(self, mock_post) -> None:
+        evidence = "매출액 기준 세부 산정방식 확인 후 신청대상 여부 판단 약 1억원 범위"
+        mock_post.return_value = FakeOllamaResponse(
+            {
+                "classification": "unrelated",
+                "logic": "all_of",
+                "scope": "global",
+                "min": None,
+                "min_operator": None,
+                "max": None,
+                "max_operator": None,
+                "evidence": evidence,
+            }
+        )
+        parsed = {
+            "employee_limit": None,
+            "sales_limit": None,
+            "business_age_limit": None,
+        }
+
+        first_limits, cache = _resolve_limits_with_llm_cache(
+            evidence,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=None,
+            log_label="test",
+        )
+        second_limits, _ = _resolve_limits_with_llm_cache(
+            evidence,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=cache,
+            log_label="test",
+        )
+
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertIsNone(first_limits["sales_limit"])
+        self.assertIsNone(second_limits["sales_limit"])
+
+    @patch("app.services.normalize_policies.httpx.post")
+    def test_llm_cache_reuses_validation_rejection_as_safe_no_match(self, mock_post) -> None:
+        text = "근무자 약 7명 규모"
+        mock_post.return_value = FakeOllamaResponse(
+            {
+                "classification": "direct",
+                "logic": "all_of",
+                "scope": "global",
+                "min": None,
+                "min_operator": None,
+                "max": 7,
+                "max_operator": "<",
+                "evidence": "",
+            }
+        )
+        parsed = {
+            "employee_limit": None,
+            "sales_limit": None,
+            "business_age_limit": None,
+        }
+
+        first_limits, cache = _resolve_limits_with_llm_cache(
+            text,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=None,
+            log_label="test",
+        )
+        second_limits, _ = _resolve_limits_with_llm_cache(
+            text,
+            parsed,
+            source_hash="source-a",
+            existing_llm_cache=cache,
+            log_label="test",
+        )
+
+        self.assertEqual(mock_post.call_count, 1)
+        self.assertIsNone(first_limits["employee_limit"])
+        self.assertIsNone(second_limits["employee_limit"])
 
     @patch("app.services.normalize_policies.httpx.post")
     def test_llm_preserves_two_sided_range_without_flattening(self, mock_post) -> None:
