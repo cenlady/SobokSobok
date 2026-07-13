@@ -2,11 +2,11 @@
 # 파일 역할: [인증 도메인] 사용자 기본 로그인 및 Google OAuth 2.0 소셜 로그인 인증 처리 라우터
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from google_auth_oauthlib.flow import Flow
 from app.core.config import settings
-from app.core.security import create_access_token
 from app.models.user import User, UserProfile
 import httpx
 from datetime import datetime, timezone
@@ -160,11 +160,5 @@ def google_callback(code: str, db: Session = Depends(get_db)):
 
     db.commit()
 
-    # 5) 우리 백엔드 세션용 자체 로그인 JWT 토큰 발행
-    local_access_token = create_access_token(subject=user.email)
-
-    return {
-        "access_token": local_access_token,
-        "token_type": "bearer",
-        "email": user.email
-    }
+    # 5) 프론트엔드 프로필 주소로 구글 Access Token과 사용자 이메일을 실어 리다이렉트 기동
+    return RedirectResponse(url=f"http://localhost:5173/profile?token={credentials.token}&email={user_email}")
