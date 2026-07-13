@@ -75,6 +75,14 @@ class MatchEvaluation:
     matched_tags: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass
+class NumericConstraintSet:
+    constraints: list[tuple[str, int]] = field(default_factory=list)
+    logic: str = "all_of"
+    requires_review: bool = False
+    review_reason: str | None = None
+
+
 MATCH_STATUS_PRIORITY = {
     "eligible": 0,
     "needs_review": 1,
@@ -107,6 +115,7 @@ def recommend_policies(
             support_type=policy.support_type,
             support_content=policy.support_content,
             apply_url=policy.apply_url,
+            apply_start=policy.apply_start,
             apply_end=policy.apply_end,
             match_status=evaluation.status,
             confidence=_confidence(evaluation),
@@ -550,14 +559,20 @@ def _check_numeric_limit(
     label: str,
     unit: str,
     user_value: NumberRangeInput | int | None,
-    constraints: list[tuple[str, int]],
+    constraints: NumericConstraintSet,
     evaluation: MatchEvaluation,
 ) -> None:
-    if not constraints:
+    if constraints.requires_review:
+        evaluation.warnings.append(f"{label} 조건이 분기·비율·예외를 포함해 추가 확인이 필요합니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
+        return
+    if not constraints.constraints:
         return
     if user_value is None:
         evaluation.warnings.append(f"{label} 입력 정보가 없어 추가 확인이 필요합니다.")
-        evaluation.unknown_conditions.append(label)
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
         return
 
     limit_operator_korean = {
@@ -567,23 +582,39 @@ def _check_numeric_limit(
         ">": "초과"
     }
 
-    matched_texts: list[str] = []
-    uncertain_texts: list[str] = []
-    for operator, limit_value in constraints:
+    evaluated: list[tuple[bool | None, str]] = []
+    for operator, limit_value in constraints.constraints:
         operator_text = limit_operator_korean.get(operator, operator)
         limit_text = f"{label} {limit_value:,}{unit} {operator_text}"
         result = _compare_user_range(user_value, operator, limit_value)
-        if result is False:
-            evaluation.failed.append(f"{limit_text} 기준에 맞지 않습니다.")
+        evaluated.append((result, limit_text))
+
+    if constraints.logic == "any_of":
+        matched = [text for result, text in evaluated if result is True]
+        if matched:
+            evaluation.reasons.append(f"선택 조건 중 {' · '.join(matched)} 기준에 부합합니다.")
             return
-        if result is None:
-            uncertain_texts.append(limit_text)
-        else:
-            matched_texts.append(limit_text)
+        if all(result is False for result, _ in evaluated):
+            evaluation.failed.append(
+                f"선택 조건({' 또는 '.join(text for _, text in evaluated)}) 중 충족하는 기준이 없습니다."
+            )
+            return
+        evaluation.warnings.append(f"{label} 선택 조건의 충족 여부를 추가로 확인해야 합니다.")
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
+        return
+
+    failed_texts = [text for result, text in evaluated if result is False]
+    if failed_texts:
+        evaluation.failed.append(f"{failed_texts[0]} 기준에 맞지 않습니다.")
+        return
+    uncertain_texts = [text for result, text in evaluated if result is None]
+    matched_texts = [text for result, text in evaluated if result is True]
 
     if uncertain_texts:
         evaluation.warnings.append(f"공고상의 {' · '.join(uncertain_texts)} 조건과 입력 범위가 일부만 겹칩니다.")
-        evaluation.unknown_conditions.append(label)
+        if label not in evaluation.unknown_conditions:
+            evaluation.unknown_conditions.append(label)
         return
     if matched_texts:
         evaluation.reasons.append(f"{' · '.join(matched_texts)} 기준에 부합합니다.")
@@ -748,11 +779,16 @@ def _numeric_constraints(
     eligibility_key: str,
     flat_operator: str | None,
     flat_value: int | None,
-) -> list[tuple[str, int]]:
+) -> NumericConstraintSet:
     eligibility = policy.eligibility or {}
     raw = eligibility.get(eligibility_key)
-    constraints: list[tuple[str, int]] = []
+    result = NumericConstraintSet()
     if isinstance(raw, dict):
+        result.logic = raw.get("logic") if raw.get("logic") in {"all_of", "any_of"} else "all_of"
+        result.requires_review = bool(raw.get("requires_manual_review"))
+        result.review_reason = raw.get("review_reason")
+        if result.requires_review:
+            return result
         min_value = raw.get("min_amount_krw", raw.get("min_value"))
         max_value = raw.get("max_amount_krw", raw.get("max_value"))
         min_operator = raw.get("min_operator")
@@ -760,13 +796,22 @@ def _numeric_constraints(
         parsed_min = _coerce_int(min_value)
         parsed_max = _coerce_int(max_value)
         if parsed_min is not None and min_operator in {">", ">="}:
-            constraints.append((min_operator, parsed_min))
+            result.constraints.append((min_operator, parsed_min))
         if parsed_max is not None and max_operator in {"<", "<="}:
-            constraints.append((max_operator, parsed_max))
+            result.constraints.append((max_operator, parsed_max))
 
-    if not constraints and flat_value is not None and flat_operator in {"<", "<=", ">", ">="}:
-        constraints.append((flat_operator, int(flat_value)))
-    return constraints
+        if not result.constraints and isinstance(raw.get("constraints"), list):
+            for item in raw["constraints"]:
+                if not isinstance(item, dict):
+                    continue
+                operator = item.get("operator")
+                value = _coerce_int(item.get("value"))
+                if value is not None and operator in {"<", "<=", ">", ">="}:
+                    result.constraints.append((operator, value))
+
+    if not result.constraints and flat_value is not None and flat_operator in {"<", "<=", ">", ">="}:
+        result.constraints.append((flat_operator, int(flat_value)))
+    return result
 
 
 def _coerce_int(value: Any) -> int | None:

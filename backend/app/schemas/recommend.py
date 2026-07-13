@@ -38,6 +38,7 @@ class RecommendationResult(BaseModel):
     support_type: str | None = None
     support_content: str | None = None
     apply_url: str | None = None
+    apply_start: datetime | None = None
     apply_end: datetime | None = None
     match_status: Literal["eligible", "needs_review", "near_match"]
     confidence: Literal["high", "medium", "low"]

@@ -134,6 +134,47 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(accepted.status, "eligible")
         self.assertEqual(rejected.status, "ineligible")
 
+    def test_manual_review_numeric_condition_never_hard_rejects(self) -> None:
+        policy = make_policy(
+            employee_limit_value=1,
+            employee_limit_operator=">=",
+            eligibility={
+                "employee_limit": {
+                    "constraints": [{"value": 1, "operator": ">="}],
+                    "logic": "any_of",
+                    "requires_manual_review": True,
+                    "review_reason": "branching_condition",
+                }
+            },
+        )
+
+        evaluation = evaluate_policy(policy, make_profile(employees=0))
+
+        self.assertEqual(evaluation.status, "needs_review")
+        self.assertIn("직원수", evaluation.unknown_conditions)
+        self.assertFalse(any("직원수" in reason for reason in evaluation.failed))
+
+    def test_any_of_numeric_constraints_accepts_one_matching_branch(self) -> None:
+        policy = make_policy(
+            eligibility={
+                "business_age_limit": {
+                    "min_value": 3,
+                    "min_operator": ">=",
+                    "max_value": 1,
+                    "max_operator": "<=",
+                    "logic": "any_of",
+                }
+            }
+        )
+
+        young_branch = evaluate_policy(policy, make_profile(business_age_years=1))
+        mature_branch = evaluate_policy(policy, make_profile(business_age_years=4))
+        no_branch = evaluate_policy(policy, make_profile(business_age_years=2))
+
+        self.assertEqual(young_branch.status, "eligible")
+        self.assertEqual(mature_branch.status, "eligible")
+        self.assertEqual(no_branch.status, "ineligible")
+
     def test_industry_mismatch_is_near_match(self) -> None:
         policy = make_policy(industry_tags=["manufacturing"])
 
