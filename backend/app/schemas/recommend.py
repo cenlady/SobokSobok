@@ -43,6 +43,9 @@ class RecommendationResult(BaseModel):
     # 프론트가 '상시 접수'(open + 마감일 없음)와 '기간 확인 필요'(notice)를 가르는 데 쓴다.
     # 이게 없으면 마감일 없는 정책이 전부 '기간 미상'으로 보인다.
     status: str | None = None
+    eligibility_status: Literal["eligible", "needs_review"]
+    preference_match: Literal["exact", "partial", "none", "not_requested"]
+    # 기존 클라이언트 호환용 통합 상태. 신규 화면은 위 두 축을 우선 사용한다.
     match_status: Literal["eligible", "needs_review", "near_match"]
     confidence: Literal["high", "medium", "low"]
     rank_score: float
@@ -57,13 +60,27 @@ class RecommendationResult(BaseModel):
 
 class RecommendationPreviewResponse(BaseModel):
     total_candidates: int
+    filtered_candidates: int
     returned: int
+    skip: int
+    limit: int
+    has_next: bool
+    status_counts: dict[Literal["eligible", "needs_review", "near_match"], int] = Field(
+        default_factory=lambda: {"eligible": 0, "needs_review": 0, "near_match": 0}
+    )
     vector_used: bool
+    profile_warnings: list[str] = Field(default_factory=list)
     results: list[RecommendationResult]
 
 
 class RecommendationExplanationResponse(BaseModel):
+    match_status: Literal["eligible", "needs_review", "near_match", "ineligible"]
+    eligibility_status: Literal["eligible", "needs_review", "ineligible"]
+    preference_match: Literal["exact", "partial", "none", "not_requested"]
+    confidence: Literal["high", "medium", "low"]
+    generated_by: Literal["rules", "gemini"] = "rules"
     summary: str
     strengths: list[str] = Field(default_factory=list)
     aspects_to_check: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)

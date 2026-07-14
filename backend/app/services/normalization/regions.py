@@ -116,9 +116,29 @@ def _extract_region_metadata(
     default_scope: str = "unknown",
     *,
     fallback_text: str | None = None,
+    supporting_text: str | None = None,
 ) -> dict[str, Any]:
     primary = _match_region_text(value, allow_bare_sigungu=False)
+    fallback = _match_region_text(fallback_text, allow_bare_sigungu=True)
+    supporting = _match_region_text(supporting_text, allow_bare_sigungu=True)
     if primary["matched_sidos"]:
+        # 지원대상 본문이 광역 시·도만 말하고 기관명이 더 구체적인 시·군·구를
+        # 담는 경우가 많다. 예: 대상="경기도 소상공인", 기관="경기도 의왕시".
+        # 명시된 광역권이 같은 경우에만 기관 근거로 보강해 타 시·군 정책이
+        # 같은 시·도 전체 정책으로 넓어지는 것을 막는다.
+        if (
+            supporting["matched_sidos"]
+            and set(primary["matched_sidos"]) & set(supporting["matched_sidos"])
+        ):
+            combined = _combine_region_matches(primary, supporting)
+            return _region_result(
+                combined,
+                region_scope="local",
+                condition_mode="restricted",
+                confidence=0.95,
+                extraction_method="eligibility_and_organization_region_rule",
+                source_ref="eligibility+organization",
+            )
         return _region_result(
             primary,
             region_scope="local",
@@ -137,15 +157,61 @@ def _extract_region_metadata(
             source_ref="eligibility",
         )
 
-    fallback = _match_region_text(fallback_text, allow_bare_sigungu=True)
+    if fallback["matched_sidos"] and supporting["matched_sidos"]:
+        shared_sidos = set(fallback["matched_sidos"]) & set(supporting["matched_sidos"])
+        if shared_sidos:
+            combined = _combine_region_matches(fallback, supporting)
+            return _region_result(
+                combined,
+                region_scope="local",
+                condition_mode="restricted",
+                confidence=0.92,
+                extraction_method="title_and_organization_region_rule",
+                source_ref="title+organization",
+            )
+        combined = _combine_region_matches(fallback, supporting)
+        return _region_result(
+            combined,
+            region_scope="local",
+            condition_mode="unknown",
+            confidence=0.45,
+            extraction_method="conflicting_title_organization_region_rule",
+            source_ref="title+organization_conflict",
+        )
+
     if fallback["matched_sidos"]:
+        # 제목에 시·군·구가 있고 지원대상 본문이 "관내 사업자"처럼 지역
+        # 제한을 명시하면, 제목은 단순 행사 장소가 아니라 그 "관내"가 가리키는
+        # 실제 신청 지역이다. 실제 데이터의 "시흥시 ... 지원" + "관내 2개월
+        # 이상 운영" 같은 공고를 다른 시 사용자에게 추천하지 않도록 신뢰도를
+        # 높인다. 제목에만 지역이 있는 경우에는 기존의 낮은 신뢰도를 유지한다.
+        scoped_by_primary_text = _has_local_scope_marker(value)
+        explicit_leading_region = _has_explicit_leading_region(fallback_text, fallback)
         return _region_result(
             fallback,
             region_scope="local",
             condition_mode="restricted",
-            confidence=0.68,
-            extraction_method="title_region_rule",
-            source_ref="title",
+            confidence=(
+                0.9
+                if explicit_leading_region
+                else 0.88
+                if scoped_by_primary_text
+                else 0.68
+            ),
+            extraction_method=(
+                "explicit_title_region_rule"
+                if explicit_leading_region
+                else "title_region_with_eligibility_scope_rule"
+                if scoped_by_primary_text
+                else "title_region_rule"
+            ),
+            source_ref=(
+                "title"
+                if explicit_leading_region
+                else "title+eligibility"
+                if scoped_by_primary_text
+                else "title"
+            ),
         )
     if fallback["is_national"]:
         return _region_result(
@@ -155,6 +221,25 @@ def _extract_region_metadata(
             confidence=0.82,
             extraction_method="title_region_rule",
             source_ref="title",
+        )
+
+    if supporting["matched_sidos"]:
+        scoped_by_primary_text = _has_local_scope_marker(value)
+        return _region_result(
+            supporting,
+            region_scope="local",
+            condition_mode="restricted",
+            confidence=0.88 if scoped_by_primary_text else 0.82,
+            extraction_method=(
+                "organization_region_with_eligibility_scope_rule"
+                if scoped_by_primary_text
+                else "organization_region_rule"
+            ),
+            source_ref=(
+                "organization+eligibility"
+                if scoped_by_primary_text
+                else "organization"
+            ),
         )
 
     return {
@@ -175,7 +260,11 @@ def _match_region_text(value: str | None, *, allow_bare_sigungu: bool) -> dict[s
     matched_sidos: list[str] = []
     evidence: list[str] = []
     for alias, sido in sorted(SIDO_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
-        if _contains_region_alias(text_value, alias) and sido not in matched_sidos:
+        if _contains_region_alias(
+            text_value,
+            alias,
+            allow_organization_suffix=allow_bare_sigungu,
+        ) and sido not in matched_sidos:
             matched_sidos.append(sido)
             evidence.append(alias)
     for group_name, sidos in REGION_GROUPS.items():
@@ -246,10 +335,65 @@ def _region_result(
     }
 
 
-def _contains_region_alias(text_value: str, alias: str) -> bool:
+def _combine_region_matches(
+    left: dict[str, Any],
+    right: dict[str, Any],
+) -> dict[str, Any]:
+    matched_sidos = list(dict.fromkeys(left["matched_sidos"] + right["matched_sidos"]))
+    return {
+        "matched_sidos": matched_sidos,
+        "sigungu": left.get("sigungu") or right.get("sigungu"),
+        "is_national": bool(left.get("is_national") or right.get("is_national")),
+        "evidence": list(dict.fromkeys((left.get("evidence") or []) + (right.get("evidence") or []))),
+    }
+
+
+def _contains_region_alias(
+    text_value: str,
+    alias: str,
+    *,
+    allow_organization_suffix: bool = False,
+) -> bool:
     if len(alias) >= 4 or alias.endswith(("특별시", "광역시", "특별자치시", "특별자치도", "도")):
         return alias in text_value
-    return bool(re.search(rf"(?<![가-힣]){re.escape(alias)}(?:시|도)?(?![가-힣])", text_value))
+    if re.search(rf"(?<![가-힣]){re.escape(alias)}(?:시|도)?(?![가-힣])", text_value):
+        return True
+    if not allow_organization_suffix:
+        return False
+    # 기관명에서는 충북신용보증재단처럼 축약 시·도명 뒤에 바로 기관명이
+    # 붙는다. 임의의 단어 내부 매칭은 허용하지 않고 지역 공공기관의 대표
+    # 접미사만 화이트리스트로 인정한다.
+    return bool(
+        re.search(
+            rf"(?<![가-힣]){re.escape(alias)}"
+            r"(?=(?:신용보증재단|경제진흥원|시장상권진흥원|테크노파크|"
+            r"창조경제혁신센터|상공회의소))",
+            text_value,
+        )
+    )
+
+
+def _has_local_scope_marker(value: str | None) -> bool:
+    text_value = _clean_text(value) or ""
+    return bool(
+        re.search(
+            r"(?:관내|도내|시내|군내|구내|해당\s*지역\s*내|지역\s*내|"
+            r"사업장(?:을|이|가)?\s*(?:둔|소재)|주소지(?:를|가)?\s*(?:둔|소재))",
+            text_value,
+        )
+    )
+
+
+def _has_explicit_leading_region(value: str | None, match: dict[str, Any]) -> bool:
+    """Return true when a title begins with a full official 시·도 name."""
+
+    text_value = (_clean_text(value) or "").lstrip("[（(")
+    full_names = {
+        alias
+        for alias, sido in SIDO_ALIASES.items()
+        if sido in match["matched_sidos"] and alias == sido
+    }
+    return any(text_value.startswith(name) for name in full_names)
 
 
 def _extract_sigungu_after_sido(text_value: str, matched_sidos: list[str]) -> str | None:

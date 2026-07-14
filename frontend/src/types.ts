@@ -57,19 +57,29 @@ export interface RecommendationResult {
   apply_end?: string | null
   /** 상시 접수(open)와 기간 확인 필요(notice)를 가른다 */
   status?: string | null
+  eligibility_status: 'eligible' | 'needs_review'
+  preference_match: 'exact' | 'partial' | 'none' | 'not_requested'
   match_status: 'eligible' | 'needs_review' | 'near_match'
   confidence: 'high' | 'medium' | 'low'
   rank_score: number
   vector_similarity?: number | null
   reasons: string[]
   warnings: string[]
+  unknown_conditions: string[]
+  unmet_conditions: string[]
   matched_tags: Record<string, string[]>
 }
 
 export interface RecommendationPreviewResponse {
   total_candidates: number
+  filtered_candidates: number
   returned: number
+  skip: number
+  limit: number
+  has_next: boolean
+  status_counts: Record<'eligible' | 'needs_review' | 'near_match', number>
   vector_used: boolean
+  profile_warnings: string[]
   results: RecommendationResult[]
 }
 
@@ -148,57 +158,85 @@ export interface ServerProfile {
 
 /** 서류검토 접수 응답 (POST /api/v1/review → 202) */
 export interface ReviewStartResponse {
-  upload_id: string
+  session_id: string
   policy_id: string | null
   review_status: ReviewStatus
-  /** policy_id가 있어 요건 대조 단계를 거치는지. 진행 단계 수를 결정한다. */
+  file_count: number
+  /**
+   * 요건 대조 단계를 실제로 거치는지. 진행 단계 수를 결정한다.
+   * 정책을 골랐어도 그 정책에 필수서류 정보가 없으면(전체의 63%) false다.
+   */
   has_requirement_matching: boolean
 }
 
 export type ReviewStatus =
   | 'queued'
   | 'extracting'
-  | 'matching'
   | 'diagnosing'
+  | 'matching'
   | 'done'
   | 'failed'
+
+/**
+ * 요건 대조를 '할 수 있었는지'.
+ *
+ * requirement_matches가 비었다고 해서 요건을 다 충족한 게 아니다 — 애초에 요건
+ * 정보가 없었을 수 있다. 둘을 뭉뚱그리면 사용자를 근거 없이 안심시키게 된다.
+ */
+export type RequirementStatus = 'not_requested' | 'no_requirement_data' | 'matched'
 
 export interface RequirementMatch {
   document_name: string
   best_similarity: number
-  /** 임계값 이상이면 true. 확정이 아니라 후보다 — 최종 판정은 LLM이 한다. */
+  /** 확정이 아니라 후보다 */
   likely_covered: boolean
+  /** 이 요건을 커버하는 것으로 보이는 파일명 */
+  matched_file: string | null
 }
 
-export interface ReviewResult {
+/** 파일 하나의 자체 검토 결과. 요건 대조는 여기 없다 — 그건 세션 전체 기준이다. */
+export interface FileDiagnosis {
   document_type: string
   typos: string[]
   /** 이 서류 안의 빈칸 (연락처·서명 등) */
   missing_fields: string[]
   format_issues: string[]
-  /** 따로 발급받아 제출해야 하는 서류 */
-  missing_documents: string[]
   improvement_points: string[]
   overall: string
 }
 
-/** 서류검토 폴링 응답 (GET /api/v1/review/{upload_id}) */
-export interface ReviewResponse {
+export interface ReviewFile {
   upload_id: string
+  file_name: string | null
+  /** pending / success / empty / unsupported / failed */
+  extraction_status: string
+  /** 아직 진단 전이거나 읽기에 실패했으면 null */
+  diagnosis: FileDiagnosis | null
+}
+
+/** 서류검토 폴링 응답 (GET /api/v1/review/{session_id}) */
+export interface ReviewResponse {
+  session_id: string
   policy_id: string | null
   review_status: ReviewStatus
-  /** 실패 사유 (unsupported/empty/failed) */
-  extraction_status: string
+  requirement_status: RequirementStatus
   requirement_matches: RequirementMatch[]
+  files: ReviewFile[]
   /** 진행 중이면 null */
-  result: ReviewResult | null
+  summary: string | null
 }
 
 export interface RecommendationExplanationResponse {
+  match_status: 'eligible' | 'needs_review' | 'near_match' | 'ineligible'
+  eligibility_status: 'eligible' | 'needs_review' | 'ineligible'
+  preference_match: 'exact' | 'partial' | 'none' | 'not_requested'
+  confidence: 'high' | 'medium' | 'low'
+  generated_by: 'rules' | 'gemini'
   summary: string
   strengths: string[]
   aspects_to_check: string[]
   next_actions: string[]
+  evidence: string[]
 }
 
 export interface ChatChunkSource {

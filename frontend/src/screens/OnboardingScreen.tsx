@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
+import { AlertTriangle, BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
@@ -11,6 +11,7 @@ import {
   NEED_OPTIONS,
   REGION_MAP,
   REVENUE_OPTIONS,
+  getProfileConsistencyWarning,
   optionByLabel,
 } from '../lib/recommend'
 
@@ -93,6 +94,12 @@ export default function OnboardingScreen() {
       prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag],
     )
   }
+
+  const profileConsistencyWarning = getProfileConsistencyWarning(
+    industry,
+    businessStatus,
+    employees,
+  )
 
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col bg-cream">
@@ -219,6 +226,12 @@ export default function OnboardingScreen() {
             options={EMPLOYEE_OPTIONS.map((item) => item.label)}
             placeholder="직원 수를 선택해주세요"
           />
+          {profileConsistencyWarning && (
+            <div className="flex items-start gap-2 rounded-2xl border border-accent/20 bg-accent-soft/45 p-4 text-sm font-medium leading-relaxed text-ink">
+              <AlertTriangle size={17} className="mt-0.5 shrink-0 text-accent" />
+              <span>{profileConsistencyWarning}</span>
+            </div>
+          )}
           <SelectField
             label="업력"
             icon={SlidersHorizontal}
@@ -262,7 +275,7 @@ export default function OnboardingScreen() {
         <button
           onClick={submit}
           disabled={saving}
-          className="w-full rounded-2xl bg-primary py-4 text-lg font-bold text-white active:scale-[0.99] disabled:opacity-60"
+          className="flex h-13 w-full items-center justify-center rounded-xl bg-primary py-4 text-base font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           {saving ? '저장 중…' : isEditing ? '저장하고 추천 다시 받기' : '맞춤 혜택 찾기'}
         </button>

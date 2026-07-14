@@ -5,32 +5,43 @@ import {
   ArrowRight,
   Check,
   FileText,
+  Info,
   Loader2,
+  Plus,
   RotateCcw,
   Upload,
+  X,
 } from 'lucide-react'
 import TopBar from '../components/TopBar'
+import { Button, EmptyState } from '../components/ui'
 import { apiFetch } from '../lib/api'
 import { useSavedPolicies } from '../lib/storage'
-import type { ReviewResponse, ReviewStartResponse, ReviewStatus } from '../types'
+import type {
+  RequirementMatch,
+  ReviewFile,
+  ReviewResponse,
+  ReviewStartResponse,
+  ReviewStatus,
+} from '../types'
 
 const POLL_INTERVAL_MS = 2500
+const MAX_FILES = 10
 
-// 정책을 고르면 policy_id가 넘어가고, 서버가 review_vectors와 요건을 대조한다.
-// 고르지 않으면 그 단계를 통째로 건너뛰고 오타·빈칸 검사만 한다.
+// 정책을 고르면 policy_id가 넘어가고, 서버가 요건과 대조한다.
+// 고르지 않으면 그 단계를 건너뛰고 오타·빈칸 검사만 한다.
 // 그래서 정책 선택을 기본값으로 두고, '정책 없이'는 명시적으로 고르게 한다.
 const NO_POLICY = '__none__'
 
-// 검토는 서버에서 도는데 upload_id를 컴포넌트 state에만 두면, 탭을 옮기는 순간
+// 검토는 서버에서 도는데 session_id를 컴포넌트 state에만 두면, 탭을 옮기는 순간
 // 돌아올 길이 사라진다. 진행 중인 검토를 찾아갈 수 있게 id를 남겨둔다.
 const ACTIVE_REVIEW_KEY = 'sobok.activeReview'
 
 interface ActiveReview {
-  uploadId: string
+  sessionId: string
   hasMatching: boolean
 }
 
-function readActiveReview(): ActiveReview | null {
+function readActive(): ActiveReview | null {
   try {
     const raw = localStorage.getItem(ACTIVE_REVIEW_KEY)
     return raw ? (JSON.parse(raw) as ActiveReview) : null
@@ -39,22 +50,22 @@ function readActiveReview(): ActiveReview | null {
   }
 }
 
-function writeActiveReview(value: ActiveReview | null) {
+function writeActive(value: ActiveReview | null) {
   try {
     if (value) localStorage.setItem(ACTIVE_REVIEW_KEY, JSON.stringify(value))
     else localStorage.removeItem(ACTIVE_REVIEW_KEY)
   } catch {
-    // 저장 실패해도 이번 화면에서는 폴링이 계속되므로 치명적이지 않다.
+    // 저장에 실패해도 이번 화면에서는 폴링이 계속되므로 치명적이지 않다.
   }
 }
 
 type Phase = 'idle' | 'running' | 'done'
 
-/** 서버의 review_status를 화면의 3단계로 접는다. */
+/** 서버의 review_status를 화면 단계로 접는다. 파이프라인 순서: 추출 → 진단 → 대조 */
 const STAGES = [
   { key: 'extract', label: '서류 읽는 중', statuses: ['queued', 'extracting'] },
-  { key: 'match', label: '정책 요건 대조 중', statuses: ['matching'] },
-  { key: 'diagnose', label: 'AI 진단 중', statuses: ['diagnosing'] },
+  { key: 'diagnose', label: 'AI가 서류 검토 중', statuses: ['diagnosing'] },
+  { key: 'match', label: '정책 요건과 대조 중', statuses: ['matching'] },
 ] as const
 
 export default function ReviewScreen() {
@@ -62,13 +73,11 @@ export default function ReviewScreen() {
   const location = useLocation()
   const { policies, loading: policiesLoading } = useSavedPolicies()
 
-  // 정책 상세에서 넘어온 경우 드롭다운을 미리 채운다.
   const preselected = (location.state as { policyId?: string } | null)?.policyId
   const [policyId, setPolicyId] = useState<string>(preselected ?? '')
-  const [file, setFile] = useState<File | null>(null)
+  const [files, setFiles] = useState<File[]>([])
 
-  // 진행 중인 검토가 있으면 마운트 시 바로 그 상태로 복원한다(아래 effect에서).
-  const restored = useRef(readActiveReview())
+  const restored = useRef(readActive())
   const [phase, setPhase] = useState<Phase>(restored.current ? 'running' : 'idle')
   const [status, setStatus] = useState<ReviewStatus>('queued')
   const [hasMatching, setHasMatching] = useState(restored.current?.hasMatching ?? false)
@@ -76,29 +85,26 @@ export default function ReviewScreen() {
   const [error, setError] = useState<string | null>(null)
 
   const timer = useRef<number | null>(null)
-  // 언마운트 후에도 예약된 tick이 setState를 부르지 않게 막는다.
   const alive = useRef(true)
 
-  // 저장한 정책이 로드되면 첫 정책을 기본 선택한다(정책 선택을 기본 경로로 만들기 위해).
+  // 저장한 정책을 기본 선택한다 — 요건 대조를 기본 경로로 만들기 위해.
   useEffect(() => {
     if (!policyId && !preselected && policies.length > 0) {
       setPolicyId(policies[0].policy_id)
     }
   }, [policies, policyId, preselected])
 
-  const poll = useCallback((uploadId: string) => {
+  const poll = useCallback((sessionId: string) => {
     const tick = async () => {
       if (!alive.current) return
       try {
-        const data = await apiFetch<ReviewResponse>(`/api/v1/review/${uploadId}`)
+        const data = await apiFetch<ReviewResponse>(`/api/v1/review/${sessionId}`)
         if (!alive.current) return
 
         setStatus(data.review_status)
 
         if (data.review_status === 'done' || data.review_status === 'failed') {
-          // 끝났으니 더 이상 '진행 중인 검토'가 아니다. 다음에 들어오면 결과가 아니라
-          // 새 업로드 화면을 봐야 한다.
-          writeActiveReview(null)
+          writeActive(null)
           setReview(data)
           setPhase('done')
           return
@@ -106,8 +112,7 @@ export default function ReviewScreen() {
         timer.current = window.setTimeout(tick, POLL_INTERVAL_MS)
       } catch (e) {
         if (!alive.current) return
-        // 검토 기록을 못 찾으면(삭제 등) 붙잡고 있어봐야 소용없다.
-        writeActiveReview(null)
+        writeActive(null)
         setError(e instanceof Error ? e.message : '검토 상태를 확인하지 못했습니다.')
         setPhase('idle')
       }
@@ -116,11 +121,10 @@ export default function ReviewScreen() {
   }, [])
 
   // 다른 탭에 다녀와도 진행 중이던 검토를 다시 붙잡는다.
-  // 서버에서는 계속 돌고 있었으므로, upload_id만 알면 이어서 볼 수 있다.
   useEffect(() => {
     alive.current = true
     const active = restored.current
-    if (active) poll(active.uploadId)
+    if (active) poll(active.sessionId)
 
     return () => {
       alive.current = false
@@ -128,8 +132,21 @@ export default function ReviewScreen() {
     }
   }, [poll])
 
+  const addFiles = (picked: FileList | null) => {
+    if (!picked) return
+    setFiles((prev) => {
+      const merged = [...prev]
+      for (const f of Array.from(picked)) {
+        if (merged.length >= MAX_FILES) break
+        // 같은 파일을 두 번 담지 않는다
+        if (!merged.some((m) => m.name === f.name && m.size === f.size)) merged.push(f)
+      }
+      return merged
+    })
+  }
+
   const submit = async () => {
-    if (!file) return
+    if (files.length === 0) return
     setPhase('running')
     setStatus('queued')
     setError(null)
@@ -137,20 +154,19 @@ export default function ReviewScreen() {
 
     try {
       const form = new FormData()
-      form.append('file', file)
+      for (const f of files) form.append('files', f)
       if (policyId && policyId !== NO_POLICY) form.append('policy_id', policyId)
 
-      // 파일 업로드는 FormData라 Content-Type을 브라우저가 정하게 둔다.
       const started = await apiFetch<ReviewStartResponse>('/api/v1/review', {
         method: 'POST',
         body: form,
       })
       setHasMatching(started.has_requirement_matching)
-      writeActiveReview({
-        uploadId: started.upload_id,
+      writeActive({
+        sessionId: started.session_id,
         hasMatching: started.has_requirement_matching,
       })
-      poll(started.upload_id)
+      poll(started.session_id)
     } catch (e) {
       setError(e instanceof Error ? e.message : '검토 요청에 실패했습니다.')
       setPhase('idle')
@@ -159,27 +175,25 @@ export default function ReviewScreen() {
 
   const reset = () => {
     if (timer.current) window.clearTimeout(timer.current)
-    writeActiveReview(null)
+    writeActive(null)
     restored.current = null
     setPhase('idle')
-    setFile(null)
+    setFiles([])
     setReview(null)
     setError(null)
   }
 
-  // 정책을 고르지 않았으면 '요건 대조' 단계가 없다. 있지도 않은 단계를 보여주면 거짓말이 된다.
+  // 요건 대조를 안 하는 경우엔 그 단계를 보여주지 않는다. 없는 단계를 보여주면 거짓말이다.
   const stages = hasMatching ? STAGES : STAGES.filter((s) => s.key !== 'match')
 
   return (
     <div className="pb-6">
       <TopBar />
 
-      <section className="px-5">
+      <section className="px-5 pt-2">
         <h2 className="text-title text-ink">서류 검토</h2>
         <p className="mt-1 text-sm leading-relaxed text-muted">
-          제출 전에 오타·빈칸을 점검하고,
-          <br />
-          정책이 요구하는 서류가 빠지지 않았는지 확인해요.
+          제출 전에 오타·빈칸을 점검하고, 정책이 요구하는 서류가 빠지지 않았는지 확인해요.
         </p>
       </section>
 
@@ -189,28 +203,32 @@ export default function ReviewScreen() {
           policiesLoading={policiesLoading}
           policyId={policyId}
           onPolicyChange={setPolicyId}
-          file={file}
-          onFileChange={setFile}
+          files={files}
+          onAddFiles={addFiles}
+          onRemoveFile={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
           onSubmit={submit}
           error={error}
           onGoFind={() => navigate('/policies')}
         />
       )}
 
-      {phase === 'running' && <Progress stages={stages} status={status} />}
+      {phase === 'running' && <Progress stages={stages} status={status} count={files.length} />}
 
       {phase === 'done' && review && <Result review={review} onReset={reset} />}
     </div>
   )
 }
 
+/* ─────────────────────────── 입력 ─────────────────────────── */
+
 function IdleForm({
   policies,
   policiesLoading,
   policyId,
   onPolicyChange,
-  file,
-  onFileChange,
+  files,
+  onAddFiles,
+  onRemoveFile,
   onSubmit,
   error,
   onGoFind,
@@ -219,8 +237,9 @@ function IdleForm({
   policiesLoading: boolean
   policyId: string
   onPolicyChange: (id: string) => void
-  file: File | null
-  onFileChange: (file: File | null) => void
+  files: File[]
+  onAddFiles: (files: FileList | null) => void
+  onRemoveFile: (index: number) => void
   onSubmit: () => void
   error: string | null
   onGoFind: () => void
@@ -231,27 +250,24 @@ function IdleForm({
     <>
       <section className="mt-6 px-5">
         <h3 className="text-sm font-bold text-ink">
-          <span className="mr-1.5 text-brand">①</span> 어떤 정책에 낼 서류인가요?
+          <span className="mr-1.5 text-primary">①</span> 어떤 정책에 낼 서류인가요?
         </h3>
 
         {noSaved ? (
-          <div className="mt-3 rounded-2xl bg-white p-4 shadow-card">
+          <div className="surface-panel mt-3 p-4">
             <p className="text-sm leading-relaxed text-muted">
-              저장한 정책이 없어요. 정책을 저장하면 그 정책이 요구하는 서류가
-              빠지지 않았는지도 함께 확인해드려요.
+              저장한 정책이 없어요. 정책을 저장하면 그 정책이 요구하는 서류가 빠지지 않았는지도
+              함께 확인해드려요.
             </p>
-            <button
-              onClick={onGoFind}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-primary py-2.5 text-sm font-bold text-white"
-            >
-              정책 찾으러 가기 <ArrowRight size={15} />
-            </button>
+            <Button onClick={onGoFind} size="sm" full className="mt-3">
+              정책 찾으러 가기 <ArrowRight size={14} />
+            </Button>
           </div>
         ) : (
           <select
             value={policyId}
             onChange={(e) => onPolicyChange(e.target.value)}
-            className="mt-3 w-full rounded-2xl border border-line bg-white px-4 py-3.5 text-sm font-semibold text-ink shadow-card"
+            className="mt-3 h-12 w-full rounded-xl border border-line bg-surface px-4 text-sm font-semibold text-ink"
           >
             {policiesLoading && <option>불러오는 중…</option>}
             {policies.map((p) => (
@@ -272,59 +288,91 @@ function IdleForm({
 
       <section className="mt-6 px-5">
         <h3 className="text-sm font-bold text-ink">
-          <span className="mr-1.5 text-brand">②</span> 서류를 올려주세요
+          <span className="mr-1.5 text-primary">②</span> 준비한 서류를 모두 올려주세요
         </h3>
+        {/* 파일을 하나만 받으면 "사업자등록증 하나 올렸더니 24개가 누락됐다"는,
+            맞지만 쓸모없는 결과가 나온다. 준비한 것을 다 올려야 무엇이 빠졌는지가 정보가 된다. */}
+        <p className="mt-1 text-xs text-muted">
+          여러 개를 한 번에 올리면 무엇이 빠졌는지 정확히 알려드려요. (최대 {MAX_FILES}개)
+        </p>
 
-        <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-line bg-white py-10 shadow-card active:bg-line/30">
-          <input
-            type="file"
-            accept=".pdf,.hwp,.hwpx,.docx,.doc,.xlsx,.xls"
-            className="hidden"
-            onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
-          />
-          {file ? (
-            <>
-              <FileText size={30} className="text-brand" />
-              <p className="mt-3 max-w-[240px] truncate px-4 text-sm font-bold text-ink">
-                {file.name}
-              </p>
-              <p className="mt-1 text-xs text-subtle">다른 파일을 고르려면 눌러주세요</p>
-            </>
-          ) : (
-            <>
-              <Upload size={30} className="text-subtle" />
-              <p className="mt-3 text-sm font-bold text-muted">파일 선택</p>
-              <p className="mt-1 text-xs text-subtle">PDF · HWP · DOCX · XLSX</p>
-            </>
-          )}
-        </label>
+        {files.length === 0 ? (
+          <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line bg-surface py-10 transition-colors hover:bg-cream/60">
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.hwp,.hwpx,.docx,.doc,.xlsx,.xls"
+              className="hidden"
+              onChange={(e) => onAddFiles(e.target.files)}
+            />
+            <Upload size={28} strokeWidth={1.6} className="text-faint" />
+            <p className="mt-3 text-sm font-bold text-ink">파일 선택</p>
+            <p className="mt-1 text-xs text-subtle">PDF · HWP · DOCX · XLSX</p>
+          </label>
+        ) : (
+          <div className="mt-3 space-y-2">
+            <div className="surface-panel divide-y divide-line overflow-hidden">
+              {files.map((file, i) => (
+                <div key={`${file.name}-${i}`} className="flex items-center gap-3 px-4 py-3">
+                  <FileText size={17} strokeWidth={1.8} className="shrink-0 text-brand" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-ink">{file.name}</span>
+                    <span className="block text-xs text-subtle">
+                      {(file.size / 1024).toFixed(0)} KB
+                    </span>
+                  </span>
+                  <button
+                    onClick={() => onRemoveFile(i)}
+                    aria-label={`${file.name} 제거`}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-subtle transition-colors hover:text-ink active:bg-line/50"
+                  >
+                    <X size={17} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {files.length < MAX_FILES && (
+              <label className="flex h-11 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-line text-sm font-semibold text-muted transition-colors hover:bg-cream/60">
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.hwp,.hwpx,.docx,.doc,.xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => onAddFiles(e.target.files)}
+                />
+                <Plus size={15} /> 서류 더 추가
+              </label>
+            )}
+          </div>
+        )}
 
         {error && <p className="mt-3 text-sm font-medium text-status-red">{error}</p>}
 
-        <button
-          onClick={onSubmit}
-          disabled={!file}
-          className="mt-5 w-full rounded-2xl bg-primary py-3.5 text-base font-semibold text-white shadow-lg shadow-primary/20 active:scale-[0.99] disabled:bg-primary/30 disabled:shadow-none"
-        >
-          검토 시작하기
-        </button>
+        <Button onClick={onSubmit} disabled={files.length === 0} full className="mt-5">
+          {files.length > 0 ? `서류 ${files.length}건 검토 시작` : '검토 시작하기'}
+        </Button>
       </section>
     </>
   )
 }
 
+/* ─────────────────────────── 진행 ─────────────────────────── */
+
 function Progress({
   stages,
   status,
+  count,
 }: {
   stages: readonly { key: string; label: string; statuses: readonly string[] }[]
   status: ReviewStatus
+  count: number
 }) {
   const activeIndex = stages.findIndex((s) => s.statuses.includes(status))
 
   return (
     <section className="mt-8 px-5">
-      <div className="rounded-3xl bg-white p-6 shadow-card">
+      <div className="surface-panel p-6">
         <div className="space-y-5">
           {stages.map((stage, i) => {
             const done = activeIndex > i
@@ -332,29 +380,25 @@ function Progress({
             return (
               <div key={stage.key} className="flex items-center gap-3">
                 <span
-                  className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ${
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
                     done
                       ? 'bg-status-green/10 text-status-green'
                       : active
-                        ? 'bg-accent-soft text-accent'
-                        : 'bg-line/60 text-subtle'
+                        ? 'bg-primary-soft text-primary'
+                        : 'bg-line/60 text-faint'
                   }`}
                 >
                   {done ? (
-                    <Check size={18} strokeWidth={3} />
+                    <Check size={17} strokeWidth={3} />
                   ) : active ? (
-                    <Loader2 size={18} className="animate-spin" />
+                    <Loader2 size={17} className="animate-spin" />
                   ) : (
                     <span className="text-sm font-bold">{i + 1}</span>
                   )}
                 </span>
                 <span
                   className={`text-sm font-bold ${
-                    done
-                      ? 'text-subtle'
-                      : active
-                        ? 'text-ink'
-                        : 'text-subtle'
+                    done ? 'text-subtle' : active ? 'text-ink' : 'text-faint'
                   }`}
                 >
                   {stage.label}
@@ -364,149 +408,214 @@ function Progress({
           })}
         </div>
 
-        <p className="mt-6 border-t border-line pt-4 text-xs leading-relaxed text-subtle">
-          AI 진단은 1분 정도 걸릴 수 있어요.
-          <br />
-          이 화면을 벗어나도 검토는 계속 진행돼요.
+        <p className="mt-6 border-t border-line pt-4 text-xs leading-relaxed text-muted">
+          서류 {count}건을 하나씩 읽고 있어요. 1~2분 정도 걸릴 수 있어요.
+          <br />이 화면을 벗어나도 검토는 계속돼요.
         </p>
       </div>
     </section>
   )
 }
 
+/* ─────────────────────────── 결과 ─────────────────────────── */
+
 function Result({ review, onReset }: { review: ReviewResponse; onReset: () => void }) {
   const failed = review.review_status === 'failed'
-  const result = review.result
+  const readable = review.files.filter((f) => f.diagnosis)
 
-  if (failed || !result) {
+  if (failed || readable.length === 0) {
     return (
       <section className="mt-8 px-5">
-        <div className="rounded-3xl bg-white p-6 text-center shadow-card">
-          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50">
-            <AlertTriangle size={22} className="text-status-red" />
-          </div>
-          <h3 className="mt-4 text-section text-ink">검토하지 못했어요</h3>
-          <p className="mt-2 text-sm leading-relaxed text-muted">
-            {result?.overall || '서류를 읽는 데 실패했습니다.'}
-          </p>
-          <button
-            onClick={onReset}
-            className="mt-5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-primary py-3 text-sm font-bold text-white"
-          >
-            <RotateCcw size={15} /> 다시 검토하기
-          </button>
+        <div className="surface-panel">
+          <EmptyState
+            icon={AlertTriangle}
+            title="검토하지 못했어요"
+            description={review.summary || '서류를 읽는 데 실패했습니다.'}
+            actionLabel="다시 검토하기"
+            onAction={onReset}
+          />
         </div>
       </section>
     )
   }
 
-  const missingDocs = result.missing_documents
-
   return (
-    <section className="mt-6 space-y-4 px-5">
-      {/* 종합 진단 */}
-      <div className="rounded-3xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-5">
-        <p className="text-xs font-bold text-muted">{result.document_type}</p>
-        <p className="mt-2 text-[15px] font-semibold leading-relaxed text-ink">
-          {result.overall}
-        </p>
-      </div>
-
-      <FindingList
-        title="오타·맞춤법"
-        items={result.typos}
-        emptyLabel="발견된 오타가 없어요."
-        tone="warn"
-      />
-      <FindingList
-        title="빠진 항목"
-        items={result.missing_fields}
-        emptyLabel="빈칸 없이 모두 작성되었어요."
-        tone="warn"
-      />
-      <FindingList
-        title="형식 오류"
-        items={result.format_issues}
-        emptyLabel="형식 문제가 없어요."
-        tone="warn"
-      />
-
-      {/* 요건 대조는 정책을 골랐을 때만 의미가 있다 */}
-      {review.policy_id && (
-        <FindingList
-          title="따로 제출해야 할 서류"
-          items={missingDocs}
-          emptyLabel="필요한 서류가 모두 준비된 것 같아요."
-          tone="doc"
-        />
+    <section className="mt-6 space-y-5 px-5">
+      {review.summary && (
+        <div className="rounded-2xl bg-primary-soft p-4">
+          <p className="text-[15px] font-semibold leading-relaxed text-ink">{review.summary}</p>
+        </div>
       )}
 
-      <FindingList
-        title="보완하면 좋은 점"
-        items={result.improvement_points}
-        emptyLabel="특별히 보완할 점이 없어요."
-        tone="info"
-      />
+      {/* '요건이 없다'와 '요건을 충족했다'를 절대 뭉뚱그리지 않는다 */}
+      <RequirementSection review={review} />
 
-      <button
-        onClick={onReset}
-        className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-line bg-white py-3 text-sm font-bold text-ink shadow-card"
-      >
+      <div>
+        <h3 className="text-section text-ink">서류별 검토</h3>
+        <div className="mt-3 space-y-3">
+          {review.files.map((file) => (
+            <FileResult key={file.upload_id} file={file} />
+          ))}
+        </div>
+      </div>
+
+      <Button variant="secondary" full onClick={onReset}>
         <RotateCcw size={15} /> 다른 서류 검토하기
-      </button>
+      </Button>
     </section>
   )
 }
 
-function FindingList({
-  title,
-  items,
-  emptyLabel,
-  tone,
-}: {
-  title: string
-  items: string[]
-  emptyLabel: string
-  tone: 'warn' | 'doc' | 'info'
-}) {
-  const empty = items.length === 0
-  const badge =
-    tone === 'warn'
-      ? 'bg-red-50 text-status-red'
-      : tone === 'doc'
-        ? 'bg-line text-muted'
-        : 'bg-brand-light/20 text-brand'
+function RequirementSection({ review }: { review: ReviewResponse }) {
+  const { requirement_status, requirement_matches } = review
+
+  if (requirement_status === 'not_requested') return null
+
+  // 이 정책은 공고에 필수서류가 명시돼 있지 않다(전체의 63%).
+  // 대조를 못 했다는 사실을 숨기고 "모두 준비됐다"고 하면 근거 없는 안심이 된다.
+  if (requirement_status === 'no_requirement_data') {
+    return (
+      <div className="surface-panel p-4">
+        <div className="flex items-start gap-2.5">
+          <Info size={17} strokeWidth={1.8} className="mt-0.5 shrink-0 text-subtle" />
+          <div>
+            <p className="text-sm font-semibold text-ink">요건 대조는 하지 못했어요</p>
+            <p className="mt-1 text-sm leading-relaxed text-muted">
+              이 정책은 공고에 필수 서류가 명시되어 있지 않아요. 서류 자체 검토 결과만
+              확인해주세요.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const covered = requirement_matches.filter((m) => m.likely_covered)
+  const missing = requirement_matches.filter((m) => !m.likely_covered)
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-card">
-      <div className="flex items-center gap-2">
-        <h4 className="text-sm font-bold text-ink">{title}</h4>
-        {empty ? (
-          <span className="rounded-lg bg-green-50 px-2 py-0.5 text-xs font-bold text-status-green">
+    <div>
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-section text-ink">정책 요건 대조</h3>
+        <span className="text-sm font-bold text-ink">
+          {covered.length}
+          <span className="text-subtle"> / {requirement_matches.length}</span>
+        </span>
+      </div>
+
+      <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
+        {[...covered, ...missing].map((m) => (
+          <RequirementRow key={m.document_name} match={m} />
+        ))}
+      </div>
+
+      {missing.length > 0 && (
+        <p className="mt-2.5 text-xs leading-relaxed text-muted">
+          확인되지 않은 서류는 기관에서 발급받아 함께 제출해야 해요.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function RequirementRow({ match }: { match: RequirementMatch }) {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <span
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+          match.likely_covered ? 'bg-status-green/10 text-status-green' : 'bg-line text-subtle'
+        }`}
+      >
+        {match.likely_covered ? (
+          <Check size={13} strokeWidth={3} />
+        ) : (
+          <X size={13} strokeWidth={2.5} />
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          className={`block truncate text-sm ${
+            match.likely_covered ? 'font-medium text-ink' : 'text-muted'
+          }`}
+        >
+          {match.document_name}
+        </span>
+        {match.matched_file && (
+          <span className="mt-0.5 block truncate text-xs text-subtle">{match.matched_file}</span>
+        )}
+      </span>
+    </div>
+  )
+}
+
+function FileResult({ file }: { file: ReviewFile }) {
+  const d = file.diagnosis
+
+  if (!d) {
+    const reason: Record<string, string> = {
+      unsupported: '지원하지 않는 형식이에요',
+      empty: '텍스트를 찾지 못했어요 (스캔 이미지일 수 있어요)',
+      failed: '파일을 읽지 못했어요',
+      pending: '아직 읽지 않았어요',
+    }
+    return (
+      <div className="surface-panel flex items-center gap-3 p-4">
+        <AlertTriangle size={17} strokeWidth={1.8} className="shrink-0 text-subtle" />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium text-ink">{file.file_name}</span>
+          <span className="block text-xs text-muted">
+            {reason[file.extraction_status] || '읽지 못했어요'}
+          </span>
+        </span>
+      </div>
+    )
+  }
+
+  const findings: { label: string; items: string[] }[] = [
+    { label: '오타·맞춤법', items: d.typos },
+    { label: '빠진 항목', items: d.missing_fields },
+    { label: '형식 오류', items: d.format_issues },
+    { label: '보완하면 좋은 점', items: d.improvement_points },
+  ].filter((f) => f.items.length > 0)
+
+  const issueCount = findings.reduce((n, f) => n + f.items.length, 0)
+
+  return (
+    <div className="surface-panel overflow-hidden">
+      <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+        <FileText size={17} strokeWidth={1.8} className="shrink-0 text-brand" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-semibold text-ink">{file.file_name}</span>
+          <span className="block text-xs text-subtle">{d.document_type}</span>
+        </span>
+        {issueCount === 0 ? (
+          <span className="shrink-0 rounded-md bg-status-green/10 px-2 py-0.5 text-[11px] font-bold text-status-green">
             문제 없음
           </span>
         ) : (
-          <span className={`rounded-lg px-2 py-0.5 text-xs font-bold ${badge}`}>
-            {items.length}건
+          <span className="shrink-0 rounded-md bg-line px-2 py-0.5 text-[11px] font-bold text-muted">
+            {issueCount}건
           </span>
         )}
       </div>
 
-      {empty ? (
-        <p className="mt-2 text-sm text-subtle">{emptyLabel}</p>
-      ) : (
-        <ul className="mt-3 space-y-2">
-          {items.map((item, i) => (
-            <li
-              key={`${item}-${i}`}
-              className="flex gap-2 text-sm leading-relaxed text-muted"
-            >
-              <span className="mt-[7px] h-1 w-1 flex-shrink-0 rounded-full bg-primary/30" />
-              <span className="min-w-0 break-words">{item}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className="px-4 py-3">
+        <p className="text-sm leading-relaxed text-muted">{d.overall}</p>
+
+        {findings.map((f) => (
+          <div key={f.label} className="mt-3">
+            <p className="text-xs font-bold text-ink">{f.label}</p>
+            <ul className="mt-1 space-y-1">
+              {f.items.map((item, i) => (
+                <li key={`${item}-${i}`} className="flex gap-2 text-sm leading-relaxed text-muted">
+                  <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-faint" />
+                  <span className="min-w-0 break-words">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
