@@ -8,6 +8,7 @@ from app.core.database import SessionLocal
 from app.core.rag_utils import EmbeddingModel, OllamaEmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
 from app.models.review import ReviewVector
+from app.services.document_names import canonicalize
 
 
 # policy_documents 중 요건 대조에 쓸 문서 유형
@@ -143,13 +144,27 @@ def _collect_requirements(db: Session, policy: NormalizedPolicy) -> list[dict[st
         )
 
     # 1) 필수 제출 서류 — [{name, description, ...}]
+    #
+    # 공고 원문의 서류명은 그대로 쓸 수 없다. 표기가 제각각이고(사업자등록증 / 사본 /
+    # 증명원 / 증명…), 한 항목에 여러 서류가 뭉쳐 있고(19%), 서류명이 아닌 것도
+    # 섞여 있다("신청서", "구비서류"). 실측하면 고유 서류명이 411개인데, 정규화하면
+    # 233개로 줄고 그중 31개가 전체의 55%를 커버한다.
+    #
+    # 정규화하지 않으면
+    #   - 발급 가이드를 서류 하나당 일곱 번 써야 하고,
+    #   - 요건 대조에서 '사업자등록증'과 '사업자등록증 사본'이 서로 다른 요건으로 잡혀
+    #     한 파일이 하나만 커버하게 된다(1:1 배정이므로).
     for entry in policy.required_documents or []:
         if not isinstance(entry, dict):
             continue
-        name = entry.get("name")
+        raw_name = entry.get("name") or ""
         description = entry.get("description") or ""
-        # 서류명 자체가 대조 기준이므로 설명이 있으면 붙여 문맥을 보강한다
-        add("required_document", name, f"{name} {description}".strip())
+
+        for name in canonicalize(raw_name):
+            # 서류명 자체가 대조 기준이다. 설명이 있으면 붙여 문맥을 보강하되,
+            # 원문 표기도 함께 넣어 검색에 잡히게 한다.
+            source = " ".join(filter(None, [name, description, raw_name]))
+            add("required_document", name, source)
 
     # 2) 지원대상 요건 텍스트 (자연어)
     add("eligibility", "지원 대상", policy.target_text)
