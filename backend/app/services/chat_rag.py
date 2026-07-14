@@ -1,6 +1,7 @@
 import os
 import uuid
 import hashlib
+import logging
 import re
 from functools import wraps
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -17,6 +18,9 @@ from app.core.rag_utils import (
 )
 from app.models.chat import ChatMessage, ChatSession, PolicyChunk
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
+
+
+logger = logging.getLogger(__name__)
 
 
 DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
@@ -1217,8 +1221,14 @@ POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
     "정책",
     "공고",
     "공고문",
+    "복지",
     "지원",
     "지원금",
+    "현금",
+    "현금성",
+    "지급",
+    "장려금",
+    "급여",
     "혜택",
     "보조금",
     "융자",
@@ -1719,6 +1729,7 @@ def generate_chat_answer(
 
     if provider == "gemini":
         if not settings.GEMINI_API_KEY:
+            logger.warning("GEMINI_API_KEY is not set; falling back to retrieval-only chat answer.")
             return build_retrieval_only_answer(query, sources)
         try:
             from google import genai
@@ -1734,6 +1745,7 @@ def generate_chat_answer(
             )
             return (response.text or "").strip() or build_retrieval_only_answer(query, sources)
         except Exception:
+            logger.exception("Gemini chat completion failed; falling back to retrieval-only chat answer.")
             return build_retrieval_only_answer(query, sources)
 
     if provider != "openai":
@@ -1742,7 +1754,12 @@ def generate_chat_answer(
     try:
         from openai import OpenAI
 
-        client = OpenAI()
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            logger.warning("OPENAI_API_KEY is not set; falling back to retrieval-only chat answer.")
+            return build_retrieval_only_answer(query, sources)
+
+        client = OpenAI(api_key=openai_api_key)
         if is_langsmith_enabled():
             try:
                 from langsmith import wrappers
@@ -1762,6 +1779,7 @@ def generate_chat_answer(
         )
         return response.choices[0].message.content or ""
     except Exception:
+        logger.exception("OpenAI chat completion failed; falling back to retrieval-only chat answer.")
         return build_retrieval_only_answer(query, sources)
 
 

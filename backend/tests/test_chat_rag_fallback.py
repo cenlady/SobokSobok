@@ -121,4 +121,6 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
 
     assert is_out_of_policy_scope("이거 요약해줘", policy_id=policy_id) is False
     assert is_out_of_policy_scope("미용실 지원금 있어?", policy_id=None) is False
+    assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
+    assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
