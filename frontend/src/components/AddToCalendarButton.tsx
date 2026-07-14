@@ -45,11 +45,16 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
       setState('done')
     } catch (e) {
       setState('error')
-      setMessage(
-        e instanceof Error && /refresh token/i.test(e.message)
-          ? '캘린더 권한이 없어요. 로그아웃 후 다시 로그인해주세요.'
-          : '캘린더 등록에 실패했어요.',
-      )
+      let errMsg = '캘린더 등록에 실패했어요.'
+      if (e instanceof Error) {
+        if (/refresh token/i.test(e.message)) {
+          errMsg = '캘린더 권한이 없어요. 로그아웃 후 다시 로그인해주세요.'
+        } else if (/이미/i.test(e.message)) {
+          errMsg = '이미 등록된 공고입니다.'
+          alert('이미 구글 캘린더에 등록 완료된 공고입니다!')
+        }
+      }
+      setMessage(errMsg)
     }
   }
 

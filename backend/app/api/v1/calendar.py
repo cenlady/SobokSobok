@@ -162,6 +162,16 @@ async def register_policy_calendar_event(
 
     access_token = await get_valid_google_token(current_user, db)
 
+    # 중복 체크: 구글 일정에서 동일한 마감 일정이 이미 연동되어 있는지 실시간 검증
+    existing_events = await get_google_calendar_events(access_token)
+    target_summary = f"[소복소복] {policy.title} 신청 마감"
+    for ev in existing_events:
+        if ev.get("summary") == target_summary:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="이미 구글 캘린더에 연동된 공고입니다."
+            )
+
     start_date_str = policy.apply_end.strftime("%Y-%m-%d")
     end_date = policy.apply_end + timedelta(days=1)
     end_date_str = end_date.strftime("%Y-%m-%d")
