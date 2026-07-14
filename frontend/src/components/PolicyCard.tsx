@@ -2,7 +2,7 @@ import { AlertCircle, ArrowRight, Bookmark, BookmarkCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getDeadlineInfo } from '../lib/deadline'
 import { NEED_OPTIONS } from '../lib/recommend'
-import { Button, StatusBadge, TagList } from './ui'
+import { Button, IconButton, StatusBadge, TagList } from './ui'
 
 const SUPPORT_TYPE_LABELS: Record<string, string> = {
   현금: '현금 지원',
@@ -78,30 +78,27 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
 
   return (
     <article className="rounded-2xl bg-white p-4 shadow-card">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <StatusBadge info={deadline} />
 
-          <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>
+          {/* 제목은 두 줄로 고정한다. 한 줄짜리와 두 줄짜리가 섞이면 카드 높이가 들쭉날쭉해
+              리스트가 어수선해 보인다. min-h로 자리를 미리 잡아둔다. */}
+          <h4 className="mt-2 line-clamp-2 min-h-[44px] text-card text-ink">{policy.title}</h4>
 
           {policy.summary && (
-            <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-muted">
-              {policy.summary}
-            </p>
+            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-muted">{policy.summary}</p>
           )}
         </div>
 
-        <button
-          type="button"
+        <IconButton
+          icon={saved ? BookmarkCheck : Bookmark}
           onClick={() => onToggleSave(policy.policy_id)}
           disabled={savePending}
-          aria-label={saved ? '저장 해제' : '정책 저장'}
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors active:scale-95 disabled:opacity-50 ${
-            saved ? 'bg-accent-soft text-accent' : 'bg-line/50 text-subtle'
-          }`}
-        >
-          {saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
-        </button>
+          active={saved}
+          label={saved ? '저장 해제' : '정책 저장'}
+          className="-mr-1.5 -mt-1.5"
+        />
       </div>
 
       {categoryLabels.length > 0 && (

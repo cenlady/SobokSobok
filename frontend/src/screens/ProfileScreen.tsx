@@ -1,18 +1,21 @@
 import {
   Bell,
+  BriefcaseBusiness,
   CalendarSync,
   ChevronRight,
   Lock,
+  LogOut,
   MapPin,
   Pencil,
   SlidersHorizontal,
+  User,
   Users,
   Utensils,
   Wallet,
-  BriefcaseBusiness,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
+import { Button } from '../components/ui'
 import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
 import { useState } from 'react'
@@ -29,6 +32,8 @@ export default function ProfileScreen() {
     navigate('/login', { replace: true })
   }
 
+  const initial = profile.ownerName?.trim()?.[0] || null
+
   return (
     <div className="pb-8">
       <TopBar />
@@ -39,19 +44,24 @@ export default function ProfileScreen() {
           이름이 곧 그 사람이라 개인적이다. */}
       <section className="flex flex-col items-center px-5 pt-2">
         <div className="relative">
+          {/* 이름이 없으면 물음표(?) 대신 중립적인 사람 아이콘을 쓴다.
+              물음표는 "데이터를 못 불러왔다"는 오류처럼 읽힌다. */}
           <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-soft text-2xl font-bold text-primary">
-            {profile.ownerName?.trim()?.[0] || '?'}
+            {initial ?? <User size={30} strokeWidth={1.8} className="text-primary/60" />}
           </div>
+          {/* 터치 영역 44px. 보이는 원은 28px이지만 손가락이 닿는 영역은 넓힌다. */}
           <button
             onClick={() => navigate('/onboarding')}
             aria-label="프로필 수정"
-            className="absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full bg-ink text-white ring-4 ring-cream active:scale-95"
+            className="tap-44 absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full bg-ink text-white ring-4 ring-cream active:scale-95"
           >
             <Pencil size={12} />
           </button>
         </div>
 
-        <h2 className="mt-3 text-xl font-bold text-ink">{profile.ownerName} 사장님</h2>
+        <h2 className="mt-3 text-xl font-bold text-ink">
+          {profile.ownerName ? `${profile.ownerName} 사장님` : '사장님'}
+        </h2>
         {profile.storeName && <p className="mt-0.5 text-sm text-muted">{profile.storeName}</p>}
         {user?.email && <p className="mt-1 text-xs text-subtle">{user.email}</p>}
       </section>
@@ -125,14 +135,16 @@ export default function ProfileScreen() {
           <SettingRow icon={Lock} title="로그인 및 보안" desc="연결된 계정 관리" />
         </div>
 
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={handleLogout}
-            className="text-sm font-medium text-muted active:opacity-60"
-          >
-            로그아웃
+        {/* 로그아웃이 탈퇴보다 훨씬 흔한 동작인데, 탈퇴만 빨간 글씨라 오히려 그쪽이
+            먼저 눈에 들어왔다. 로그아웃을 버튼으로 세우고 탈퇴는 아래로 물린다.
+            빨강도 뺐다 — 이 앱에서 빨강은 '마감 임박'에만 쓴다. */}
+        <div className="mt-8 space-y-3">
+          <Button variant="secondary" full onClick={handleLogout}>
+            <LogOut size={16} /> 로그아웃
+          </Button>
+          <button className="w-full py-2 text-center text-xs font-medium text-subtle underline underline-offset-2">
+            회원 탈퇴
           </button>
-          <button className="text-sm font-medium text-status-red">탈퇴하기</button>
         </div>
       </section>
     </div>

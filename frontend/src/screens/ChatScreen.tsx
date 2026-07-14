@@ -239,7 +239,7 @@ export default function ChatScreen() {
           <button
             type="submit"
             disabled={sending}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95 disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
           >
             {sending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
           </button>

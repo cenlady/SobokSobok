@@ -3,7 +3,7 @@ import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lu
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
-import { Button, EmptyState, LoadingLine, StatusBadge } from '../components/ui'
+import { Button, EmptyState, IconButton, LoadingLine, StatusBadge } from '../components/ui'
 import { toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
 import { TODAY } from '../lib/format'
@@ -131,21 +131,10 @@ export default function HomeScreen() {
             <p className="text-section text-ink">
               {year}년 {month + 1}월
             </p>
-            <div className="flex gap-1">
-              <button
-                onClick={() => shift(-1)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted active:bg-line/50"
-                aria-label="이전 달"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                onClick={() => shift(1)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted active:bg-line/50"
-                aria-label="다음 달"
-              >
-                <ChevronRight size={18} />
-              </button>
+            {/* 터치 영역 44×44 — 달력 넘김은 자주 쓰는데 화살표가 작아 누르기 어려웠다 */}
+            <div className="-mr-2 flex">
+              <IconButton icon={ChevronLeft} onClick={() => shift(-1)} label="이전 달" />
+              <IconButton icon={ChevronRight} onClick={() => shift(1)} label="다음 달" />
             </div>
           </div>
 
@@ -164,14 +153,17 @@ export default function HomeScreen() {
                   key={`${c.dateKey ?? 'empty'}-${idx}`}
                   disabled={!c.inMonth}
                   onClick={() => c.dateKey && setSelected(c.dateKey)}
-                  className="relative flex flex-col items-center py-1"
+                  // 셀 자체를 44px 높이로. 날짜 하나 고르는 게 이 화면의 주된 조작이다.
+                  className="relative flex h-11 flex-col items-center justify-center"
                 >
                   <span
                     className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm ${
                       isSel
                         ? 'bg-ink font-bold text-white'
                         : !c.inMonth
-                          ? 'text-subtle/50'
+                          ? // 지난달/다음달 날짜. 흐리게 두되 읽을 수는 있어야 한다.
+                            // faint(2.4:1)는 텍스트에 쓰면 사실상 안 보인다.
+                            'text-subtle/70'
                           : isToday
                             ? 'font-bold text-primary'
                             : 'text-ink'
@@ -184,7 +176,7 @@ export default function HomeScreen() {
                       <span
                         key={i}
                         className={`h-1.5 w-1.5 rounded-full ${
-                          kind === 'urgent' ? 'bg-status-red' : 'bg-subtle'
+                          kind === 'urgent' ? 'bg-status-red' : 'bg-muted'
                         }`}
                       />
                     ))}

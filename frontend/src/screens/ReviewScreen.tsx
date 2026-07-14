@@ -304,7 +304,7 @@ function IdleForm({
         <button
           onClick={onSubmit}
           disabled={!file}
-          className="mt-5 w-full rounded-2xl bg-primary py-3.5 text-base font-semibold text-white shadow-lg shadow-primary/20 active:scale-[0.99] disabled:bg-primary/30 disabled:shadow-none"
+          className="mt-5 flex h-12 w-full items-center justify-center rounded-xl bg-primary text-[15px] font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           검토 시작하기
         </button>

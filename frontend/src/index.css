@@ -17,11 +17,20 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 데스크톱에서 프레임을 화면 한가운데에 세운다.
+ *
+ * .app-frame의 margin: 0 auto 만으로도 이론상 가운데 오지만, 화면마다 최상위 요소가
+ * 달라(어떤 건 flex, 어떤 건 h-[100dvh]) 정렬이 흔들릴 여지가 있었다. 부모(#root)에서
+ * flex로 못박아 두면 자식이 무엇이든 가운데를 벗어나지 않는다. */
+#root {
+  display: flex;
+  justify-content: center;
+}
+
 /* 모바일 프레임: 데스크톱에서는 가운데 정렬된 폰 크기, 모바일에서는 풀스크린 */
 .app-frame {
   width: 100%;
   max-width: 430px;
-  margin: 0 auto;
   min-height: 100dvh;
   background: theme('colors.cream');
   position: relative;
@@ -35,4 +44,22 @@ body {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* 최소 터치 영역 44×44.
+ *
+ * 달력 화살표, 북마크, 연필 같은 작은 아이콘 버튼은 눈에 보이는 크기는 작아도
+ * 손가락이 닿는 영역은 44px여야 한다. ::after로 영역만 넓히면 레이아웃을 건드리지
+ * 않고 터치 영역을 키울 수 있다. */
+.tap-44 {
+  position: relative;
+}
+.tap-44::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
 }

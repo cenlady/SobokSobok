@@ -446,7 +446,7 @@ export default function PolicySearchScreen() {
                   disabled={allPage === 0}
                   onClick={() => setAllPage((page) => page - 1)}
                   aria-label="이전 페이지"
-                  className="shrink-0 rounded-xl bg-white px-3 py-2.5 text-sm font-bold text-ink shadow-card disabled:opacity-30"
+                  className="h-11 shrink-0 rounded-lg border border-line bg-white px-3 text-sm font-bold text-ink transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent"
                 >
                   이전
                 </button>
@@ -483,7 +483,7 @@ export default function PolicySearchScreen() {
                   disabled={!allMeta.has_next || allPage + 1 >= allPageCount}
                   onClick={() => setAllPage((page) => page + 1)}
                   aria-label="다음 페이지"
-                  className="shrink-0 rounded-xl bg-primary px-3 py-2.5 text-sm font-bold text-white disabled:opacity-30"
+                  className="h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
                 >
                   다음
                 </button>

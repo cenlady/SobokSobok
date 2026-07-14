@@ -262,7 +262,7 @@ export default function OnboardingScreen() {
         <button
           onClick={submit}
           disabled={saving}
-          className="w-full rounded-2xl bg-primary py-4 text-lg font-bold text-white active:scale-[0.99] disabled:opacity-60"
+          className="flex h-13 w-full items-center justify-center rounded-xl bg-primary py-4 text-base font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           {saving ? '저장 중…' : isEditing ? '저장하고 추천 다시 받기' : '맞춤 혜택 찾기'}
         </button>
