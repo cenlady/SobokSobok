@@ -1,14 +1,24 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.core.database import get_db
-from app.crud.policy import get_policy, get_program_page, list_policies, list_program_pages
+from app.crud.policy import (
+    get_policy,
+    get_program_page,
+    list_normalized_policies,
+    list_policies,
+    list_program_pages,
+)
 from app.models.normalized_policy import NormalizedPolicy, AttachmentFile
+from app.services.recommend import classify_need_tags
 from app.schemas.policy import (
     NormalizedPolicyDetailRead,
+    NormalizedPolicyListRead,
+    NormalizedPolicyListResponse,
     PolicyAnnouncementDetailRead,
     PolicyAnnouncementRead,
     PolicyProgramPageDetailRead,
@@ -48,6 +58,62 @@ def read_program_page(page_id: int, db: Session = Depends(get_db)):
     if page is None:
         raise HTTPException(status_code=404, detail="Policy program page not found")
     return page
+
+
+@router.get(
+    "/normalized/",
+    response_model=NormalizedPolicyListResponse,
+    summary="정규화 정책 목록 조회 (전체 정책 조회용)",
+)
+def read_normalized_policies(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+    q: str | None = Query(default=None, description="제목·요약 검색어"),
+    support_type: str | None = Query(default=None, description="지원 유형 필터"),
+    sido: str | None = Query(default=None, description="시/도 필터 (전국 공고는 항상 포함)"),
+    category: Literal[
+        "funding",
+        "education_consulting",
+        "digital",
+        "marketing",
+        "facility",
+        "recovery",
+        "employment",
+    ] | None = Query(default=None, description="사용자용 지원 분야 필터"),
+    status: Literal["available", "all", "open", "notice", "closed"] = Query(
+        default="available",
+        description="available=접수중·공고예정(마감 제외), all=전체",
+    ),
+    sort: Literal["deadline", "latest"] = Query(
+        default="deadline",
+        description="deadline=마감 임박순, latest=최신 등록순",
+    ),
+    db: Session = Depends(get_db),
+):
+    policies, total = list_normalized_policies(
+        db,
+        skip=skip,
+        limit=limit,
+        q=q,
+        support_type=support_type,
+        sido=sido,
+        category=category,
+        status=status,
+        sort=sort,
+    )
+    items = [
+        NormalizedPolicyListRead.model_validate(policy).model_copy(
+            update={"categories": classify_need_tags(policy)},
+        )
+        for policy in policies
+    ]
+    return {
+        "items": items,
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+        "has_next": skip + len(items) < total,
+    }
 
 
 @router.get(

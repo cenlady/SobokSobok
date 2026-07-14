@@ -52,52 +52,123 @@ class ReviewVector(Base):
     policy = relationship("NormalizedPolicy")
 
 
+class ReviewSession(Base):
+    """
+    [서류 검토 영역] 검토 요청 한 건. 파일 여러 개를 함께 검토한다.
+
+    파일 하나가 곧 검토 한 건이던 구조를 세션/파일로 나눴다.
+    정책은 평균 3개(최대 25개)의 서류를 요구하는데, 파일을 하나만 받으면
+    "사업자등록증 하나를 올렸더니 24개가 누락됐다"는, 맞지만 쓸모없는 결과가 나온다.
+
+    요건 대조는 파일별이 아니라 '올린 서류 전체' 기준이어야 한다.
+    사업자등록증과 소득금액증명을 함께 올리면 둘 다 충족으로 봐야 하기 때문에,
+    모든 파일의 청크를 합쳐 요건과 대조한다. 그래서 대조 결과는 세션에 붙는다.
+    """
+    __tablename__ = "review_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True, comment="검토를 요청한 사용자")
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=True, index=True, comment="검토 대상 정책 (선택 — 서류 자체 검토는 정책 없이도 가능)")
+
+    # 어디까지 왔나 (폴링으로 진행률을 보여주는 데 쓴다)
+    review_status = Column(
+        String(20), nullable=False, default="queued",
+        comment="검토 진행 단계 (queued, extracting, matching, diagnosing, done, failed)",
+    )
+
+    # 요건 대조를 '할 수 있었는가'. 빈 requirement_matches를 '요건을 다 충족했다'로
+    # 읽으면 안 되기 때문에 별도로 기록한다.
+    #   not_requested       — 정책을 고르지 않았다
+    #   no_requirement_data — 정책은 골랐지만 공고에 필수서류가 명시돼 있지 않다 (전체의 63%)
+    #   matched             — 실제로 대조했다
+    requirement_status = Column(
+        String(24), nullable=False, default="not_requested",
+        comment="요건 대조 가능 여부 (not_requested, no_requirement_data, matched)",
+    )
+    requirement_matches = Column(
+        JSON, nullable=True,
+        comment="요건별 대조 근거 [{document_name, best_similarity, likely_covered, matched_file}]",
+    )
+
+    # 세션 전체 종합 진단 (파일별 진단은 ReviewUpload.diagnosis에 있다)
+    summary = Column(Text, nullable=True, comment="올린 서류 전체에 대한 종합 진단 한두 문장")
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    uploads = relationship(
+        "ReviewUpload",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ReviewUpload.created_at",
+    )
+    policy = relationship("NormalizedPolicy")
+
+
 class ReviewUpload(Base):
     """
-    [서류 검토 영역] 사용자가 업로드한 검토 대상 서류
-    - 역할: 업로드 파일의 물리 경로, 추출 텍스트, 진단 결과를 보관합니다.
+    [서류 검토 영역] 검토 세션에 포함된 파일 하나.
+
     - 정책 첨부(attachment_files)와 의미가 다르므로 테이블을 분리한다.
       (attachment_files = 기관이 게시한 공고 첨부, review_uploads = 사용자 제출 서류)
+    - 파일별 진단(오타·빈칸·형식)은 여기에, 요건 대조는 세션에 붙는다.
     """
     __tablename__ = "review_uploads"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True, comment="업로드한 사용자 (미인증 데모 허용 위해 nullable)")
-    policy_id = Column(UUID(as_uuid=True), ForeignKey("normalized_policies.id", ondelete="CASCADE"), nullable=True, index=True, comment="검토 대상 정책 (선택 — 서류 자체 검토는 정책 없이도 가능)")
+    session_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("review_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="이 파일이 속한 검토 세션",
+    )
 
     original_file_name = Column(Text, nullable=True, comment="원본 파일명")
     storage_path = Column(Text, nullable=False, comment="업로드 파일 저장 경로")
     content_type = Column(String(100), nullable=True, comment="파일 MIME 타입")
     file_size = Column(BigInteger, nullable=True, comment="파일 크기 (Byte)")
 
-    extracted_text = Column(Text, nullable=True, comment="kordoc/OCR로 추출된 서류 본문")
+    extracted_text = Column(Text, nullable=True, comment="kordoc으로 추출된 서류 본문")
+    # '왜 못 읽었나'를 사용자에게 안내하기 위한 원인. review_status(진행 단계)와는 다른 질문이다.
     extraction_status = Column(String(30), nullable=False, default="pending", comment="추출 상태 (pending, success, empty, unsupported, failed)")
 
-    # review_status와 extraction_status는 서로 다른 것을 말한다.
-    #   review_status     = 어디까지 왔나 (진행 단계) — 폴링으로 진행률을 보여주는 데 쓴다
-    #   extraction_status = 왜 못 읽었나 (실패 원인) — 사용자에게 사유를 안내하는 데 쓴다
-    # 하나로 합치면 "요건 대조 중"과 "AI 진단 중"을 구분할 수 없어 가짜 진행률이 된다.
-    review_status = Column(
-        String(20), nullable=False, default="queued",
-        comment="검토 진행 단계 (queued, extracting, matching, diagnosing, done, failed)",
-    )
-
-    diagnosis = Column(JSON, nullable=True, comment="LLM 진단 결과 {document_type, typos[], missing_fields[], format_issues[], improvement_points[], overall}")
-    # 비동기 폴링에서는 결과를 나중에 조회하므로, 메모리로만 반환하면 요건 대조 근거가 유실된다.
-    requirement_matches = Column(
+    diagnosis = Column(
         JSON, nullable=True,
-        comment="요건별 임베딩 대조 근거 [{document_name, best_similarity, likely_covered}]",
+        comment="이 파일 자체의 진단 {document_type, typos[], missing_fields[], format_issues[], improvement_points[], overall}",
     )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    # Relationships
-    policy = relationship("NormalizedPolicy")
+    session = relationship("ReviewSession", back_populates="uploads")
 
 
-# 이미 생성된 DB에 신규 컬럼/인덱스를 무중단 반영하기 위한 패치 SQL.
-# create_all()은 기존 테이블에 컬럼을 추가하지 않으므로 서버 시작 시 함께 실행한다.
+# 구 review_uploads 정리. create_all() '이전에' 실행한다.
+#
+# 파일 하나가 곧 검토 한 건이던 구조를 세션/파일로 나누면서, review_uploads가 들고 있던
+# policy_id·review_status·requirement_matches가 review_sessions로 옮겨갔다. 구 테이블과
+# 새 정의는 호환되지 않는다(session_id NOT NULL이 붙는다).
+#
+# 무조건 DROP하면 기동마다 검토 이력이 날아간다. 구 스키마에만 있던 컬럼(policy_id)을
+# 지문 삼아, 옛 테이블일 때만 한 번 버린다. 새 테이블에는 이 컬럼이 없으므로 두 번 다시
+# 실행되지 않는다(멱등).
+REVIEW_LEGACY_CLEANUP_SQL = [
+    """
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'review_uploads' AND column_name = 'policy_id'
+        ) THEN
+            DROP TABLE review_uploads CASCADE;
+        END IF;
+    END $$;
+    """,
+]
+
+
+# 이미 생성된 테이블에 컬럼/인덱스를 덧붙이는 패치. create_all() '이후'에 실행한다.
 REVIEW_SCHEMA_SQL = [
     "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS document_type VARCHAR(30) NOT NULL DEFAULT 'required_document'",
     "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS source_text TEXT",
@@ -120,26 +191,24 @@ REVIEW_SCHEMA_SQL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_review_vectors_policy_type ON review_vectors (policy_id, document_type)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uk_review_vectors_policy_doc ON review_vectors (policy_id, document_type, document_name)",
-    # 서류 자체 검토로 전환하며 policy_id를 선택으로 변경 (#23)
-    "ALTER TABLE review_uploads ALTER COLUMN policy_id DROP NOT NULL",
-    # 비동기 검토 전환 (#31)
-    "ALTER TABLE review_uploads ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) NOT NULL DEFAULT 'queued'",
-    "ALTER TABLE review_uploads ADD COLUMN IF NOT EXISTS requirement_matches JSON",
     # 서버가 재시작되면 진행 중이던 검토는 살아남지 못한다. BackgroundTasks는 프로세스 안에서
     # 돌기 때문에, 남은 행을 queued로 되돌려봐야 주워갈 워커가 없다 — 사용자는 '대기 중'을
     # 영원히 보게 된다. 정직하게 실패로 표시하고 다시 시도하도록 안내한다.
     """
-    UPDATE review_uploads
+    UPDATE review_sessions
        SET review_status = 'failed',
-           diagnosis = COALESCE(diagnosis, '{
-               "document_type": "unknown",
-               "typos": [], "missing_fields": [], "format_issues": [],
-               "missing_documents": [], "improvement_points": [],
-               "overall": "서버가 재시작되어 검토가 중단되었습니다. 다시 시도해주세요."
-           }'::json)
+           summary = COALESCE(summary, '서버가 재시작되어 검토가 중단되었습니다. 다시 시도해주세요.')
      WHERE review_status IN ('queued', 'extracting', 'matching', 'diagnosing')
     """,
 ]
+
+
+def ensure_review_legacy_cleanup(bind) -> None:
+    """구 review_uploads를 정리한다. 반드시 create_all() 이전에 호출할 것."""
+    if not settings.database_url.startswith("postgresql"):
+        return
+    for statement in REVIEW_LEGACY_CLEANUP_SQL:
+        bind.execute(text(statement))
 
 
 def ensure_review_schema(bind) -> None:

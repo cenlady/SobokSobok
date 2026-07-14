@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -11,6 +13,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.time import korea_now_naive
 from app.core.rag_utils import OllamaEmbeddingModel, OpenAIEmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.recommend import RecommendationVector
@@ -63,15 +66,45 @@ NEED_TAG_LABELS = {
     "employment": "고용/인력",
 }
 
+APPLICATION_METHOD_LABELS = {
+    "online": "온라인",
+    "visit": "방문",
+    "mail": "우편",
+    "email": "이메일",
+    "fax": "팩스",
+    "e_document": "전자문서",
+}
+
+EXPLANATION_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "aspects_to_check": {"type": "array", "items": {"type": "string"}},
+        "next_actions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "strengths", "aspects_to_check", "next_actions"],
+    "additionalProperties": False,
+}
+
+GEMINI_QUOTA_COOLDOWN_SECONDS = 5 * 60
+EXPLANATION_CACHE_TTL_SECONDS = 15 * 60
+_gemini_quota_cooldown_until = 0.0
+_explanation_cache: dict[str, tuple[float, Any]] = {}
+_explanation_cache_lock = threading.Lock()
+
 
 @dataclass
 class MatchEvaluation:
     status: str = "eligible"
+    eligibility_status: str = "eligible"
+    preference_match: str = "not_requested"
     reasons: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
     unknown_conditions: list[str] = field(default_factory=list)
     soft_mismatches: list[str] = field(default_factory=list)
+    preference_mismatches: list[str] = field(default_factory=list)
     matched_tags: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -81,13 +114,18 @@ class NumericConstraintSet:
     logic: str = "all_of"
     requires_review: bool = False
     review_reason: str | None = None
+    has_unparsed_condition: bool = False
 
 
-MATCH_STATUS_PRIORITY = {
-    "eligible": 0,
-    "needs_review": 1,
-    "near_match": 2,
-    "ineligible": 3,
+RESULT_TIER_PRIORITY = {
+    ("eligible", "exact"): 0,
+    ("eligible", "partial"): 0,
+    ("eligible", "not_requested"): 0,
+    ("needs_review", "exact"): 1,
+    ("needs_review", "partial"): 1,
+    ("needs_review", "not_requested"): 1,
+    ("eligible", "none"): 2,
+    ("needs_review", "none"): 3,
 }
 
 
@@ -117,6 +155,9 @@ def recommend_policies(
             apply_url=policy.apply_url,
             apply_start=policy.apply_start,
             apply_end=policy.apply_end,
+            status=policy.status,
+            eligibility_status=evaluation.eligibility_status,
+            preference_match=evaluation.preference_match,
             match_status=evaluation.status,
             confidence=_confidence(evaluation),
             rank_score=round(rank_score, 3),
@@ -125,7 +166,7 @@ def recommend_policies(
             reasons=evaluation.reasons[:6],
             warnings=evaluation.warnings[:4],
             unknown_conditions=evaluation.unknown_conditions,
-            unmet_conditions=evaluation.soft_mismatches,
+            unmet_conditions=evaluation.soft_mismatches + evaluation.preference_mismatches,
             matched_tags=evaluation.matched_tags,
         )
 
@@ -150,15 +191,51 @@ def evaluate_policy(policy: NormalizedPolicy, profile: RecommendationProfileRequ
     _check_apply_status(policy, evaluation)
 
     if evaluation.failed:
-        evaluation.status = "ineligible"
-    elif evaluation.soft_mismatches:
-        evaluation.status = "near_match"
+        evaluation.eligibility_status = "ineligible"
     elif evaluation.warnings:
+        evaluation.eligibility_status = "needs_review"
+    else:
+        evaluation.eligibility_status = "eligible"
+
+    # API 호환을 위해 기존 단일 상태는 유지하되, 자격 확인 경고가 관심 분야
+    # 불일치에 가려지지 않도록 자격 상태를 우선한다.
+    if evaluation.eligibility_status == "ineligible":
+        evaluation.status = "ineligible"
+    elif evaluation.eligibility_status == "needs_review":
         evaluation.status = "needs_review"
+    elif evaluation.soft_mismatches or evaluation.preference_match == "none":
+        evaluation.status = "near_match"
     else:
         evaluation.status = "eligible"
 
     return evaluation
+
+
+def profile_validation_warnings(profile: RecommendationProfileRequest) -> list[str]:
+    """Return actionable conflicts in a recommendation profile without rejecting it."""
+
+    warnings: list[str] = []
+    status_tags = set(profile.business_status_tags)
+    industry_tags = set(profile.industry_tags)
+    employee_min, _ = _range_bounds(profile.employees)
+    age_min, _ = _range_bounds(profile.business_age_years)
+
+    if "small_business" in status_tags and employee_min is not None:
+        employee_limit = 10 if industry_tags == {"manufacturing"} else 5
+        if employee_min >= employee_limit:
+            industry_label = _labels(profile.industry_tags, INDUSTRY_LABELS) or "선택 업종"
+            warnings.append(
+                f"{industry_label}의 직원 수({employee_min}명 이상)와 소상공인 선택이 충돌할 수 있어 "
+                "소상공인 확인서 기준을 먼저 확인해 주세요."
+            )
+
+    if "pre_founder" in status_tags:
+        if employee_min is not None and employee_min > 0:
+            warnings.append("예비창업자로 선택했지만 직원 수가 입력되어 있어 현재 사업 운영 여부를 확인해 주세요.")
+        if age_min is not None and age_min > 0:
+            warnings.append("예비창업자로 선택했지만 업력이 입력되어 있어 사업자 상태를 확인해 주세요.")
+
+    return warnings
 
 
 def explain_policy_recommendation(
@@ -166,36 +243,62 @@ def explain_policy_recommendation(
     policy_id: UUID,
     profile: RecommendationProfileRequest,
 ) -> RecommendationExplanationResponse:
+    global _gemini_quota_cooldown_until
+
     from app.schemas.recommend import RecommendationExplanationResponse
     policy = db.get(NormalizedPolicy, policy_id)
     if not policy:
         raise ValueError("Policy not found")
 
+    cache_key = _explanation_cache_key(policy, profile)
+    cached_response = _get_cached_explanation(cache_key)
+    if cached_response is not None:
+        return cached_response
+
     evaluation = evaluate_policy(policy, profile)
 
-    fallback_summary = "지원 조건 충족률이 높습니다." if evaluation.status == "eligible" else "지원 조건 확인이 필요합니다."
+    fallback_summary = _fallback_explanation_summary(evaluation)
     fallback_strengths = evaluation.reasons
-    fallback_aspects_to_check = evaluation.failed + evaluation.soft_mismatches + evaluation.warnings
+    fallback_aspects_to_check = (
+        evaluation.failed
+        + evaluation.soft_mismatches
+        + evaluation.preference_mismatches
+        + evaluation.warnings
+    )
+    explanation_evidence = _explanation_evidence(policy)
     
     fallback_next_actions = []
     if policy.apply_end:
-        days_left = (policy.apply_end - datetime.now()).days
+        days_left = (policy.apply_end - korea_now_naive()).days
         if days_left >= 0:
             fallback_next_actions.append(f"마감일({policy.apply_end.strftime('%m월 %d일')})이 {days_left}일 남았으니 늦지 않게 신청해 보세요.")
         else:
             fallback_next_actions.append("신청 기간이 마감되었는지 확인해 보세요.")
     else:
         fallback_next_actions.append("신청 기간을 확인해 보세요.")
-    fallback_next_actions.append("우측 하단의 'AI 상담' 버튼을 눌러 상세 지원 서류와 자격을 물어보세요.")
+
+    document_names = _required_document_names(policy.required_documents)
+    if document_names:
+        preview = ", ".join(document_names[:3])
+        suffix = " 등" if len(document_names) > 3 else ""
+        fallback_next_actions.append(f"필요 서류({preview}{suffix})를 준비할 수 있는지 확인해 보세요.")
+    else:
+        fallback_next_actions.append("AI 상담에서 제출 서류와 세부 자격을 확인해 보세요.")
 
     fallback_response = RecommendationExplanationResponse(
+        match_status=evaluation.status,
+        eligibility_status=evaluation.eligibility_status,
+        preference_match=evaluation.preference_match,
+        confidence=_confidence(evaluation),
+        generated_by="rules",
         summary=fallback_summary,
         strengths=fallback_strengths,
         aspects_to_check=fallback_aspects_to_check,
-        next_actions=fallback_next_actions
+        next_actions=fallback_next_actions,
+        evidence=explanation_evidence,
     )
 
-    if not settings.GEMINI_API_KEY:
+    if not settings.GEMINI_API_KEY or time.monotonic() < _gemini_quota_cooldown_until:
         return fallback_response
 
     try:
@@ -204,7 +307,11 @@ def explain_policy_recommendation(
         
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
         
-        profile_region = f"{profile.region.sido or ''} {profile.region.sigungu or ''}".strip() or "전국"
+        profile_region = (
+            f"{profile.region.sido or ''} {profile.region.sigungu or ''}".strip()
+            if profile.region
+            else ""
+        ) or "지역 미입력"
         profile_industries = _labels(profile.industry_tags, INDUSTRY_LABELS) or "전체"
         profile_statuses = _labels(profile.business_status_tags, BUSINESS_STATUS_LABELS) or "전체"
         profile_employees = _range_text(profile.employees, "명") or "제한 없음"
@@ -217,6 +324,9 @@ def explain_policy_recommendation(
         policy_target = policy.target_text or ""
         policy_support = policy.support_content or ""
         policy_apply_period = f"{policy.apply_start.strftime('%Y-%m-%d') if policy.apply_start else '시작일 미정'} ~ {policy.apply_end.strftime('%Y-%m-%d') if policy.apply_end else '마감일 미정'}"
+        policy_methods = _labels(policy.application_methods or [], APPLICATION_METHOD_LABELS) or "확인 필요"
+        policy_contacts = ", ".join(str(item) for item in (policy.contact_points or [])[:5]) or "확인 필요"
+        policy_documents = ", ".join(document_names[:8]) or "확인 필요"
         
         prompt = f"""당신은 소상공인에게 맞춤형 정책을 설명해주는 친절한 AI 상담사 '소복이'입니다.
 지원 정책의 정보와 사용자의 프로필, 그리고 규칙 기반으로 분석한 적합성 평가 결과를 바탕으로 사용자에게 최적화된 맞춤형 추천 근거를 자연스럽고 친절하게 작성해 주세요.
@@ -236,16 +346,30 @@ def explain_policy_recommendation(
 - 지원 대상: {policy_target}
 - 지원 내용: {policy_support}
 - 접수 기간: {policy_apply_period}
+- 신청 방법: {policy_methods}
+- 문의처: {policy_contacts}
+- 필요 서류: {policy_documents}
 
 [적합성 평가 결과]
 - 판정 상태: {evaluation.status}
+- 자격 판정: {evaluation.eligibility_status}
+- 관심 분야 일치도: {evaluation.preference_match}
 - 잘 맞는 조건 (reasons): {evaluation.reasons}
 - 불확실하거나 주의할 조건 (warnings): {evaluation.warnings}
+- 직접 일치하지 않는 조건 (soft_mismatches): {evaluation.soft_mismatches}
+- 관심 분야 불일치 (preference_mismatches): {evaluation.preference_mismatches}
+- 확인하지 못한 조건 (unknown_conditions): {evaluation.unknown_conditions}
 - 충족하지 못한 조건 (failed): {evaluation.failed}
 
 위의 정보들을 종합하여 다음 네 가지 항목을 포함하는 JSON 객체를 반환해 주세요.
 
-1. AI 추천 이유 (한 줄 요약) ("summary"): 사용자의 어떤 조건이 이 정책과 완벽히 부합하며 왜 추천하는지, 친근한 대화체(ex: "~해서 추천해 드려요!")로 1줄로 요약해 주세요.
+중요한 작성 원칙:
+- 규칙 평가 결과를 사실 판정의 기준으로 삼고 새로운 자격조건을 추측하지 마세요.
+- 판정이 needs_review이면 확인이 필요한 조건을, near_match이면 직접 일치하지 않는 조건을, ineligible이면 충족하지 못한 조건을 반드시 먼저 밝히세요.
+- near_match, needs_review, ineligible 판정에 "완벽히 부합", "조건을 모두 충족" 같은 표현을 사용하지 마세요.
+- 신청 방법·문의처·필요 서류는 위 정책 정보에 있는 값만 사용하세요.
+
+1. AI 추천 이유 (한 줄 요약) ("summary"): 판정 상태를 과장하지 않고 핵심 적합성 또는 확인 필요 사유를 친근한 대화체로 1줄로 요약해 주세요.
 2. 잘 맞는 부분 ("strengths"): 규칙 평가 결과(reasons)와 지원 대상을 연관 지어 사용자와 잘 맞는 부분을 구체적이고 읽기 쉬운 항목으로 작성해 주세요. (2~4개 권장, ex: "- 서울 마포구 소상공인을 대상으로 하여 조건에 잘 맞아요.")
 3. 확인할 부분 ("aspects_to_check"): 규칙 평가 결과(warnings/failed)를 바탕으로 사용자가 지원하기 전에 세부적으로 확인해야 하거나 모호한 점을 구체적이고 읽기 쉬운 항목으로 작성해 주세요. (1~3개 권장, ex: "- 공고에 구체적인 업종 제한이 없어 세부 확인이 필요해요.")
 4. 다음 행동 ("next_actions"): 신청 기한(apply_end), AI 상담 활용법 등을 포함하여 사용자가 바로 취해야 할 구체적인 행동을 항목으로 제안해 주세요. (1~3개 권장, ex: "- 마감일(7월 20일)까지 10일 남았으니 서류를 미리 준비해 보세요.", "- AI 상담을 통해 필요한 서류가 무엇인지 질문해 보세요.")
@@ -263,6 +387,9 @@ def explain_policy_recommendation(
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_json_schema=EXPLANATION_JSON_SCHEMA,
+                temperature=0.2,
+                max_output_tokens=800,
             )
         )
         
@@ -276,15 +403,180 @@ def explain_policy_recommendation(
         res_text = res_text.strip()
         
         data = json.loads(res_text)
-        return RecommendationExplanationResponse(
-            summary=data.get("summary", fallback_summary),
-            strengths=data.get("strengths", fallback_strengths),
-            aspects_to_check=data.get("aspects_to_check", fallback_aspects_to_check),
-            next_actions=data.get("next_actions", fallback_next_actions),
+        generated_summary = _clean_explanation_summary(data.get("summary"), fallback_summary)
+        # 불확실·불일치 판정은 모델 문장 하나가 판정을 뒤집지 못하도록 규칙 요약을
+        # 그대로 사용한다. Gemini는 항목을 읽기 좋게 다듬는 역할만 맡는다.
+        safe_summary = generated_summary if evaluation.status == "eligible" else fallback_summary
+        generated_response = RecommendationExplanationResponse(
+            match_status=evaluation.status,
+            eligibility_status=evaluation.eligibility_status,
+            preference_match=evaluation.preference_match,
+            confidence=_confidence(evaluation),
+            generated_by="gemini",
+            summary=safe_summary,
+            strengths=_clean_explanation_items(data.get("strengths"), fallback_strengths, limit=4),
+            aspects_to_check=_clean_explanation_items(
+                data.get("aspects_to_check"), fallback_aspects_to_check, limit=4
+            ),
+            next_actions=_clean_explanation_items(data.get("next_actions"), fallback_next_actions, limit=4),
+            evidence=explanation_evidence,
         )
+        _cache_explanation(cache_key, generated_response)
+        return generated_response
     except Exception as e:
+        error_text = str(e)
+        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
+            _gemini_quota_cooldown_until = time.monotonic() + GEMINI_QUOTA_COOLDOWN_SECONDS
         print("Gemini API call failed, falling back:", str(e))
         return fallback_response
+
+
+def _explanation_cache_key(
+    policy: NormalizedPolicy,
+    profile: RecommendationProfileRequest,
+) -> str:
+    payload = {
+        "policy_id": str(policy.id),
+        "source_hash": getattr(policy, "source_content_hash", None),
+        "profile": profile.model_dump(mode="json"),
+        "model": settings.GEMINI_TEXT_MODEL,
+        "version": 2,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _get_cached_explanation(cache_key: str):
+    now = time.monotonic()
+    with _explanation_cache_lock:
+        cached = _explanation_cache.get(cache_key)
+        if cached is None:
+            return None
+        expires_at, response = cached
+        if expires_at <= now:
+            _explanation_cache.pop(cache_key, None)
+            return None
+        return response.model_copy(deep=True)
+
+
+def _cache_explanation(cache_key: str, response: Any) -> None:
+    with _explanation_cache_lock:
+        _explanation_cache[cache_key] = (
+            time.monotonic() + EXPLANATION_CACHE_TTL_SECONDS,
+            response.model_copy(deep=True),
+        )
+
+
+def _fallback_explanation_summary(evaluation: MatchEvaluation) -> str:
+    if evaluation.eligibility_status == "ineligible":
+        failure = evaluation.failed[0] if evaluation.failed else "현재 입력한 조건"
+        return f"현재 입력 기준으로는 추천하기 어렵습니다. {failure}"
+    if evaluation.eligibility_status == "needs_review":
+        labels = ", ".join(evaluation.unknown_conditions[:3])
+        if labels:
+            return f"맞는 조건은 있지만 {labels} 확인이 필요합니다."
+        return "맞는 조건은 있지만 세부 자격 확인이 필요합니다."
+    if evaluation.preference_match == "none":
+        mismatch = (
+            evaluation.preference_mismatches[0]
+            if evaluation.preference_mismatches
+            else "선택한 관심 분야와 직접 일치하지 않습니다."
+        )
+        return f"자격 조건은 맞지만 {mismatch}"
+    if evaluation.status == "eligible":
+        return "입력한 조건 기준으로 잘 맞는 정책입니다."
+    if evaluation.status == "near_match":
+        mismatch = evaluation.soft_mismatches[0] if evaluation.soft_mismatches else "일부 조건"
+        return f"유사한 정책이지만 {mismatch}"
+    return "입력한 조건과 공고 세부 내용을 함께 확인해 주세요."
+
+
+def _required_document_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = ""
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _explanation_evidence(policy: NormalizedPolicy) -> list[str]:
+    """Collect source-grounded snippets shown separately from generated prose."""
+
+    eligibility = policy.eligibility or {}
+    evidence: list[str] = []
+
+    target = _clip(policy.target_text, 240)
+    if target:
+        evidence.append(f"지원 대상 원문: {target}")
+
+    for key, label in (
+        ("employee_limit", "직원수 근거"),
+        ("sales_limit", "매출 근거"),
+        ("business_age_limit", "업력 근거"),
+    ):
+        value = eligibility.get(key)
+        if isinstance(value, dict):
+            source_text = _clip(value.get("source_text"), 220)
+            if source_text:
+                evidence.append(f"{label}: {source_text}")
+
+    region = eligibility.get("region")
+    if isinstance(region, dict):
+        region_evidence = [
+            str(item).strip()
+            for item in (region.get("evidence") or [])
+            if str(item).strip()
+        ]
+        if region_evidence:
+            evidence.append(f"지역 근거: {', '.join(region_evidence[:4])}")
+
+    industry = eligibility.get("industry_condition")
+    if isinstance(industry, dict):
+        for item in industry.get("evidence") or []:
+            if not isinstance(item, dict):
+                continue
+            source_text = str(item.get("source_text") or "").strip()
+            if not source_text or source_text == "gov24_support_condition_code":
+                continue
+            evidence.append(f"업종 근거: {_clip(source_text, 200)}")
+            break
+
+    selection_criteria = _clip(eligibility.get("selection_criteria"), 220)
+    if selection_criteria:
+        evidence.append(f"선정 기준: {selection_criteria}")
+
+    return list(dict.fromkeys(evidence))[:6]
+
+
+def _clean_explanation_summary(value: Any, fallback: str) -> str:
+    if not isinstance(value, str):
+        return fallback
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    return cleaned[:240] if cleaned else fallback
+
+
+def _clean_explanation_items(value: Any, fallback: list[str], *, limit: int) -> list[str]:
+    if not isinstance(value, list):
+        return fallback[:limit]
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        cleaned = re.sub(r"\s+", " ", item).strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned[:300])
+        if len(result) >= limit:
+            break
+    return result or fallback[:limit]
 
 
 def build_recommendation_text(policy: NormalizedPolicy) -> str:
@@ -356,7 +648,7 @@ def fit_embedding_dim(vector: list[float], dim: int | None = None) -> list[float
 
 
 def _candidate_query(db: Session):
-    now = datetime.now()
+    now = korea_now_naive()
     return (
         db.query(NormalizedPolicy)
         .filter(NormalizedPolicy.is_active.is_(True))
@@ -386,7 +678,6 @@ def _vector_scores(db: Session, profile: RecommendationProfileRequest) -> tuple[
             .filter(RecommendationVector.embedding_status == "success")
             .filter(RecommendationVector.embedding.isnot(None))
             .order_by(distance)
-            .limit(250)
             .all()
         )
         return {policy_id: float(similarity) for policy_id, similarity in rows}, True
@@ -479,19 +770,23 @@ def _check_business_status(policy: NormalizedPolicy, profile: RecommendationProf
     policy_special = policy_tags & special_tags
     user_special = user_tags & special_tags
 
-    if policy_operating and user_operating and not (policy_operating & user_operating) and not (policy_scale & user_scale):
+    # 운영 단계와 기업 규모는 독립된 자격 축이다. 예비창업 전용 정책과
+    # '소상공인' 규모가 우연히 일치한다고 운영 상태 불일치를 덮으면 안 된다.
+    if policy_operating and user_operating and not (policy_operating & user_operating):
         evaluation.failed.append("사업 운영 상태 조건이 맞지 않습니다.")
         return
 
     if policy_scale and not (policy_scale & user_scale):
         if policy_scale == {"small_medium_business"} and "small_business" in user_tags:
-            evaluation.soft_mismatches.append("중소기업 대상 정책으로 소상공인 신청 가능 범위를 확인해야 합니다.")
+            evaluation.warnings.append("중소기업 대상 정책으로 소상공인 신청 가능 범위를 확인해야 합니다.")
+            evaluation.unknown_conditions.append("사업자 규모")
             return
         evaluation.failed.append("사업자 규모 조건이 맞지 않습니다.")
         return
 
     if policy_special and not (policy_special & user_special):
-        evaluation.soft_mismatches.append("소공인·전통시장 등 특수 대상 여부를 추가로 확인해야 합니다.")
+        evaluation.warnings.append("소공인·전통시장 등 특수 대상 여부를 추가로 확인해야 합니다.")
+        evaluation.unknown_conditions.append("특수 사업자 대상")
         return
 
     matched = sorted(policy_tags & user_tags)
@@ -605,6 +900,10 @@ def _check_numeric_limit(
             evaluation.unknown_conditions.append(label)
         return
     if not constraints.constraints:
+        if constraints.has_unparsed_condition:
+            evaluation.warnings.append(f"{label} 조건 원문은 있으나 자동 판정할 수 없어 확인이 필요합니다.")
+            if label not in evaluation.unknown_conditions:
+                evaluation.unknown_conditions.append(label)
         return
     if user_value is None:
         evaluation.warnings.append(f"{label} 입력 정보가 없어 추가 확인이 필요합니다.")
@@ -659,16 +958,24 @@ def _check_numeric_limit(
 
 def _check_need_tags(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
     if not profile.need_tags:
+        evaluation.preference_match = "not_requested"
         return
     policy_need_tags = set(classify_need_tags(policy))
-    matched = sorted(policy_need_tags & set(profile.need_tags))
+    requested = set(profile.need_tags)
+    matched = sorted(policy_need_tags & requested)
     if matched:
+        evaluation.preference_match = "exact" if requested.issubset(policy_need_tags) else "partial"
         evaluation.reasons.append(f"원하는 지원 유형과 맞습니다: {_labels(matched, NEED_TAG_LABELS)}")
         evaluation.matched_tags["need_tags"] = matched
+        return
+    evaluation.preference_match = "none"
+    evaluation.preference_mismatches.append(
+        f"선택한 관심 분야({_labels(profile.need_tags, NEED_TAG_LABELS)})와 직접 일치하지 않습니다."
+    )
 
 
 def _check_apply_status(policy: NormalizedPolicy, evaluation: MatchEvaluation) -> None:
-    now = datetime.now()
+    now = korea_now_naive()
     if policy.status == "closed" or (policy.apply_end and policy.apply_end < now):
         evaluation.failed.append("신청 기간이 종료된 정책입니다.")
         return
@@ -733,7 +1040,7 @@ def _rank_policy(
     else:
         industry_relevance = 2.0
 
-    now = datetime.now()
+    now = korea_now_naive()
     if policy.apply_start and policy.apply_start > now:
         actionability = 4.0
     elif policy.status == "open":
@@ -751,30 +1058,55 @@ def _rank_policy(
 
     data_quality = max(
         2.0,
-        15.0 - (3.0 * len(evaluation.unknown_conditions)) - (2.0 * len(evaluation.soft_mismatches)),
+        10.0 - (2.0 * len(evaluation.unknown_conditions)) - (1.0 * len(evaluation.soft_mismatches)),
     )
-    semantic = 5.0 if vector_similarity is None else max(0.0, min(vector_similarity, 1.0)) * 10.0
+    # 벡터가 없거나 조회에 포함되지 않은 정책이 낮은 유사도가 확인된 정책보다
+    # 기본점수로 앞서는 역전 현상을 막는다.
+    semantic = 0.0 if vector_similarity is None else max(0.0, min(vector_similarity, 1.0)) * 10.0
+    audience_specificity = _audience_specificity_score(policy)
 
     breakdown = {
         "need_match": round(need_match, 3),
         "industry_relevance": round(industry_relevance, 3),
         "actionability": round(min(actionability, 20.0), 3),
         "data_quality": round(data_quality, 3),
+        "audience_specificity": round(audience_specificity, 3),
         "semantic_similarity": round(semantic, 3),
     }
     return min(sum(breakdown.values()), 100.0), breakdown
 
 
+def _audience_specificity_score(policy: NormalizedPolicy) -> float:
+    eligibility = policy.eligibility or {}
+    specificity = eligibility.get("audience_specificity")
+    if specificity == "direct_small_business":
+        return 5.0
+    if specificity == "related_business":
+        return 3.0
+    if specificity == "broad_public":
+        return 0.0
+
+    # Gov24 외 소상공인 전용 원천은 별도 audience 필드가 없어도 대상 태그가
+    # 직접 근거다. 그 외 미분류 정책은 중립값을 사용한다.
+    if "small_business" in set(policy.business_status_tags or []):
+        return 5.0
+    return 2.0
+
+
 def _confidence(evaluation: MatchEvaluation) -> str:
-    if evaluation.status == "eligible":
+    if evaluation.eligibility_status == "eligible" and not evaluation.soft_mismatches:
         return "high"
-    if evaluation.status == "needs_review" and len(evaluation.unknown_conditions) <= 2:
+    if evaluation.eligibility_status == "needs_review" and len(evaluation.unknown_conditions) <= 2:
         return "medium"
     return "low"
 
 
 def _result_sort_key(item: RecommendationResult) -> tuple[int, float]:
-    return MATCH_STATUS_PRIORITY[item.match_status], -item.rank_score
+    tier = RESULT_TIER_PRIORITY.get(
+        (item.eligibility_status, item.preference_match),
+        4,
+    )
+    return tier, -item.rank_score
 
 
 def _compare_user_range(
@@ -821,6 +1153,7 @@ def _numeric_constraints(
     raw = eligibility.get(eligibility_key)
     result = NumericConstraintSet()
     if isinstance(raw, dict):
+        result.has_unparsed_condition = bool(raw)
         result.logic = raw.get("logic") if raw.get("logic") in {"all_of", "any_of"} else "all_of"
         result.requires_review = bool(raw.get("requires_manual_review"))
         result.review_reason = raw.get("review_reason")
@@ -845,6 +1178,12 @@ def _numeric_constraints(
                 value = _coerce_int(item.get("value"))
                 if value is not None and operator in {"<", "<=", ">", ">="}:
                     result.constraints.append((operator, value))
+
+        if not result.constraints:
+            operator = raw.get("operator")
+            value = _coerce_int(raw.get("amount_krw", raw.get("value")))
+            if value is not None and operator in {"<", "<=", ">", ">="}:
+                result.constraints.append((operator, value))
 
     if not result.constraints and flat_value is not None and flat_operator in {"<", "<=", ">", ">="}:
         result.constraints.append((flat_operator, int(flat_value)))

@@ -933,12 +933,23 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
     for index, source in enumerate(sources, start=1):
         metadata = source.get("metadata") or {}
         context_body = source.get("retrieval_context") or source.get("chunk_text")
+        region = " ".join(
+            str(value)
+            for value in [metadata.get("sido"), metadata.get("sigungu")]
+            if value
+        ) or ("전국" if metadata.get("region_scope") == "national" else "확인 필요")
+        application_methods = ", ".join(metadata.get("application_methods") or [])
         block = (
             f"[근거 {index}]\n"
             f"정책명: {source.get('policy_title')}\n"
+            f"기관: {metadata.get('organization')}\n"
+            f"지원유형: {metadata.get('support_type')}\n"
+            f"신청상태: {metadata.get('status')}\n"
+            f"대상지역: {region}\n"
             f"문서유형: {source.get('document_type')}\n"
             f"문서제목: {source.get('document_title')}\n"
             f"신청기간: {source.get('apply_start')} ~ {source.get('apply_end')}\n"
+            f"신청방법: {application_methods or '확인 필요'}\n"
             f"문의처: {', '.join(source.get('contact_points') or [])}\n"
             f"예상질문태그: {', '.join(metadata.get('intent_tags') or [])}\n"
             f"내용(검색 청크 및 인접 문맥): {context_body}\n"

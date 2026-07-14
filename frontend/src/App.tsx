@@ -9,7 +9,6 @@ import ChatScreen from './screens/ChatScreen'
 import ProfileScreen from './screens/ProfileScreen'
 import OnboardingScreen from './screens/OnboardingScreen'
 import PolicyDetailScreen from './screens/PolicyDetailScreen'
-import BenefitDetailScreen from './screens/BenefitDetailScreen'
 import LoginScreen from './screens/LoginScreen'
 import AuthCallbackScreen from './screens/AuthCallbackScreen'
 
@@ -37,8 +36,6 @@ export default function App() {
 
           {/* 상세는 탭 없이 전체 화면 */}
           <Route path="/policy/:policyId" element={<PolicyDetailScreen />} />
-          {/* 챗봇(목업)이 링크하는 목업 혜택 상세. 챗봇 담당자가 RAG로 교체하면 함께 정리된다. */}
-          <Route path="/benefit/:id" element={<BenefitDetailScreen />} />
         </Route>
       </Routes>
     </AuthProvider>

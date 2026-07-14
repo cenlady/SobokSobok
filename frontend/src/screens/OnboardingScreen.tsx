@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
+import { AlertTriangle, BriefcaseBusiness, ChevronLeft, MapPin, SlidersHorizontal, Users, Utensils, Wallet } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useProfile } from '../lib/storage'
@@ -11,6 +11,7 @@ import {
   NEED_OPTIONS,
   REGION_MAP,
   REVENUE_OPTIONS,
+  getProfileConsistencyWarning,
   optionByLabel,
 } from '../lib/recommend'
 
@@ -94,6 +95,12 @@ export default function OnboardingScreen() {
     )
   }
 
+  const profileConsistencyWarning = getProfileConsistencyWarning(
+    industry,
+    businessStatus,
+    employees,
+  )
+
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col bg-cream">
       {/* 이 화면은 두 가지로 쓰인다.
@@ -109,12 +116,12 @@ export default function OnboardingScreen() {
               navigate('/login', { replace: true })
             }
           }}
-          className="p-1 text-brand-dark active:opacity-60"
+          className="p-1 text-ink active:opacity-60"
           aria-label={isEditing ? '뒤로' : '로그아웃'}
         >
           <ChevronLeft size={26} />
         </button>
-        <h1 className="text-lg font-semibold text-brand-dark">
+        <h1 className="text-lg font-semibold text-ink">
           {isEditing ? '내 정보 수정' : '소복소복 내 정보 입력'}
         </h1>
       </header>
@@ -124,18 +131,18 @@ export default function OnboardingScreen() {
         {/* 진행 표시 */}
         <div className="flex items-baseline justify-between">
           <span className="font-bold text-brand">맞춤 추천 정보</span>
-          <span className="text-sm font-medium text-brand-dark/50">필수 + 권장 입력</span>
+          <span className="text-sm font-medium text-muted">필수 + 권장 입력</span>
         </div>
         <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/10">
           <div className="h-full w-full rounded-full bg-brand" />
         </div>
 
-        <h2 className="mt-8 text-2xl font-bold leading-snug text-brand-dark">
+        <h2 className="mt-8 text-2xl font-bold leading-snug text-ink">
           사장님에 대해
           <br />
           조금 더 알려주세요!
         </h2>
-        <p className="mt-3 text-[15px] leading-relaxed text-brand-dark/60">
+        <p className="mt-3 text-[15px] leading-relaxed text-muted">
           맞춤형 혜택과 지원금을 찾아드리기 위해 꼭 필요한 정보예요.
         </p>
 
@@ -150,7 +157,7 @@ export default function OnboardingScreen() {
           />
           {/* 활동 지역 (시/도) */}
           <div>
-            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">활동 지역 (시/도)</label>
+            <label className="mb-2 block text-[15px] font-semibold text-ink">활동 지역 (시/도)</label>
             <div className="relative">
               <select
                 value={sido}
@@ -160,7 +167,7 @@ export default function OnboardingScreen() {
                   const nextSigunguOptions = REGION_MAP[nextSido] || []
                   setSigungu(nextSigunguOptions[0] || '전체')
                 }}
-                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-brand-dark"
+                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-ink"
               >
                 {Object.keys(REGION_MAP).map((s) => (
                   <option key={s} value={s}>
@@ -168,7 +175,7 @@ export default function OnboardingScreen() {
                   </option>
                 ))}
               </select>
-              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-brand-dark/40">
+              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-subtle">
                 <MapPin size={20} />
               </span>
             </div>
@@ -176,12 +183,12 @@ export default function OnboardingScreen() {
 
           {/* 활동 지역 (시/군/구) */}
           <div>
-            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">활동 지역 (시/군/구)</label>
+            <label className="mb-2 block text-[15px] font-semibold text-ink">활동 지역 (시/군/구)</label>
             <div className="relative">
               <select
                 value={sigungu || '전체'}
                 onChange={(e) => setSigungu(e.target.value)}
-                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-brand-dark"
+                className="w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand text-ink"
                 disabled={!(REGION_MAP[sido] && REGION_MAP[sido].length > 1)}
               >
                 {(REGION_MAP[sido] || []).map((sg) => (
@@ -190,7 +197,7 @@ export default function OnboardingScreen() {
                   </option>
                 ))}
               </select>
-              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-brand-dark/40">
+              <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-subtle">
                 <MapPin size={20} />
               </span>
             </div>
@@ -219,6 +226,12 @@ export default function OnboardingScreen() {
             options={EMPLOYEE_OPTIONS.map((item) => item.label)}
             placeholder="직원 수를 선택해주세요"
           />
+          {profileConsistencyWarning && (
+            <div className="flex items-start gap-2 rounded-2xl border border-accent/20 bg-accent-soft/45 p-4 text-sm font-medium leading-relaxed text-ink">
+              <AlertTriangle size={17} className="mt-0.5 shrink-0 text-accent" />
+              <span>{profileConsistencyWarning}</span>
+            </div>
+          )}
           <SelectField
             label="업력"
             icon={SlidersHorizontal}
@@ -229,7 +242,7 @@ export default function OnboardingScreen() {
           />
 
           <div>
-            <label className="mb-2 block text-[15px] font-semibold text-brand-dark">
+            <label className="mb-2 block text-[15px] font-semibold text-ink">
               원하는 지원 유형
             </label>
             <div className="grid grid-cols-2 gap-2">
@@ -243,7 +256,7 @@ export default function OnboardingScreen() {
                     className={`rounded-2xl border px-3 py-3 text-sm font-semibold transition-colors ${
                       active
                         ? 'border-brand bg-brand text-white'
-                        : 'border-brand-light/40 bg-white text-brand-dark/70'
+                        : 'border-brand-light/40 bg-white text-muted'
                     }`}
                   >
                     {option.label}
@@ -262,7 +275,7 @@ export default function OnboardingScreen() {
         <button
           onClick={submit}
           disabled={saving}
-          className="w-full rounded-2xl bg-brand-dark py-4 text-lg font-bold text-white active:scale-[0.99] disabled:opacity-60"
+          className="flex h-13 w-full items-center justify-center rounded-xl bg-primary py-4 text-base font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           {saving ? '저장 중…' : isEditing ? '저장하고 추천 다시 받기' : '맞춤 혜택 찾기'}
         </button>
@@ -288,13 +301,13 @@ function SelectField({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-[15px] font-semibold text-brand-dark">{label}</label>
+      <label className="mb-2 block text-[15px] font-semibold text-ink">{label}</label>
       <div className="relative">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={`w-full appearance-none rounded-2xl border border-brand-light/40 bg-white py-4 pl-4 pr-12 text-[15px] outline-none focus:border-brand ${
-            value ? 'text-brand-dark' : 'text-brand-dark/40'
+            value ? 'text-ink' : 'text-subtle'
           }`}
         >
           <option value="" disabled>
@@ -306,7 +319,7 @@ function SelectField({
             </option>
           ))}
         </select>
-        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-brand-dark/40">
+        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-subtle">
           <Icon size={20} />
         </span>
       </div>

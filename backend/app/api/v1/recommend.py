@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
@@ -10,7 +11,11 @@ from app.schemas.recommend import (
     RecommendationProfileRequest,
     RecommendationExplanationResponse,
 )
-from app.services.recommend import recommend_policies, explain_policy_recommendation
+from app.services.recommend import (
+    explain_policy_recommendation,
+    profile_validation_warnings,
+    recommend_policies,
+)
 
 router = APIRouter()
 
@@ -18,19 +23,44 @@ router = APIRouter()
 @router.post("/preview", response_model=RecommendationPreviewResponse, summary="프로필 기반 맞춤 정책 추천")
 def preview_recommendations(
     profile: RecommendationProfileRequest,
-    limit: int = Query(default=15, ge=1, le=50),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=12, ge=1, le=50),
+    status: list[Literal["all", "eligible", "needs_review", "near_match"]] = Query(
+        default=["all"],
+        description="추천 상태를 하나 이상 선택합니다. 반복 query parameter로 전달합니다.",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    results, vector_used, total_candidates = recommend_policies(
+    all_results, vector_used, total_candidates = recommend_policies(
         db=db,
         profile=profile,
-        limit=limit,
+        # 상태별 필터와 페이지네이션은 동일한 전체 순위에서 적용해야
+        # 페이지를 넘겨도 추천 순서가 흔들리지 않는다.
+        limit=1000,
     )
+    status_counts = {
+        "eligible": sum(item.match_status == "eligible" for item in all_results),
+        "needs_review": sum(item.match_status == "needs_review" for item in all_results),
+        "near_match": sum(item.match_status == "near_match" for item in all_results),
+    }
+    selected_statuses = set(status)
+    filtered_results = (
+        all_results
+        if not selected_statuses or "all" in selected_statuses
+        else [item for item in all_results if item.match_status in selected_statuses]
+    )
+    results = filtered_results[skip : skip + limit]
     return RecommendationPreviewResponse(
         total_candidates=total_candidates,
+        filtered_candidates=len(filtered_results),
         returned=len(results),
+        skip=skip,
+        limit=limit,
+        has_next=skip + len(results) < len(filtered_results),
+        status_counts=status_counts,
         vector_used=vector_used,
+        profile_warnings=profile_validation_warnings(profile),
         results=results,
     )
 

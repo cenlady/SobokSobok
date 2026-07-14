@@ -10,8 +10,15 @@ from app.services.normalization.documents import (
     _extract_required_documents_from_attachment,
     _required_documents_from_gov24,
 )
-from app.services.normalization.field_extractors import _extract_industry_condition
-from app.services.normalization.metadata import INDUSTRY_KEYWORDS
+from app.services.normalization.field_extractors import _extract_industry_condition, _tags_from_keyword_map
+from app.services.normalization.metadata import (
+    BUSINESS_STATUS_KEYWORDS,
+    GOV24_INDUSTRY_TAGS,
+    INDUSTRY_KEYWORDS,
+    _gov24_audience_specificity,
+    _merge_gov24_business_status_tags,
+    _merge_industry_condition_with_codes,
+)
 from app.services.normalization.regions import _extract_region_metadata
 from app.services.normalization.sources import (
     _empty_progress_stats,
@@ -275,6 +282,71 @@ class RegionQualityTests(unittest.TestCase):
         self.assertLess(region["confidence"], 0.8)
         self.assertEqual(region["source_ref"], "title")
 
+    def test_title_region_with_local_scope_marker_is_high_confidence(self) -> None:
+        region = _extract_region_metadata(
+            "관내 2개월 이상 운영 중인 소상공인",
+            fallback_text="시흥시 소상공인 특례보증 지원",
+        )
+
+        self.assertEqual(region["sigungu"], "시흥시")
+        self.assertGreaterEqual(region["confidence"], 0.8)
+        self.assertEqual(region["source_ref"], "title+eligibility")
+
+    def test_title_and_organization_same_region_is_high_confidence(self) -> None:
+        region = _extract_region_metadata(
+            "소상공인 지원",
+            fallback_text="김포시 음식점 지원",
+            supporting_text="경기도 김포시",
+        )
+
+        self.assertEqual(region["sigungu"], "김포시")
+        self.assertGreaterEqual(region["confidence"], 0.9)
+        self.assertEqual(region["source_ref"], "title+organization")
+
+    def test_eligibility_sido_is_enriched_by_organization_sigungu(self) -> None:
+        region = _extract_region_metadata(
+            "경기도 소재 소상공인",
+            fallback_text="소상공인 이차보전금 지원",
+            supporting_text="경기도 의왕시",
+        )
+
+        self.assertEqual(region["sido"], "경기도")
+        self.assertEqual(region["sigungu"], "의왕시")
+        self.assertGreaterEqual(region["confidence"], 0.9)
+        self.assertEqual(region["source_ref"], "eligibility+organization")
+
+    def test_full_official_region_at_title_start_is_high_confidence(self) -> None:
+        region = _extract_region_metadata(
+            "중소기업 경영안정 지원",
+            fallback_text="대구광역시 중소기업 경영안정자금 융자지원",
+        )
+
+        self.assertEqual(region["sido"], "대구광역시")
+        self.assertGreaterEqual(region["confidence"], 0.9)
+        self.assertEqual(region["extraction_method"], "explicit_title_region_rule")
+
+    def test_local_government_organization_is_region_evidence(self) -> None:
+        region = _extract_region_metadata(
+            "장애인 및 다자녀 가구",
+            default_scope="national",
+            supporting_text="전북특별자치도 익산시",
+        )
+
+        self.assertEqual(region["sido"], "전북특별자치도")
+        self.assertEqual(region["sigungu"], "익산시")
+        self.assertGreaterEqual(region["confidence"], 0.8)
+
+    def test_abbreviated_sido_in_public_organization_is_region_evidence(self) -> None:
+        region = _extract_region_metadata(
+            "소상공인 지원",
+            default_scope="national",
+            supporting_text="충북신용보증재단",
+        )
+
+        self.assertEqual(region["sido"], "충청북도")
+        self.assertGreaterEqual(region["confidence"], 0.8)
+        self.assertEqual(region["source_ref"], "organization")
+
     def test_explicit_national_condition_wins_over_local_title(self) -> None:
         region = _extract_region_metadata(
             "전국 소재 소상공인",
@@ -313,6 +385,20 @@ class RegionQualityTests(unittest.TestCase):
 
 
 class IndustryQualityTests(unittest.TestCase):
+    def test_all_gov24_industry_codes_mean_unrestricted(self) -> None:
+        condition = _merge_industry_condition_with_codes(
+            {
+                "mode": "unknown",
+                "include_tags": [],
+                "exclude_tags": [],
+                "evidence": [],
+            },
+            sorted(GOV24_INDUSTRY_TAGS),
+        )
+
+        self.assertEqual(condition["mode"], "unrestricted")
+        self.assertEqual(condition["include_tags"], [])
+
     def test_program_topic_is_not_treated_as_industry(self) -> None:
         condition = _extract_industry_condition(
             "디지털 전환 교육 지원 대상: 소상공인",
@@ -353,6 +439,34 @@ class IndustryQualityTests(unittest.TestCase):
         )
 
         self.assertEqual(condition["include_tags"], ["agriculture_fishery_forestry"])
+
+
+class BusinessStatusQualityTests(unittest.TestCase):
+    def test_small_medium_business_text_is_not_small_business(self) -> None:
+        tags = _tags_from_keyword_map("경기도 중소기업", BUSINESS_STATUS_KEYWORDS)
+
+        self.assertNotIn("small_business", tags)
+
+    def test_explicit_small_business_text_is_preserved(self) -> None:
+        tags = _tags_from_keyword_map("경기도 내 소상공인", BUSINESS_STATUS_KEYWORDS)
+
+        self.assertIn("small_business", tags)
+
+    def test_broad_gov24_codes_do_not_create_business_restrictions(self) -> None:
+        tags = _merge_gov24_business_status_tags(
+            ["pre_founder", "operating_business", "closing_business", "small_medium_business"],
+            [],
+            "개인||가구||소상공인||법인/시설/단체",
+        )
+
+        self.assertEqual(tags, [])
+        self.assertEqual(
+            _gov24_audience_specificity(
+                "개인||가구||소상공인||법인/시설/단체",
+                "구내 주민",
+            ),
+            "broad_public",
+        )
 
 
 class PipelineQualityTests(unittest.TestCase):

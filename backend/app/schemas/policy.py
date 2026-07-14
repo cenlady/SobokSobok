@@ -63,6 +63,32 @@ class NormalizedPolicyAttachmentRead(BaseModel):
     original_file_name: str | None = None
 
 
+class NormalizedPolicyListRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str
+    summary: str | None = None
+    organization: str | None = None
+    support_type: str | None = None
+    region_scope: str
+    sido: str | None = None
+    sigungu: str | None = None
+    status: str | None = None
+    apply_start: datetime | None = None
+    apply_end: datetime | None = None
+    apply_url: str | None = None
+    categories: list[str] = Field(default_factory=list)
+
+
+class NormalizedPolicyListResponse(BaseModel):
+    items: list[NormalizedPolicyListRead]
+    total: int
+    skip: int
+    limit: int
+    has_next: bool
+
+
 class NormalizedPolicyDetailRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,23 +1,24 @@
+import { useState } from 'react'
 import {
   Bell,
+  BriefcaseBusiness,
   CalendarSync,
   ChevronRight,
   Lock,
+  LogOut,
   MapPin,
-  Pencil,
   SlidersHorizontal,
+  User,
   Users,
   Utensils,
   Wallet,
-  CheckCircle2,
-  BriefcaseBusiness,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
+import { Button } from '../components/ui'
 import { useAuth } from '../lib/auth'
-import { useProfile } from '../lib/storage'
-import { useState } from 'react'
 import { NEED_OPTIONS } from '../lib/recommend'
+import { useProfile } from '../lib/storage'
 
 export default function ProfileScreen() {
   const navigate = useNavigate()
@@ -30,183 +31,168 @@ export default function ProfileScreen() {
     navigate('/login', { replace: true })
   }
 
+  const initial = profile.ownerName?.trim()?.[0] || null
+  const interestLabel = profile.needTags
+    .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
+    .join(', ')
+
   return (
     <div className="pb-8">
       <TopBar />
 
-      {/* 프로필 헤더 */}
-      <section className="flex flex-col items-center px-5 pt-2">
-        <div className="relative">
-          <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-brand-light/30 text-3xl">
-            👩‍🍳
+      {/* 헤더는 좌측 정렬. 가운데 정렬된 큰 아바타는 SNS 프로필처럼 보이는데,
+          여기는 '내 사업장 정보'를 확인하는 화면이지 자기소개가 아니다. */}
+      <section className="px-5 pt-4">
+        <div className="flex items-center gap-4">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl font-bold text-brand">
+            {/* 이름이 없으면 물음표(?) 대신 사람 아이콘.
+                물음표는 "데이터를 못 불러왔다"는 오류처럼 읽힌다. */}
+            {initial ?? <User size={26} strokeWidth={1.8} className="text-subtle" />}
           </div>
-          <button className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-brand-dark text-white ring-4 ring-cream">
-            <Pencil size={14} />
-          </button>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-[0.08em] text-brand">내 사업장</p>
+            <h2 className="mt-1 text-xl font-bold tracking-[-0.02em] text-ink">
+              {profile.ownerName ? `${profile.ownerName} 사장님` : '사장님'}
+            </h2>
+            <p className="mt-1 truncate text-sm text-muted">
+              {profile.storeName || '사업장 이름 미입력'}
+            </p>
+          </div>
         </div>
-        <h2 className="mt-3 text-2xl font-bold text-brand-dark">
-          {profile.ownerName} 사장님
-        </h2>
-
-        {/* 로그인된 사용자 이메일 뱃지 */}
         {user?.email && (
-          <p className="mt-0.5 rounded-full border border-brand/10 bg-brand/5 px-2 py-0.5 text-xs font-semibold text-brand/80">
-            {user.email}
-          </p>
+          <p className="mt-4 border-t border-line pt-3 text-xs text-subtle">{user.email}</p>
         )}
-        <p className="mt-1 text-sm text-brand-dark/50">{profile.storeName}</p>
       </section>
 
-      {/* 사업장 정보 */}
-      <section className="mt-6 px-5">
-        <div className="flex items-start justify-between">
-          <h3 className="text-lg font-bold text-brand-dark">맞춤 정책을 위한 사업장 정보</h3>
+      {/* 사업장 정보 — 2열 타일 대신 라벨/값 행 목록.
+          타일은 값이 짧을 때만 예쁘고, '서울특별시 마포구'처럼 길어지면 줄바꿈으로
+          높이가 들쭉날쭉해진다. 행 목록은 훑기도 쉽고 값 길이에도 강하다. */}
+      <section className="mt-8 px-5">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h3 className="text-section text-ink">사업장 정보</h3>
+            <p className="mt-1 text-xs text-muted">정책 조건 확인에 사용하는 정보입니다.</p>
+          </div>
           <button
             onClick={() => navigate('/onboarding')}
-            className="flex items-center whitespace-nowrap text-sm font-medium text-brand"
+            className="flex h-11 shrink-0 items-center whitespace-nowrap text-xs font-semibold text-primary"
           >
-            수정하기 <ChevronRight size={16} />
+            수정하기 <ChevronRight size={15} />
           </button>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <InfoTile icon={Utensils} label="업종" value={profile.industry} />
-          <InfoTile icon={MapPin} label="지역" value={profile.region} />
-          <InfoTile icon={BriefcaseBusiness} label="사업자 상태" value={profile.businessStatus} />
-          <InfoTile icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
-        </div>
-        <div className="mt-3">
-          <InfoTile
-            icon={Wallet}
-            label="매출 규모"
-            value={profile.revenue}
-            badge="성장중"
-            center
-          />
-        </div>
-        <div className="mt-3">
-          <InfoTile icon={Users} label="직원 수" value={profile.employees} />
-        </div>
-        {profile.needTags.length > 0 && (
-          <p className="mt-3 rounded-2xl bg-white p-4 text-sm font-semibold text-brand-dark shadow-card">
-            관심 지원: {profile.needTags.map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag).join(', ')}
-          </p>
-        )}
+        <dl className="surface-panel mt-2 divide-y divide-line overflow-hidden">
+          <InfoRow icon={Utensils} label="업종" value={profile.industry} />
+          <InfoRow icon={MapPin} label="지역" value={profile.region} />
+          <InfoRow icon={BriefcaseBusiness} label="사업자 상태" value={profile.businessStatus} />
+          <InfoRow icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
+          <InfoRow icon={Wallet} label="매출 규모" value={profile.revenue} />
+          <InfoRow icon={Users} label="직원 수" value={profile.employees} />
+          {interestLabel && <InfoRow label="관심 지원" value={interestLabel} />}
+        </dl>
 
-        {/* 안내 배너 */}
-        <div className="mt-4 flex items-center gap-3 rounded-2xl bg-green-50 p-4">
-          <CheckCircle2 size={26} className="flex-shrink-0 text-status-green" />
-          <p className="text-sm text-brand-dark">
-            <span className="font-bold">12개의 새로운 정책이 사장님을 기다려요!</span>
-            <br />
-            <span className="text-brand-dark/60">
-              정보가 최신일수록 더 정확한 추천이 가능합니다.
-            </span>
-          </p>
-        </div>
+        <p className="mt-3 border-l-2 border-status-green pl-3 text-xs leading-relaxed text-muted">
+          사업장 정보가 최신일수록 조건이 맞는 정책을 더 정확하게 확인할 수 있습니다.
+        </p>
       </section>
 
-      {/* 설정 및 관리 */}
       <section className="mt-8 px-5">
-        <h3 className="text-lg font-bold text-brand-dark">설정 및 관리</h3>
-        <div className="mt-4 divide-y divide-black/5 overflow-hidden rounded-2xl bg-white shadow-card">
-          <div className="flex items-center gap-3 p-4">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50">
-              <Bell size={20} className="text-status-blue" />
-            </span>
+        <h3 className="text-section text-ink">설정 및 관리</h3>
+
+        <div className="surface-panel mt-2 divide-y divide-line overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-3.5">
+            <Bell size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
             <span className="flex-1">
-              <span className="block font-semibold text-brand-dark">알림 설정</span>
-              <span className="block text-xs text-brand-dark/50">지원금 소식 및 마감 알림</span>
+              <span className="block text-sm font-medium text-ink">마감 알림</span>
+              <span className="mt-0.5 block text-xs text-muted">저장한 정책의 신청 마감 안내</span>
             </span>
             <button
-              onClick={() => setAlarm((v) => !v)}
-              className={`relative h-7 w-12 rounded-full transition-colors ${
-                alarm ? 'bg-brand-dark' : 'bg-brand-dark/20'
+              onClick={() => setAlarm((value) => !value)}
+              role="switch"
+              aria-checked={alarm}
+              aria-label="마감 알림"
+              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                alarm ? 'bg-primary' : 'bg-line'
               }`}
             >
               <span
-                className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${
+                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
                   alarm ? 'left-6' : 'left-1'
                 }`}
               />
             </button>
           </div>
 
-          <SettingRow icon={CalendarSync} iconBg="bg-accent-soft" iconColor="text-accent" title="캘린더 연동 관리" desc="구글/애플 캘린더 자동 동기화" />
-          <SettingRow icon={Lock} iconBg="bg-black/5" iconColor="text-brand-dark/60" title="로그인 및 보안" desc="비밀번호 변경 및 기기 관리" />
+          <SettingRow
+            icon={CalendarSync}
+            title="Google Calendar"
+            description="정책 마감일 일정 등록"
+          />
+          <SettingRow icon={Lock} title="로그인 및 보안" description="계정과 로그인 정보 관리" />
         </div>
 
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={handleLogout}
-            className="text-sm font-medium text-brand-dark/50 active:opacity-60"
-          >
-            로그아웃
+        {/* 로그아웃이 탈퇴보다 훨씬 흔한 동작인데, 탈퇴만 빨간 글씨면 그쪽이 먼저
+            눈에 들어온다. 로그아웃을 버튼으로 세우고 탈퇴는 아래로 물린다.
+            빨강도 뺐다 — 이 앱에서 빨강은 '마감 임박'에만 쓴다. */}
+        <div className="mt-8 space-y-3 border-t border-line pt-6">
+          <Button variant="secondary" full onClick={handleLogout}>
+            <LogOut size={16} /> 로그아웃
+          </Button>
+          <button className="h-11 w-full text-center text-xs font-medium text-subtle underline underline-offset-2">
+            회원 탈퇴
           </button>
-          <button className="text-sm font-medium text-status-red">탈퇴하기</button>
         </div>
       </section>
     </div>
   )
 }
 
-function InfoTile({
+function InfoRow({
   icon: Icon,
   label,
   value,
-  badge,
-  center,
 }: {
-  icon: typeof MapPin
+  icon?: typeof MapPin
   label: string
   value: string
-  badge?: string
-  center?: boolean
 }) {
   return (
-    <div className={`rounded-2xl bg-white p-4 shadow-card ${center ? 'text-center' : ''}`}>
-      <Icon
-        size={22}
-        className={`text-brand ${center ? 'mx-auto' : ''}`}
-      />
-      <p className="mt-3 text-xs text-brand-dark/50">{label}</p>
-      <p className="mt-0.5 flex items-center gap-2 text-base font-bold text-brand-dark">
-        {center && <span className="flex-1" />}
-        {value}
-        {badge && (
-          <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-status-green">
-            {badge}
-          </span>
-        )}
-        {center && <span className="flex-1" />}
-      </p>
+    <div className="flex items-start gap-3 px-4 py-3.5">
+      {Icon ? (
+        <Icon size={17} strokeWidth={1.8} className="mt-0.5 shrink-0 text-brand" />
+      ) : (
+        <span className="w-[17px] shrink-0" />
+      )}
+      <dt className="w-20 shrink-0 text-sm text-muted">{label}</dt>
+      {/* 값이 없으면 '—'가 아니라 '입력 필요'. 사용자가 할 일이 있다는 걸 알려준다. */}
+      <dd
+        className={`min-w-0 flex-1 text-right text-sm leading-relaxed ${
+          value ? 'font-medium text-ink' : 'text-subtle'
+        }`}
+      >
+        {value || '입력 필요'}
+      </dd>
     </div>
   )
 }
 
 function SettingRow({
   icon: Icon,
-  iconBg,
-  iconColor,
   title,
-  desc,
+  description,
 }: {
   icon: typeof MapPin
-  iconBg: string
-  iconColor: string
   title: string
-  desc: string
+  description: string
 }) {
   return (
-    <button className="flex w-full items-center gap-3 p-4 text-left active:bg-black/[0.02]">
-      <span className={`flex h-10 w-10 items-center justify-center rounded-xl ${iconBg}`}>
-        <Icon size={20} className={iconColor} />
-      </span>
+    <button className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-cream/60 active:bg-cream">
+      <Icon size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
       <span className="flex-1">
-        <span className="block font-semibold text-brand-dark">{title}</span>
-        <span className="block text-xs text-brand-dark/50">{desc}</span>
+        <span className="block text-sm font-medium text-ink">{title}</span>
+        <span className="mt-0.5 block text-xs text-muted">{description}</span>
       </span>
-      <ChevronRight size={20} className="text-brand-dark/30" />
+      <ChevronRight size={17} className="shrink-0 text-subtle" />
     </button>
   )
 }

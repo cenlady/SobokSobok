@@ -8,5 +8,5 @@ from app.models.user import Favorite, User, UserProfile  # noqa: F401
 from app.models.normalized_policy import NormalizedPolicy, AttachmentFile, PolicyAttachmentLink, PolicyDocument  # noqa: F401
 from app.models.chat import ChatMessage, ChatSession, PolicyChunk  # noqa: F401
 from app.models.recommend import RecommendationVector  # noqa: F401
-from app.models.review import ReviewVector, ReviewUpload  # noqa: F401
+from app.models.review import ReviewSession, ReviewUpload, ReviewVector  # noqa: F401
 from app.models.prep import PrepVector  # noqa: F401

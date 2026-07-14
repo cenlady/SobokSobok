@@ -210,15 +210,18 @@ export default function ChatScreen() {
         support_type: item.support_type,
         apply_end: item.apply_end,
         rank_score: item.rank_score,
+        eligibility_status: item.eligibility_status,
+        preference_match: item.preference_match,
         match_status: item.match_status,
         reasons: item.reasons,
         warnings: item.warnings,
+        unmet_conditions: item.unmet_conditions,
       }))
       replace(pendingId, {
         role: 'bot',
         text: policies.length > 0
-          ? `사장님 조건과 가까운 정책 ${policies.length}건을 찾았어요. 정책을 누르면 상세 화면에서 대상과 서류를 이어서 물어볼 수 있어요.`
-          : '현재 프로필 기준으로 바로 추천할 정책을 찾지 못했어요. 업종, 지역, 매출 정보를 채우면 추천 정확도가 올라가요.',
+          ? `사장님 조건과 가까운 정책 ${policies.length}건을 찾았어요. 각 정책을 눌러 상세 화면에서 지원 대상이나 서류를 이어서 물어볼 수 있어요.${data.profile_warnings?.[0] ? `\n\n입력 정보 확인: ${data.profile_warnings[0]}` : ''}`
+          : '지금 프로필 기준으로 바로 추천할 정책을 찾지 못했어요. 업종, 지역, 매출 정보를 조금 더 채워보면 추천 정확도가 올라가요.',
         policies,
       })
     } catch {
@@ -280,12 +283,12 @@ export default function ChatScreen() {
 
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
         {policyId && (
-          <div className="rounded-2xl bg-brand-dark p-4 text-white shadow-card">
+          <div className="rounded-2xl bg-primary p-4 text-white shadow-card">
             <p className="text-sm font-semibold">선택한 정책 공고 상담을 이어가고 있어요.</p>
             <p className="mt-1 text-xs text-white/70">이 공고문만 기준으로 답변합니다.</p>
             <button
               onClick={() => navigate(`/policy/${policyId}`)}
-              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-brand-dark"
+              className="mt-3 rounded-xl bg-surface px-3 py-2 text-xs font-bold text-ink"
             >
               정책 상세 다시 보기
             </button>
@@ -322,10 +325,11 @@ export default function ChatScreen() {
               pendingSave={pendingSave}
               onSelectCandidate={selectCandidate}
               selectingPolicyId={selectingPolicyId}
+              detailMode={Boolean(policyId)}
             />
           ) : (
             <div key={message.id} className="flex justify-end">
-              <p className="max-w-[78%] whitespace-pre-line rounded-2xl rounded-tr-md bg-brand-dark px-4 py-3 text-[15px] leading-relaxed text-white">
+              <p className="max-w-[78%] whitespace-pre-line rounded-2xl rounded-tr-md bg-primary px-4 py-3 text-[15px] leading-relaxed text-white">
                 {message.text}
               </p>
             </div>
@@ -338,7 +342,7 @@ export default function ChatScreen() {
               key={question}
               onClick={() => send(question)}
               disabled={sending}
-              className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-brand-dark/80 active:bg-black/5"
+              className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-ink active:bg-line/50"
             >
               {question}
             </button>
@@ -346,7 +350,8 @@ export default function ChatScreen() {
         </div>
       </div>
 
-      <div className="border-t border-black/5 bg-cream px-4 py-3">
+      {/* 입력창 */}
+      <div className="border-t border-line bg-cream px-4 py-3">
         <form
           onSubmit={(event) => {
             event.preventDefault()
@@ -354,19 +359,19 @@ export default function ChatScreen() {
           }}
           className="flex items-center gap-2 rounded-full border border-brand-light/40 bg-white py-1.5 pl-2 pr-1.5"
         >
-          <button type="button" className="p-2 text-brand-dark/40" aria-label="첨부 기능 준비 중">
+          <button type="button" className="p-2 text-subtle" aria-label="첨부 기능 준비 중">
             <Plus size={22} />
           </button>
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
             placeholder="메시지를 입력하세요..."
-            className="flex-1 bg-transparent text-[15px] text-brand-dark outline-none placeholder:text-brand-dark/35"
+            className="flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-subtle"
           />
           <button
             type="submit"
             disabled={sending}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95 disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
           >
             {sending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
           </button>
@@ -384,6 +389,7 @@ function BotBubble({
   pendingSave,
   onSelectCandidate,
   selectingPolicyId,
+  detailMode,
 }: {
   message: Message
   navigate: ReturnType<typeof useNavigate>
@@ -392,15 +398,20 @@ function BotBubble({
   pendingSave: string | null
   onSelectCandidate: (candidate: ChatPolicyCandidate) => void
   selectingPolicyId: string | null
+  detailMode: boolean
 }) {
+  const visibleSources = message.sources
+    ? (detailMode ? uniqueSourcesByDocument(message.sources) : uniqueSourcesByPolicy(message.sources)).slice(0, 3)
+    : []
+
   return (
     <div className="flex items-start gap-2">
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-brand-dark">
-        <Bot size={20} className="text-status-blue" />
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-ink">
+        <Bot size={20} className="text-muted" />
       </span>
       <div className="max-w-[82%] space-y-2">
         {message.text && (
-          <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-brand-dark shadow-card">
+          <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-ink shadow-card">
             <span className="flex items-start gap-2">
               {message.pending && <LoaderCircle size={17} className="mt-0.5 flex-shrink-0 animate-spin" />}
               <span>{message.text}</span>
@@ -437,16 +448,22 @@ function BotBubble({
           </div>
         )}
 
-        {message.sources && message.sources.length > 0 && (
+        {visibleSources.length > 0 && (
           <div className="rounded-2xl border border-brand-light/30 bg-white p-3 shadow-card">
-            <p className="text-xs font-bold text-brand-dark/70">답변 근거</p>
+            <p className="text-xs font-bold text-muted">답변 근거</p>
             <div className="mt-2 space-y-2">
-              {uniqueSourcesByPolicy(message.sources).slice(0, 3).map((source) => (
+              {visibleSources.map((source) => (
                 <div key={source.chunk_id} className="rounded-xl bg-cream px-3 py-2.5">
-                  <p className="text-xs font-semibold text-brand-dark/70">
+                  <p className="text-xs font-semibold text-muted">
                     {source.policy_title || source.document_title || '공고문'}
                   </p>
-                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-brand-dark/55">{source.chunk_text}</p>
+                  <p className="mt-0.5 text-[11px] font-medium text-subtle">
+                    {documentTypeLabel(source.document_type)}
+                    {source.source_ref ? ` · ${source.source_ref}` : ''}
+                  </p>
+                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
+                    {source.chunk_text}
+                  </p>
                   <button
                     type="button"
                     onClick={() => navigate(`/policy/${source.policy_id}`)}
@@ -473,7 +490,7 @@ function BotBubble({
             ))}
           </div>
         )}
-        {message.time && <p className="pl-1 text-xs text-brand-dark/40">{message.time}</p>}
+        {message.time && <p className="pl-1 text-xs text-subtle">{message.time}</p>}
       </div>
     </div>
   )
@@ -514,4 +531,31 @@ function uniqueSourcesByPolicy(sources: ChatChunkSource[]) {
     seen.add(source.policy_id)
     return true
   })
+}
+
+function uniqueSourcesByDocument(sources: ChatChunkSource[]) {
+  const seen = new Set<string>()
+  return sources.filter((source) => {
+    const key = source.document_id || source.chunk_id
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function documentTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    summary: '정책 요약',
+    support_content: '지원 내용',
+    eligibility: '지원 대상·자격',
+    application: '신청 방법',
+    deadline: '신청 기간',
+    requirements: '필요 서류',
+    contact: '문의처',
+    procedure: '선정 절차',
+    reference: '참고 자료',
+    body: '공고문 본문',
+    section: '공고문 세부 내용',
+  }
+  return value ? labels[value] || value : '공고문 근거'
 }

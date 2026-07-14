@@ -50,7 +50,7 @@ export default function AuthCallbackScreen() {
         <p className="text-base font-semibold text-status-red">{error}</p>
         <button
           onClick={() => navigate('/login', { replace: true })}
-          className="mt-6 rounded-2xl bg-brand-dark px-6 py-3 text-sm font-bold text-white"
+          className="mt-6 rounded-2xl bg-primary px-6 py-3 text-sm font-bold text-white"
         >
           로그인으로 돌아가기
         </button>
@@ -60,8 +60,8 @@ export default function AuthCallbackScreen() {
 
   return (
     <div className="app-frame flex flex-col items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-black/10 border-t-brand" />
-      <p className="mt-4 text-sm font-medium text-brand-dark/50">로그인 중이에요…</p>
+      <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-line border-t-brand" />
+      <p className="mt-4 text-sm font-medium text-muted">로그인 중이에요…</p>
     </div>
   )
 }
