@@ -71,6 +71,7 @@ export interface RecommendationResult {
 }
 
 export interface RecommendationPreviewResponse {
+  chat_session_id?: string | null
   total_candidates: number
   filtered_candidates: number
   returned: number

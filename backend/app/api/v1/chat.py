@@ -21,6 +21,7 @@ from app.schemas.chat import (
 )
 from app.services.chat_rag import (
     answer_policy_question,
+    build_recommendation_follow_up_answer,
     build_policy_chunks,
     get_or_create_chat_session,
     get_policy_chunk_stats,
@@ -79,6 +80,7 @@ def ask_policy_chatbot(
 ):
     """질문을 저장하고, 필요할 때만 이전에 선택한 공고 문맥을 이어서 답한다."""
     _ensure_policy_exists(db, policy_id)
+    _ensure_policy_exists(db, payload.selected_policy_id)
     try:
         chat_session = get_or_create_chat_session(
             db,
@@ -89,16 +91,50 @@ def ask_policy_chatbot(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     recent_messages = get_recent_chat_messages(db, chat_session.id)
+    recommendation_follow_up_answer = build_recommendation_follow_up_answer(
+        payload.query,
+        recent_messages,
+    )
+    if recommendation_follow_up_answer:
+        response = {
+            "query": payload.query,
+            "expanded_query": payload.query,
+            "intent_tags": ["recommendation_follow_up"],
+            "response_mode": "answer",
+            "candidates": [],
+            "sources": [],
+            "answer": recommendation_follow_up_answer,
+            "langsmith_enabled": False,
+            "langsmith_project": None,
+        }
+        record_chat_turn(
+            db,
+            session=chat_session,
+            query=payload.query,
+            answer=recommendation_follow_up_answer,
+            response_mode="answer",
+            context_policy_id=None,
+            candidates=[],
+        )
+        return {
+            **response,
+            "session_id": chat_session.id,
+            "context_policy_id": None,
+            "active_policy_id": str(chat_session.active_policy_id) if chat_session.active_policy_id else None,
+        }
+
     context_policy_id = policy_id or resolve_session_policy_context(
         payload.query,
         session=chat_session,
         recent_messages=recent_messages,
+        selected_policy_id=payload.selected_policy_id,
     )
     response = answer_policy_question(
         db=db,
         query=payload.query,
         limit=payload.limit,
         policy_id=context_policy_id,
+        recent_messages=recent_messages,
     )
     response_mode = response.get("response_mode", "answer")
     if context_policy_id is not None:

@@ -691,6 +691,39 @@ FOLLOW_UP_CONTEXT_KEYWORDS: Tuple[str, ...] = (
     "위에",
     "요약해",
 )
+RECOMMENDATION_FOLLOW_UP_KEYWORDS: Tuple[str, ...] = (
+    "추천",
+    "왜",
+    "이유",
+    "근거",
+    "아까",
+    "방금",
+    "위에",
+    "그 정책",
+    "그 공고",
+    "이 정책",
+    "이 공고",
+    "지역",
+    "서울",
+    "경기",
+    "경기도",
+    "부산",
+    "대구",
+    "인천",
+    "광주",
+    "대전",
+    "울산",
+    "세종",
+    "강원",
+    "충청",
+    "전북",
+    "전라",
+    "경북",
+    "경상",
+    "제주",
+    "사는",
+    "거주",
+)
 NEW_TOPIC_KEYWORDS: Tuple[str, ...] = (
     "다른",
     "말고",
@@ -743,22 +776,24 @@ def resolve_session_policy_context(
     *,
     session: ChatSession,
     recent_messages: List[ChatMessage],
+    selected_policy_id: Optional[uuid.UUID] = None,
 ) -> Optional[uuid.UUID]:
     """후속 질문일 때만 세션의 선택 공고를 상세 RAG 범위로 쓴다.
 
     새 정책을 찾는 질문까지 이전 공고로 고정하지 않도록 '다른/말고/새로운'은
     전역 검색으로 되돌린다. 대화 이력이 없으면 오래된 세션의 선택값도 사용하지 않는다.
     """
-    if session.active_policy_id is None:
+    active_policy_id = session.active_policy_id or selected_policy_id
+    if active_policy_id is None:
         return None
-    if not any(message.role == "user" for message in recent_messages):
+    if selected_policy_id is None and not any(message.role == "user" for message in recent_messages):
         return None
 
     normalized_query = _normalize_space(query).lower()
     if any(keyword in normalized_query for keyword in NEW_TOPIC_KEYWORDS):
         return None
     if any(keyword in normalized_query for keyword in FOLLOW_UP_CONTEXT_KEYWORDS):
-        return session.active_policy_id
+        return active_policy_id
 
     intent_tags = infer_intent_tags(None, None, query)
     has_generic_attribute_question = any(
@@ -767,10 +802,205 @@ def resolve_session_policy_context(
         tag in intent_tags
         for tag in ("eligibility", "target", "requirements", "documents", "deadline", "contact")
     )
-    if has_generic_attribute_question and len(normalized_query) <= 24:
-        return session.active_policy_id
+    if has_generic_attribute_question and (selected_policy_id is not None or len(normalized_query) <= 24):
+        return active_policy_id
 
     return None
+
+
+def _message_candidates(message: ChatMessage) -> List[Dict[str, Any]]:
+    candidates = message.candidates
+    return candidates if isinstance(candidates, list) else []
+
+
+def latest_recommendation_candidates(recent_messages: List[ChatMessage]) -> List[Dict[str, Any]]:
+    """최근 맞춤 추천 결과를 반환한다."""
+    for message in reversed(recent_messages):
+        if message.role != "assistant" or message.response_mode != "recommendation":
+            continue
+        candidates = _message_candidates(message)
+        if candidates:
+            return candidates
+    return []
+
+
+def is_recommendation_follow_up_question(
+    query: str,
+    recent_messages: List[ChatMessage],
+) -> bool:
+    """추천 결과에 대한 이의제기/설명 요청인지 판단한다."""
+    if not latest_recommendation_candidates(recent_messages):
+        return False
+
+    normalized_query = _normalize_space(query).lower()
+    if not normalized_query:
+        return False
+
+    has_recommendation_signal = any(
+        keyword in normalized_query for keyword in RECOMMENDATION_FOLLOW_UP_KEYWORDS
+    )
+    has_reason_or_challenge = any(
+        keyword in normalized_query
+        for keyword in ("왜", "이유", "근거", "맞아", "아니", "다른", "지역", "사는", "거주")
+    )
+    return has_recommendation_signal and has_reason_or_challenge
+
+
+def build_conversation_context(recent_messages: List[ChatMessage], *, limit: int = 6) -> str:
+    """LLM 프롬프트에 넣을 짧은 대화 요약을 만든다."""
+    blocks: List[str] = []
+    for message in recent_messages[-limit:]:
+        role_label = {
+            "user": "사용자",
+            "assistant": "챗봇",
+            "system": "시스템",
+        }.get(message.role, message.role)
+        content = _normalize_space(message.content)
+        if len(content) > 240:
+            content = f"{content[:240].rstrip()}..."
+        if content:
+            blocks.append(f"{role_label}: {content}")
+
+        candidates = _message_candidates(message)
+        if candidates:
+            titles = [
+                str(candidate.get("title") or candidate.get("policy_title") or "").strip()
+                for candidate in candidates[:3]
+            ]
+            titles = [title for title in titles if title]
+            if titles:
+                blocks.append(f"추천/검색 후보: {', '.join(titles)}")
+
+            profile_region = candidates[0].get("profile_region") if isinstance(candidates[0], dict) else None
+            if isinstance(profile_region, dict):
+                region_text = " ".join(
+                    str(value)
+                    for value in [profile_region.get("sido"), profile_region.get("sigungu")]
+                    if value
+                )
+                if region_text:
+                    blocks.append(f"사용자 프로필 지역: {region_text}")
+
+    return "\n".join(blocks)
+
+
+def build_recommendation_follow_up_answer(
+    query: str,
+    recent_messages: List[ChatMessage],
+) -> Optional[str]:
+    """최근 추천 결과를 근거로 추천 관련 후속 질문에 답한다."""
+    candidates = latest_recommendation_candidates(recent_messages)
+    if not candidates or not is_recommendation_follow_up_question(query, recent_messages):
+        return None
+
+    profile_region = candidates[0].get("profile_region") if isinstance(candidates[0], dict) else None
+    region_text = ""
+    if isinstance(profile_region, dict):
+        region_text = " ".join(
+            str(value)
+            for value in [profile_region.get("sido"), profile_region.get("sigungu")]
+            if value
+        )
+
+    lines = [
+        "직전에 추천한 결과를 기준으로 다시 볼게요.",
+    ]
+    if region_text:
+        lines.append(f"현재 저장된 사용자 지역은 `{region_text}`입니다.")
+
+    normalized_query = _normalize_space(query).lower()
+    asks_region = any(keyword in normalized_query for keyword in ("서울", "경기", "경기도", "지역", "사는", "거주"))
+    if asks_region:
+        lines.extend(
+            [
+                "",
+                "추천 결과에 다른 지역 정책이 보였다면, 보통 아래 둘 중 하나예요.",
+                "- 해당 정책의 지역 조건이 `전국` 또는 `지역 확인 필요`로 분류되어 후보에 남은 경우",
+                "- 원문에서 지역 조건을 확실히 추출하지 못해 `확인 필요` 후보로 남은 경우",
+            ]
+        )
+
+    lines.append("")
+    lines.append("최근 추천 후보는 다음과 같아요.")
+    for index, candidate in enumerate(candidates[:3], start=1):
+        title = candidate.get("title") or candidate.get("policy_title") or "정책명 확인 필요"
+        match_status = candidate.get("match_status") or candidate.get("eligibility_status") or "확인 필요"
+        reasons = candidate.get("reasons") or []
+        warnings = candidate.get("warnings") or []
+        line = f"{index}. {title} — 판정: {match_status}"
+        if reasons:
+            line += f" / 이유: {reasons[0]}"
+        elif warnings:
+            line += f" / 확인: {warnings[0]}"
+        lines.append(line)
+
+    lines.extend(
+        [
+            "",
+            "정확도를 높이려면 추천 화면에서 `적합`만 필터링하거나, 채팅에 `서울 기준으로 다시 추천해줘`처럼 말해 주세요. "
+            "특정 정책을 누른 뒤에는 그 정책 공고문 기준으로 대상·서류·기간을 이어서 답할게요.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def record_recommendation_turn(
+    db: Session,
+    *,
+    session: ChatSession,
+    profile_region: Dict[str, Any],
+    results: List[Any],
+    source_query: str = "맞춤 정책 추천해줘",
+    profile_warnings: Optional[List[str]] = None,
+    limit: int = 5,
+) -> None:
+    """추천 API 결과를 채팅 이력에 저장해 후속 질문이 직전 추천 맥락을 알 수 있게 한다."""
+    candidates: List[Dict[str, Any]] = []
+    for item in results[:limit]:
+        candidates.append(
+            {
+                "policy_id": str(getattr(item, "policy_id", "")),
+                "title": getattr(item, "title", None),
+                "summary": getattr(item, "summary", None),
+                "support_type": getattr(item, "support_type", None),
+                "match_status": getattr(item, "match_status", None),
+                "eligibility_status": getattr(item, "eligibility_status", None),
+                "preference_match": getattr(item, "preference_match", None),
+                "reasons": list(getattr(item, "reasons", []) or []),
+                "warnings": list(getattr(item, "warnings", []) or []),
+                "unmet_conditions": list(getattr(item, "unmet_conditions", []) or []),
+                "matched_tags": dict(getattr(item, "matched_tags", {}) or {}),
+                "profile_region": profile_region,
+            }
+        )
+
+    db.add(
+        ChatMessage(
+            session_id=session.id,
+            role="user",
+            content=source_query,
+            response_mode="recommendation_request",
+        )
+    )
+    db.add(
+        ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=(
+                "프로필 기준 맞춤 정책 추천 결과"
+                + (
+                    f"\n입력 정보 확인: {' / '.join(profile_warnings[:2])}"
+                    if profile_warnings
+                    else ""
+                )
+            ),
+            response_mode="recommendation",
+            candidates=candidates or None,
+        )
+    )
+    session.active_policy_id = None
+    session.updated_at = func.now()
+    db.commit()
 
 
 def record_chat_turn(
@@ -1312,7 +1542,12 @@ def build_policy_candidate_fallback(
 
 
 @traceable_if_enabled("chat-rag-answer")
-def generate_chat_answer(query: str, sources: List[Dict[str, Any]]) -> str:
+def generate_chat_answer(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    conversation_context: str = "",
+) -> str:
     if not sources:
         return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
 
@@ -1321,7 +1556,13 @@ def generate_chat_answer(query: str, sources: List[Dict[str, Any]]) -> str:
         return build_retrieval_only_answer(query, sources)
 
     context_text = build_context_text(sources)
+    conversation_block = (
+        f"이전 대화 맥락:\n{conversation_context}\n\n"
+        if conversation_context
+        else ""
+    )
     user_prompt = (
+        f"{conversation_block}"
         f"사용자 질문:\n{query}\n\n"
         f"검색 근거:\n{context_text}\n\n"
         "위 근거만 사용해서 답변해줘. "
@@ -1383,6 +1624,7 @@ def answer_policy_question(
     *,
     limit: Optional[int] = None,
     policy_id: Optional[uuid.UUID] = None,
+    recent_messages: Optional[List[ChatMessage]] = None,
 ) -> Dict[str, Any]:
     retrieval = retrieve_policy_chunk_sources(
         db=db,
@@ -1396,7 +1638,11 @@ def answer_policy_question(
     elif response_mode == "policy_selection":
         answer = build_policy_selection_answer(retrieval.get("candidates") or [])
     else:
-        answer = generate_chat_answer(query, retrieval["sources"])
+        answer = generate_chat_answer(
+            query,
+            retrieval["sources"],
+            conversation_context=build_conversation_context(recent_messages or []),
+        )
     return {
         **retrieval,
         "answer": answer,

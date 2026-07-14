@@ -77,6 +77,10 @@ class ChatAnswerRequest(ChatSearchRequest):
         default=None,
         description="로그인 사용자의 대화 세션 ID. 없으면 새 세션을 만든다.",
     )
+    selected_policy_id: Optional[UUID] = Field(
+        default=None,
+        description="프론트가 로컬에 들고 있는 선택 공고 ID. 서버 세션 문맥 복구용으로 사용한다.",
+    )
 
 
 class ChatAnswerResponse(ChatSearchResponse):

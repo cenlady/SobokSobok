@@ -59,6 +59,7 @@ class RecommendationResult(BaseModel):
 
 
 class RecommendationPreviewResponse(BaseModel):
+    chat_session_id: UUID | None = None
     total_candidates: int
     filtered_candidates: int
     returned: int

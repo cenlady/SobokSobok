@@ -138,7 +138,7 @@ export default function ChatScreen() {
         // 추천 기능 자체는 세션 정리 실패와 무관하게 실행한다.
         persistSessionPolicy(null)
       }
-      await askRecommendations()
+      await askRecommendations(query)
       return
     }
 
@@ -159,7 +159,12 @@ export default function ChatScreen() {
         : '/api/v1/chat/ask'
       const data = await apiFetch<ChatAnswerResponse>(path, {
         method: 'POST',
-        json: { query, limit: 6, ...(chatSessionId ? { session_id: chatSessionId } : {}) },
+        json: {
+          query,
+          limit: 6,
+          ...(chatSessionId ? { session_id: chatSessionId } : {}),
+          ...(!policyId && sessionPolicy?.policy_id ? { selected_policy_id: sessionPolicy.policy_id } : {}),
+        },
       })
       persistSessionId(data.session_id)
 
@@ -190,7 +195,7 @@ export default function ChatScreen() {
     }
   }
 
-  const askRecommendations = async () => {
+  const askRecommendations = async (sourceQuery = '맞춤 정책 추천해줘') => {
     setSending(true)
     const pendingId = push({
       role: 'bot',
@@ -199,10 +204,20 @@ export default function ChatScreen() {
     })
 
     try {
-      const data = await apiFetch<RecommendationPreviewResponse>('/api/v1/recommend/preview?limit=3', {
+      const params = new URLSearchParams({
+        limit: '3',
+        source_query: sourceQuery,
+      })
+      if (chatSessionId) {
+        params.set('chat_session_id', chatSessionId)
+      }
+      const data = await apiFetch<RecommendationPreviewResponse>(`/api/v1/recommend/preview?${params.toString()}`, {
         method: 'POST',
         json: buildRecommendationRequest(profile),
       })
+      if (data.chat_session_id) {
+        persistSessionId(data.chat_session_id)
+      }
       const policies = data.results.map((item) => ({
         policy_id: item.policy_id,
         title: item.title,
