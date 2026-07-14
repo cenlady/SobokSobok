@@ -39,15 +39,40 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let ignore = false
-    apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
-      .then((data) => {
-        if (!ignore) setGoogleEvents(data)
-      })
-      .catch((err) => {
-        console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
-      })
+    
+    // 기본 패치 헬퍼
+    const fetchEvents = () => {
+      apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
+        .then((data) => {
+          if (!ignore) {
+            setGoogleEvents(data)
+            sessionStorage.removeItem('sobok_calendar_dirty')
+          }
+        })
+        .catch((err) => {
+          console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
+        })
+    }
+
+    // [이재혁 - 실시간 동기화 플래그 감지용 헬퍼]
+    const checkDirtyAndFetch = () => {
+      const isDirty = sessionStorage.getItem('sobok_calendar_dirty') === 'true'
+      if (isDirty) {
+        fetchEvents()
+      }
+    }
+
+    // 최초 화면 마운트 시 조회
+    fetchEvents()
+
+    // 화면 복원(pageshow), 탭 포커스(focus) 감지 리스너 바인딩
+    window.addEventListener('pageshow', checkDirtyAndFetch)
+    window.addEventListener('focus', checkDirtyAndFetch)
+
     return () => {
       ignore = true
+      window.removeEventListener('pageshow', checkDirtyAndFetch)
+      window.removeEventListener('focus', checkDirtyAndFetch)
     }
   }, [])
 

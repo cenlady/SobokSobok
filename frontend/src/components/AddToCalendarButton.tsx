@@ -66,6 +66,8 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
       })
       setLink(data.html_link)
       setState('done')
+      // [이재혁 - 실시간 동기화용 변경 플래그 주입]
+      sessionStorage.setItem('sobok_calendar_dirty', 'true')
     } catch (e) {
       setState('error')
       let errMsg = '캘린더 등록에 실패했어요.'
