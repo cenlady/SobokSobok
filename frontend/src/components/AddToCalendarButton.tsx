@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CalendarCheck, CalendarPlus, Loader2 } from 'lucide-react'
 import { apiFetch } from '../lib/api'
 
@@ -32,6 +32,29 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
   // 마감일이 없는 정책은 캘린더에 넣을 날짜가 없다. 눌러봐야 서버가 400을 낸다.
   const noDeadline = !applyEnd
 
+  // [이재혁 - 사전 등록 여부 실시간 비동기 검증]
+  useEffect(() => {
+    if (noDeadline) return
+
+    let ignore = false
+    apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null; html_link?: string }[]>('/api/v1/calendar/events')
+      .then((events) => {
+        if (ignore) return
+        const matched = events.find(ev => ev.policy_id === policyId)
+        if (matched) {
+          setLink(matched.html_link ?? null)
+          setState('done')
+        }
+      })
+      .catch((err) => {
+        console.warn('사전 캘린더 등록 여부 검증 실패:', err)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [policyId, noDeadline])
+
   const add = async () => {
     if (noDeadline || state === 'loading') return
     setState('loading')
@@ -43,13 +66,20 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
       })
       setLink(data.html_link)
       setState('done')
+      // [이재혁 - 실시간 동기화용 변경 플래그 주입]
+      sessionStorage.setItem('sobok_calendar_dirty', 'true')
     } catch (e) {
       setState('error')
-      setMessage(
-        e instanceof Error && /refresh token/i.test(e.message)
-          ? '캘린더 권한이 없어요. 로그아웃 후 다시 로그인해주세요.'
-          : '캘린더 등록에 실패했어요.',
-      )
+      let errMsg = '캘린더 등록에 실패했어요.'
+      if (e instanceof Error) {
+        if (/refresh token/i.test(e.message)) {
+          errMsg = '캘린더 권한이 없어요. 로그아웃 후 다시 로그인해주세요.'
+        } else if (/이미/i.test(e.message)) {
+          errMsg = '이미 등록된 공고입니다.'
+          alert('이미 구글 캘린더에 등록 완료된 공고입니다!')
+        }
+      }
+      setMessage(errMsg)
     }
   }
 
