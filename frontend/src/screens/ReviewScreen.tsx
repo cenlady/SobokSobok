@@ -4,16 +4,19 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  ChevronLeft,
+  ChevronRight,
   FileText,
   Info,
   Loader2,
   Plus,
   RotateCcw,
+  Search,
   Upload,
   X,
 } from 'lucide-react'
 import TopBar from '../components/TopBar'
-import { Button, EmptyState } from '../components/ui'
+import { Button, EmptyState, Notice, PageIntro } from '../components/ui'
 import { apiFetch } from '../lib/api'
 import { useSavedPolicies } from '../lib/storage'
 import type {
@@ -64,7 +67,7 @@ type Phase = 'idle' | 'running' | 'done'
 /** 서버의 review_status를 화면 단계로 접는다. 파이프라인 순서: 추출 → 진단 → 대조 */
 const STAGES = [
   { key: 'extract', label: '서류 읽는 중', statuses: ['queued', 'extracting'] },
-  { key: 'diagnose', label: 'AI가 서류 검토 중', statuses: ['diagnosing'] },
+  { key: 'diagnose', label: '서류 내용을 점검하는 중', statuses: ['diagnosing'] },
   { key: 'match', label: '정책 요건과 대조 중', statuses: ['matching'] },
 ] as const
 
@@ -187,34 +190,41 @@ export default function ReviewScreen() {
   const stages = hasMatching ? STAGES : STAGES.filter((s) => s.key !== 'match')
 
   return (
-    <div className="pb-6">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <TopBar />
 
-      <section className="px-5 pt-2">
-        <h2 className="text-title text-ink">서류 검토</h2>
-        <p className="mt-1 text-sm leading-relaxed text-muted">
-          제출 전에 오타·빈칸을 점검하고, 정책이 요구하는 서류가 빠지지 않았는지 확인해요.
-        </p>
-      </section>
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
+        <PageIntro
+          title="서류 검토"
+          description="제출 전에 오타와 빈칸을 점검하고, 정책에서 요구하는 서류가 준비됐는지 확인합니다."
+        />
+
+        {phase === 'idle' && (
+          <IdleForm
+            policies={policies}
+            policiesLoading={policiesLoading}
+            policyId={policyId}
+            onPolicyChange={setPolicyId}
+            files={files}
+            onAddFiles={addFiles}
+            onRemoveFile={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+            error={error}
+            onGoFind={() => navigate('/policies')}
+          />
+        )}
+
+        {phase === 'running' && <Progress stages={stages} status={status} count={files.length} />}
+
+        {phase === 'done' && review && <Result review={review} onReset={reset} />}
+      </div>
 
       {phase === 'idle' && (
-        <IdleForm
-          policies={policies}
-          policiesLoading={policiesLoading}
-          policyId={policyId}
-          onPolicyChange={setPolicyId}
-          files={files}
-          onAddFiles={addFiles}
-          onRemoveFile={(i) => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
-          onSubmit={submit}
-          error={error}
-          onGoFind={() => navigate('/policies')}
-        />
+        <div className="shrink-0 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
+          <Button onClick={submit} disabled={files.length === 0} full>
+            {files.length > 0 ? `서류 ${files.length}건 검토 시작` : '검토 시작하기'}
+          </Button>
+        </div>
       )}
-
-      {phase === 'running' && <Progress stages={stages} status={status} count={files.length} />}
-
-      {phase === 'done' && review && <Result review={review} onReset={reset} />}
     </div>
   )
 }
@@ -229,7 +239,6 @@ function IdleForm({
   files,
   onAddFiles,
   onRemoveFile,
-  onSubmit,
   error,
   onGoFind,
 }: {
@@ -240,7 +249,6 @@ function IdleForm({
   files: File[]
   onAddFiles: (files: FileList | null) => void
   onRemoveFile: (index: number) => void
-  onSubmit: () => void
   error: string | null
   onGoFind: () => void
 }) {
@@ -264,19 +272,12 @@ function IdleForm({
             </Button>
           </div>
         ) : (
-          <select
+          <PolicyPicker
+            policies={policies}
+            loading={policiesLoading}
             value={policyId}
-            onChange={(e) => onPolicyChange(e.target.value)}
-            className="mt-3 h-12 w-full rounded-xl border border-line bg-surface px-4 text-sm font-semibold text-ink"
-          >
-            {policiesLoading && <option>불러오는 중…</option>}
-            {policies.map((p) => (
-              <option key={p.policy_id} value={p.policy_id}>
-                {p.title}
-              </option>
-            ))}
-            <option value={NO_POLICY}>정책 없이 서류만 검토할게요</option>
-          </select>
+            onChange={onPolicyChange}
+          />
         )}
 
         {policyId === NO_POLICY && (
@@ -349,11 +350,159 @@ function IdleForm({
 
         {error && <p className="mt-3 text-sm font-medium text-status-red">{error}</p>}
 
-        <Button onClick={onSubmit} disabled={files.length === 0} full className="mt-5">
-          {files.length > 0 ? `서류 ${files.length}건 검토 시작` : '검토 시작하기'}
-        </Button>
       </section>
     </>
+  )
+}
+
+const POLICY_PAGE_SIZE = 5
+
+function PolicyPicker({
+  policies,
+  loading,
+  value,
+  onChange,
+}: {
+  policies: { policy_id: string; title: string }[]
+  loading: boolean
+  value: string
+  onChange: (id: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [page, setPage] = useState(0)
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const filtered = policies.filter((policy) =>
+    policy.title.toLocaleLowerCase().includes(normalizedQuery),
+  )
+  const pageCount = Math.max(1, Math.ceil(filtered.length / POLICY_PAGE_SIZE))
+  const safePage = Math.min(page, pageCount - 1)
+  const visible = filtered.slice(
+    safePage * POLICY_PAGE_SIZE,
+    safePage * POLICY_PAGE_SIZE + POLICY_PAGE_SIZE,
+  )
+
+  useEffect(() => {
+    setPage(0)
+  }, [query])
+
+  useEffect(() => {
+    if (page >= pageCount) setPage(pageCount - 1)
+  }, [page, pageCount])
+
+  if (loading) {
+    return (
+      <Notice className="mt-3">
+        저장한 정책을 불러오는 중입니다.
+      </Notice>
+    )
+  }
+
+  return (
+    <div className="mt-3">
+      <label className="relative block">
+        <span className="sr-only">정책 제목 검색</span>
+        <Search
+          size={17}
+          strokeWidth={1.8}
+          className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-subtle"
+        />
+        <input
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="정책 제목으로 검색"
+          className="h-11 w-full rounded-xl border border-line bg-surface pl-10 pr-3 text-sm text-ink outline-none placeholder:text-subtle focus:border-primary"
+        />
+      </label>
+
+      {visible.length > 0 ? (
+        <div className="surface-panel mt-2 divide-y divide-line" role="listbox">
+          {visible.map((policy, index) => {
+            const selected = value === policy.policy_id
+            const edgeClass = `${index === 0 ? 'rounded-t-[15px]' : ''} ${
+              index === visible.length - 1 ? 'rounded-b-[15px]' : ''
+            }`
+            return (
+              <div key={policy.policy_id} className="group relative">
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => onChange(policy.policy_id)}
+                  className={`flex h-11 w-full items-center gap-3 px-3.5 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/25 ${edgeClass} ${
+                    selected ? 'bg-primary-soft/60 text-ink' : 'bg-surface text-muted active:bg-line/40'
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{policy.title}</span>
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                      selected ? 'bg-primary text-white' : 'border border-line bg-surface'
+                    }`}
+                    aria-hidden="true"
+                  >
+                    {selected && <Check size={12} strokeWidth={3} />}
+                  </span>
+                </button>
+                <div
+                  role="tooltip"
+                  className="pointer-events-none absolute left-3 right-3 top-[calc(100%+6px)] z-20 rounded-lg bg-ink px-3 py-2 text-xs leading-relaxed text-white opacity-0 shadow-card transition-opacity group-hover:opacity-100"
+                >
+                  <span className="absolute -top-1 left-5 h-2 w-2 rotate-45 bg-ink" aria-hidden="true" />
+                  <span className="relative break-keep [overflow-wrap:anywhere]">{policy.title}</span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="surface-panel mt-2 px-4 py-5 text-center text-sm text-muted">
+          검색 결과가 없습니다.
+        </p>
+      )}
+
+      <div className="mt-1 flex min-h-11 items-center justify-between">
+        <span className="text-xs text-subtle">저장한 정책 {filtered.length}개</span>
+        {pageCount > 1 && (
+          <div className="flex items-center" aria-label="정책 목록 페이지">
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.max(0, current - 1))}
+              disabled={safePage === 0}
+              aria-label="이전 정책 목록"
+              className="flex h-11 w-11 items-center justify-center rounded-full text-muted disabled:text-faint"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <span className="min-w-10 text-center text-xs font-semibold text-muted">
+              {safePage + 1} / {pageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}
+              disabled={safePage + 1 >= pageCount}
+              aria-label="다음 정책 목록"
+              className="flex h-11 w-11 items-center justify-center rounded-full text-muted disabled:text-faint"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onChange(NO_POLICY)}
+        aria-pressed={value === NO_POLICY}
+        className={`flex h-11 w-full items-center justify-between rounded-xl border px-3.5 text-sm font-medium transition-colors ${
+          value === NO_POLICY
+            ? 'border-primary bg-primary-soft text-primary'
+            : 'border-line bg-surface text-muted active:bg-line/40'
+        }`}
+      >
+        정책 없이 서류만 검토
+        {value === NO_POLICY && <Check size={16} strokeWidth={2.5} />}
+      </button>
+    </div>
   )
 }
 
@@ -441,11 +590,7 @@ function Result({ review, onReset }: { review: ReviewResponse; onReset: () => vo
 
   return (
     <section className="mt-6 space-y-5 px-5">
-      {review.summary && (
-        <div className="rounded-2xl bg-primary-soft p-4">
-          <p className="text-[15px] font-semibold leading-relaxed text-ink">{review.summary}</p>
-        </div>
-      )}
+      {review.summary && <Notice title="검토 요약">{review.summary}</Notice>}
 
       {/* '요건이 없다'와 '요건을 충족했다'를 절대 뭉뚱그리지 않는다 */}
       <RequirementSection review={review} />
