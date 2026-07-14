@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw, Sparkles } from 'lucide-react'
+import { AlertTriangle, RefreshCw, Sparkles } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import PolicyCard, { type PolicyCardData } from '../components/PolicyCard'
 import { apiFetch, ApiError } from '../lib/api'
@@ -50,6 +50,7 @@ export default function PolicySearchScreen() {
 
   const [recommendations, setRecommendations] = useState<PolicyCardData[]>([])
   const [recMeta, setRecMeta] = useState<{ total: number; returned: number } | null>(null)
+  const [profileWarnings, setProfileWarnings] = useState<string[]>([])
   const [recLoading, setRecLoading] = useState(false)
   const [recError, setRecError] = useState<string | null>(null)
 
@@ -79,6 +80,7 @@ export default function PolicySearchScreen() {
         { method: 'POST', json: buildRecommendationRequest(profile) },
       )
       setRecMeta({ total: data.total_candidates, returned: data.returned })
+      setProfileWarnings(data.profile_warnings || [])
       setRecommendations(
         data.results.map((item) => ({
           policy_id: item.policy_id,
@@ -88,9 +90,12 @@ export default function PolicySearchScreen() {
           apply_end: item.apply_end,
           status: item.status,
           rank_score: item.rank_score,
+          eligibility_status: item.eligibility_status,
+          preference_match: item.preference_match,
           match_status: item.match_status,
           reasons: item.reasons,
           warnings: item.warnings,
+          unmet_conditions: item.unmet_conditions,
         })),
       )
     } catch {
@@ -235,7 +240,16 @@ export default function PolicySearchScreen() {
               </button>
             </div>
 
-            <div className="mt-4">
+            <div className="mt-4 space-y-3">
+              {profileWarnings.map((warning) => (
+                <div
+                  key={warning}
+                  className="flex items-start gap-2 rounded-2xl border border-accent/20 bg-accent-soft/45 p-4 text-sm font-medium leading-relaxed text-ink"
+                >
+                  <AlertTriangle size={17} className="mt-0.5 shrink-0 text-accent" />
+                  <span>{warning}</span>
+                </div>
+              ))}
               {recError && <ErrorBox message={recError} />}
               {!recError && recLoading && <InfoBox message="맞춤 정책을 계산하고 있어요." />}
               {!recLoading && !recError && recommendations.length > 0 && (

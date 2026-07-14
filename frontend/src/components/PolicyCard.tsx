@@ -38,9 +38,12 @@ export interface PolicyCardData {
   status?: string | null
   /** 추천 탭에서만 채워진다 */
   rank_score?: number
+  eligibility_status?: 'eligible' | 'needs_review'
+  preference_match?: 'exact' | 'partial' | 'none' | 'not_requested'
   match_status?: 'eligible' | 'needs_review' | 'near_match'
   reasons?: string[]
   warnings?: string[]
+  unmet_conditions?: string[]
 }
 
 interface Props {
@@ -65,7 +68,10 @@ interface Props {
 export default function PolicyCard({ policy, saved, onToggleSave, savePending }: Props) {
   const navigate = useNavigate()
   const deadline = getDeadlineInfo(policy)
-  const needsReview = policy.match_status === 'needs_review'
+  const needsReview =
+    policy.eligibility_status === 'needs_review' || policy.match_status === 'needs_review'
+  const isPreferenceMismatch =
+    policy.preference_match === 'none' || policy.match_status === 'near_match'
 
   const categoryLabels = policy.categories?.length
     ? policy.categories.map(
@@ -141,10 +147,12 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
         </p>
       )}
 
-      {needsReview && (
+      {(needsReview || isPreferenceMismatch) && (
         <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-muted">
-          <AlertCircle size={13} className="mt-px shrink-0 text-faint" />
-          {policy.warnings?.[0] || '지원 조건을 다시 확인해보세요'}
+          <AlertCircle size={13} className="mt-px shrink-0 text-subtle" />
+          {needsReview
+            ? policy.warnings?.[0] || '지원 자격 조건을 다시 확인해보세요'
+            : policy.unmet_conditions?.[0] || '선택한 관심 분야와 직접 일치하지 않습니다'}
         </p>
       )}
     </article>

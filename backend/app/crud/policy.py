@@ -1,8 +1,7 @@
-from datetime import datetime
-
 from sqlalchemy import case, or_
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.time import korea_now_naive
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.policy import PolicyAnnouncement, PolicyProgramPage
 from app.services.recommend import NEED_TAG_KEYWORDS
@@ -65,7 +64,7 @@ def list_normalized_policies(
         ]
         query = query.filter(or_(*category_conditions))
 
-    now = datetime.now()
+    now = korea_now_naive()
     if status == "available":
         query = query.filter(
             NormalizedPolicy.status.in_(("open", "notice")),

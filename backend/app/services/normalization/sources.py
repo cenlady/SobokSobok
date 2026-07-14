@@ -41,6 +41,8 @@ from app.services.normalization.metadata import (
     _condition_payload,
     _duplicate_group_key,
     _filter_columns_from_metadata,
+    _gov24_audience_specificity,
+    _merge_gov24_business_status_tags,
     _merge_industry_condition_with_codes,
     _normalize_status,
     _parse_datetime,
@@ -360,6 +362,10 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         )
         apply_start, apply_end = _parse_deadline_range(application_deadline)
         condition_payload = _condition_payload(condition)
+        organization_name = _first_text(
+            detail.organization_name if detail else None,
+            list_row.organization_name,
+        )
         application_method = _first_text(detail.application_method if detail else None, list_row.application_method)
         contacts = _extract_contacts(
             _join_text([detail.contact if detail else None, list_row.contact_phone])
@@ -390,6 +396,7 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             ),
             default_scope="national",
             fallback_text=list_row.service_name,
+            supporting_text=organization_name,
         )
         text_industry_condition = _extract_industry_condition(
             gov_eligibility_blob,
@@ -398,6 +405,15 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
         industry_condition = _merge_industry_condition_with_codes(
             text_industry_condition,
             condition_payload["industry_tags"],
+        )
+        business_status_tags = _merge_gov24_business_status_tags(
+            condition_payload["business_status_tags"],
+            _tags_from_keyword_map(gov_eligibility_blob, BUSINESS_STATUS_KEYWORDS),
+            list_row.user_type,
+        )
+        audience_specificity = _gov24_audience_specificity(
+            list_row.user_type,
+            target_text,
         )
         docs = _gov24_documents(
             body=body,
@@ -450,7 +466,7 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "title": list_row.service_name,
             "summary": _first_text(list_row.service_purpose_summary, _summarize(support_content), list_row.service_name),
             "body": body,
-            "organization": _first_text(detail.organization_name if detail else None, list_row.organization_name),
+            "organization": organization_name,
             "support_type": _first_text(detail.support_type if detail else None, list_row.support_type, list_row.service_field),
             "target_text": target_text,
             "support_content": support_content,
@@ -463,13 +479,11 @@ def _normalize_gov24(db: Session) -> dict[str, int]:
             "apply_end": apply_end,
             "apply_url": _first_text(detail.online_application_url if detail else None, list_row.detail_url),
             "industry_tags": industry_condition["include_tags"],
-            "business_status_tags": _merge_unique_lists(
-                condition_payload["business_status_tags"],
-                _tags_from_keyword_map(gov_eligibility_blob, BUSINESS_STATUS_KEYWORDS),
-            ),
+            "business_status_tags": business_status_tags,
             "eligibility": {
                 "source": "gov24",
                 "user_type": list_row.user_type,
+                "audience_specificity": audience_specificity,
                 "service_field": list_row.service_field,
                 "selection_criteria": _first_text(detail.selection_criteria if detail else None, list_row.selection_criteria),
                 "application_deadline": application_deadline,

@@ -10,7 +10,11 @@ from app.schemas.recommend import (
     RecommendationProfileRequest,
     RecommendationExplanationResponse,
 )
-from app.services.recommend import recommend_policies, explain_policy_recommendation
+from app.services.recommend import (
+    explain_policy_recommendation,
+    profile_validation_warnings,
+    recommend_policies,
+)
 
 router = APIRouter()
 
@@ -31,6 +35,7 @@ def preview_recommendations(
         total_candidates=total_candidates,
         returned=len(results),
         vector_used=vector_used,
+        profile_warnings=profile_validation_warnings(profile),
         results=results,
     )
 

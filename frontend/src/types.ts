@@ -57,12 +57,16 @@ export interface RecommendationResult {
   apply_end?: string | null
   /** 상시 접수(open)와 기간 확인 필요(notice)를 가른다 */
   status?: string | null
+  eligibility_status: 'eligible' | 'needs_review'
+  preference_match: 'exact' | 'partial' | 'none' | 'not_requested'
   match_status: 'eligible' | 'needs_review' | 'near_match'
   confidence: 'high' | 'medium' | 'low'
   rank_score: number
   vector_similarity?: number | null
   reasons: string[]
   warnings: string[]
+  unknown_conditions: string[]
+  unmet_conditions: string[]
   matched_tags: Record<string, string[]>
 }
 
@@ -70,6 +74,7 @@ export interface RecommendationPreviewResponse {
   total_candidates: number
   returned: number
   vector_used: boolean
+  profile_warnings: string[]
   results: RecommendationResult[]
 }
 
@@ -195,10 +200,16 @@ export interface ReviewResponse {
 }
 
 export interface RecommendationExplanationResponse {
+  match_status: 'eligible' | 'needs_review' | 'near_match' | 'ineligible'
+  eligibility_status: 'eligible' | 'needs_review' | 'ineligible'
+  preference_match: 'exact' | 'partial' | 'none' | 'not_requested'
+  confidence: 'high' | 'medium' | 'low'
+  generated_by: 'rules' | 'gemini'
   summary: string
   strengths: string[]
   aspects_to_check: string[]
   next_actions: string[]
+  evidence: string[]
 }
 
 export interface ChatChunkSource {
