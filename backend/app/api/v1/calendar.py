@@ -84,8 +84,8 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
     시간(dateTime) 정보가 있으면 시/분 범위도 함께 파싱해 반환합니다.
     """
     now = datetime.now(timezone.utc)
-    time_min = now.isoformat()
-    time_max = (now + timedelta(days=14)).isoformat()
+    time_min = (now - timedelta(days=30)).isoformat()
+    time_max = (now + timedelta(days=365)).isoformat()
     
     url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
     params = {
@@ -93,7 +93,7 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
         "timeMax": time_max,
         "singleEvents": "true",
         "orderBy": "startTime",
-        "maxResults": 10
+        "maxResults": 250
     }
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -273,6 +273,18 @@ async def get_calendar_coach_timeline(
     google_access_token = await get_valid_google_token(current_user, db)
     user_schedules = await get_google_calendar_events(google_access_token)
 
+    # AI 코칭용: 구글 일정 중 향후 2주일(14일) 범위 내의 일정만 슬라이싱 필터링
+    now_utc = datetime.now(timezone.utc)
+    two_weeks_limit = now_utc + timedelta(days=14)
+    filtered_schedules = []
+    for item in user_schedules:
+        try:
+            item_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
+            if now_utc.date() <= item_date <= two_weeks_limit.date():
+                filtered_schedules.append(item)
+        except Exception:
+            filtered_schedules.append(item)
+
     # 3) 해당 지원사업에 등록된 RAG 청크 정보 추출
     chunks = db.query(PolicyChunk).filter(PolicyChunk.policy_id == policy_id).all()
     rag_context = "\n".join([c.chunk_text for c in chunks]) if chunks else "상세 제출 서류 및 우대 조건이 누락되었습니다. 일반 공고 정보에 준합니다."
@@ -280,7 +292,7 @@ async def get_calendar_coach_timeline(
     # 4) AI 프롬프트 콘텍스트 조립
     deadline_str = policy.apply_end.strftime("%Y-%m-%d")
     schedules_list = []
-    for item in user_schedules:
+    for item in filtered_schedules:
         time_part = f" ({item['time']})" if item.get('time') else ""
         schedules_list.append(f"{item['date']}{time_part}: {item['summary']}")
     schedules_text = "\n".join(schedules_list) if schedules_list else "등록된 개인 일정이 없어 매우 한가한 상태입니다."

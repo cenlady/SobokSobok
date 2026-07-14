@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
+import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Compass, Sparkles } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
@@ -59,6 +59,11 @@ export default function HomeScreen() {
     return map
   }, [googleEvents])
 
+  // [이재혁 - 홈 화면 즉시 AI 코칭 연동 상태]
+  const [coachGuide, setCoachGuide] = useState<string | null>(null)
+  const [loadingCoach, setLoadingCoach] = useState(false)
+  const [isOpenCoachModal, setIsOpenCoachModal] = useState(false)
+
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
   const { dated, always, unknown } = useMemo(() => {
     const groups: Record<'dated' | 'always' | 'unknown', SavedPolicy[]> = {
@@ -109,6 +114,26 @@ export default function HomeScreen() {
   }
 
   const dayList = dated.filter((p) => toDateKey(p.apply_end) === selected)
+
+  // [이재혁 - 홈 화면 AI 일정 코치 비동기 호출 헬퍼]
+  const handleCoachTimeline = async () => {
+    if (dayList.length === 0) {
+      alert('달력에서 마감 정책(점 표시가 있는 날짜)을 먼저 선택하신 후 코칭 버튼을 눌러주세요!')
+      return
+    }
+    const targetPolicy = dayList[0]
+    if (loadingCoach) return
+    setLoadingCoach(true)
+    try {
+      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicy.policy_id}`)
+      setCoachGuide(data.coach_guide)
+      setIsOpenCoachModal(true)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'AI 코칭 일정을 불러오지 못했어요. 구글 연동 상태를 확인해 주세요.')
+    } finally {
+      setLoadingCoach(false)
+    }
+  }
   const selDate = new Date(`${selected}T00:00:00`)
   const isEmpty = !loading && policies.length === 0
 
@@ -210,6 +235,22 @@ export default function HomeScreen() {
         </div>
       </section>
 
+      {/* [이재혁 - 홈 화면 즉시 AI 코칭 버튼] */}
+      <section className="mt-3 px-5">
+        <Button
+          onClick={handleCoachTimeline}
+          disabled={loadingCoach}
+          full
+        >
+          {loadingCoach ? (
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          ) : (
+            <Sparkles size={16} className="text-white fill-white/10" />
+          )}
+          &nbsp;소복이 AI 스케줄 코칭받기
+        </Button>
+      </section>
+
       {/* 선택한 날짜 */}
       <section className="mt-6 px-5">
         <h3 className="text-section text-ink">
@@ -294,6 +335,38 @@ export default function HomeScreen() {
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
       </section>
+
+      {/* [이재혁 - 홈 화면 즉시 AI 코칭 모달 팝업] */}
+      {isOpenCoachModal && coachGuide && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-xs">
+          <div className="relative w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-cream p-6 shadow-2xl max-h-[80vh] flex flex-col overflow-hidden border border-line">
+            <div className="flex items-center justify-between border-b border-line pb-3">
+              <h4 className="text-base font-bold text-ink flex items-center gap-1.5">
+                <Sparkles size={18} className="text-brand fill-brand/10" /> 소복이 AI 일정 코칭
+              </h4>
+              <button 
+                type="button"
+                onClick={() => setIsOpenCoachModal(false)}
+                className="text-sm font-semibold text-muted hover:text-ink active:scale-95"
+              >
+                닫기
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto mt-4 text-[14px] leading-relaxed text-ink/80 whitespace-pre-line pr-1 no-scrollbar">
+              {coachGuide}
+            </div>
+            
+            <button
+              type="button"
+              onClick={() => setIsOpenCoachModal(false)}
+              className="mt-5 w-full rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98]"
+            >
+              확인했습니다
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
