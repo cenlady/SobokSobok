@@ -46,6 +46,17 @@ body {
   scrollbar-width: none;
 }
 
+/* 목록을 담는 판.
+ *
+ * 정책 30건을 훑을 때 카드가 하나씩 떨어져 있으면(각자 둥근 모서리 + 그림자) 여백이
+ * 낭비되고 시선이 카드마다 끊긴다. 한 장의 판 위에 구분선으로 나누면 훨씬 촘촘하고
+ * '목록'답게 읽힌다. */
+.surface-panel {
+  background: theme('colors.surface');
+  border: 1px solid theme('colors.line');
+  border-radius: 16px;
+}
+
 /* 최소 터치 영역 44×44.
  *
  * 달력 화살표, 북마크, 연필 같은 작은 아이콘 버튼은 눈에 보이는 크기는 작아도

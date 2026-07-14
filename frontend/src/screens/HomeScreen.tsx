@@ -126,7 +126,7 @@ export default function HomeScreen() {
 
       {/* 달력 */}
       <section className="mt-4 px-5">
-        <div className="rounded-2xl bg-white p-5 shadow-card">
+        <div className="rounded-2xl bg-surface p-5 shadow-card">
           <div className="mb-4 flex items-center justify-between">
             <p className="text-section text-ink">
               {year}년 {month + 1}월
@@ -196,7 +196,7 @@ export default function HomeScreen() {
 
         <div className="mt-3 space-y-2.5">
           {dayList.length === 0 ? (
-            <p className="rounded-2xl bg-white px-4 py-5 text-center text-sm text-subtle shadow-card">
+            <p className="rounded-2xl bg-surface px-4 py-5 text-center text-sm text-subtle shadow-card">
               이 날 마감되는 정책이 없어요
             </p>
           ) : (
@@ -251,7 +251,7 @@ function DeadlineCard({ policy }: { policy: SavedPolicy }) {
   const period = formatPeriod(policy)
 
   return (
-    <article className="rounded-2xl bg-white p-4 shadow-card">
+    <article className="rounded-2xl bg-surface p-4 shadow-card">
       <StatusBadge info={info} />
 
       <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>

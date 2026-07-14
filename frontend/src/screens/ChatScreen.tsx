@@ -177,7 +177,7 @@ export default function ChatScreen() {
             <p className="mt-1 break-all text-xs text-white/70">policyId: {policyId}</p>
             <button
               onClick={() => navigate(`/policy/${policyId}`)}
-              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-ink"
+              className="mt-3 rounded-xl bg-surface px-3 py-2 text-xs font-bold text-ink"
             >
               정책 상세 다시 보기
             </button>

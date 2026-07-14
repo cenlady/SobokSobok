@@ -91,7 +91,7 @@ export default function ProfileScreen() {
         </div>
 
         {profile.needTags.length > 0 && (
-          <div className="mt-3 rounded-2xl bg-white p-4 shadow-card">
+          <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card">
             <p className="text-xs text-subtle">관심 지원</p>
             <p className="mt-1 text-sm font-semibold text-ink">
               {profile.needTags
@@ -107,7 +107,7 @@ export default function ProfileScreen() {
         <h3 className="text-section text-ink">설정 및 관리</h3>
         {/* 아이콘 배경을 뉴트럴로 통일했다. 항목마다 파랑·오렌지·회색을 돌려쓰면
             색이 아무 의미도 갖지 못하고 화면만 시끄러워진다. */}
-        <div className="mt-4 divide-y divide-line overflow-hidden rounded-2xl bg-white shadow-card">
+        <div className="mt-4 divide-y divide-line overflow-hidden rounded-2xl bg-surface shadow-card">
           <div className="flex items-center gap-3 p-4">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-line/60">
               <Bell size={17} strokeWidth={1.8} className="text-muted" />
@@ -161,7 +161,7 @@ function InfoTile({
   value: string
 }) {
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-card">
+    <div className="rounded-2xl bg-surface p-4 shadow-card">
       <Icon size={18} strokeWidth={1.8} className="text-subtle" />
       <p className="mt-2.5 text-xs text-subtle">{label}</p>
       <p className="mt-0.5 text-[15px] font-semibold text-ink">{value || '—'}</p>

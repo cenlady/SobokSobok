@@ -185,12 +185,12 @@ export default function PolicyDetailScreen() {
           <p className="mt-2 text-sm font-semibold text-muted">{policy.organization}</p>
         )}
         {policy.summary && (
-          <p className="mt-4 rounded-2xl bg-white p-4 text-[15px] leading-relaxed text-muted shadow-card">
+          <p className="mt-4 rounded-2xl bg-surface p-4 text-[15px] leading-relaxed text-muted shadow-card">
             {policy.summary}
           </p>
         )}
 
-        <div className="mt-5 space-y-3 rounded-2xl bg-white p-5 shadow-card">
+        <div className="mt-5 space-y-3 rounded-2xl bg-surface p-5 shadow-card">
           <InfoLine icon={MapPin} label="지역" value={regionText} />
           {/* 날짜가 없으면 "미정 ~ 미정" 대신, 상시 접수인지 우리가 모르는지를 말한다.
               둘은 전혀 다른 얘기다. */}
@@ -210,7 +210,7 @@ export default function PolicyDetailScreen() {
             <h3 className="flex items-center gap-1.5 text-section text-ink">
               <Sparkles size={19} className="text-brand animate-pulse" /> AI 추천 이유
             </h3>
-            <div className="mt-3 rounded-2xl bg-white p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
+            <div className="mt-3 rounded-2xl bg-surface p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
               <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-brand-light/10 text-brand">
                 <Sparkles size={20} className="animate-bounce" />
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/10 opacity-75"></span>
@@ -230,7 +230,7 @@ export default function PolicyDetailScreen() {
               <h3 className="flex items-center gap-1.5 text-section text-ink">
                 <Sparkles size={19} className="text-brand fill-brand/10" /> AI 추천 이유
               </h3>
-              <div className="mt-3 rounded-2xl bg-white p-4 shadow-card border-l-4 border-brand">
+              <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card border-l-4 border-brand">
                 <p className="text-[15px] font-bold leading-relaxed text-ink">
                   {explanation.summary}
                 </p>
@@ -245,7 +245,7 @@ export default function PolicyDetailScreen() {
                 </h3>
                 <div className="mt-3 space-y-2">
                   {explanation.strengths.map((strength) => (
-                    <div key={strength} className="flex items-start gap-2 rounded-2xl bg-white p-3.5 shadow-card">
+                    <div key={strength} className="flex items-start gap-2 rounded-2xl bg-surface p-3.5 shadow-card">
                       <span className="text-brand font-bold mt-0.5">•</span>
                       <p className="text-sm font-semibold text-ink">
                         {strength.replace(/^-\s*/, '')}
@@ -313,7 +313,7 @@ export default function PolicyDetailScreen() {
                   download={file.original_file_name || 'attachment'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 rounded-2xl bg-white p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
+                  className="flex items-center gap-2 rounded-2xl bg-surface p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
                 >
                   <FileText size={18} className="text-brand flex-shrink-0" />
                   <span className="text-[14px] font-semibold truncate flex-1 text-ink">

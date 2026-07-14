@@ -1,8 +1,8 @@
-import { AlertCircle, ArrowRight, Bookmark, BookmarkCheck } from 'lucide-react'
+import { AlertCircle, Bookmark, BookmarkCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getDeadlineInfo } from '../lib/deadline'
 import { NEED_OPTIONS } from '../lib/recommend'
-import { Button, IconButton, StatusBadge, TagList } from './ui'
+import { StatusBadge, TagList } from './ui'
 
 const SUPPORT_TYPE_LABELS: Record<string, string> = {
   현금: '현금 지원',
@@ -52,16 +52,15 @@ interface Props {
 }
 
 /**
- * 정책 카드. 정책 찾기의 세 탭과 홈이 모두 이것을 쓴다.
+ * 정책 목록의 한 행.
  *
- * 배지에 급을 매긴다. 예전에는 상태·유형·마감일 배지가 색만 다르고 급이 같아
- * 카드 하나에 넷씩 붙었고, 그래서 어느 것도 눈에 들어오지 않았다.
+ * 카드마다 '상세보기' 버튼을 달지 않는다. 정책 30건을 훑는 화면에서 버튼이 30개면
+ * 그것만으로 화면이 꽉 찬다. 행 전체를 누를 수 있게 하고, 저장 버튼만 따로 둔다.
  *
- *   1급 — 상태 배지: 딱 하나. 채운 형태. (D-3 / 상시 접수 / 기간 확인 필요)
+ * 배지에는 급을 매긴다. 예전에는 상태·유형·마감일 배지가 색만 다르고 급이 같이
+ * 넷씩 붙어서, 결국 어느 것도 눈에 들어오지 않았다.
+ *   1급 — 상태 배지: 딱 하나. 채운 형태.
  *   2급 — 카테고리 태그: 최대 둘. 얇은 외곽선, 뉴트럴.
- *
- * '추천 가능'은 빼고 '확인 필요'만 남긴다. 추천 탭에 뜬 정책이 추천 가능한 건
- * 당연해서 정보량이 없다. 예외만 말하는 편이 정보량이 크다.
  */
 export default function PolicyCard({ policy, saved, onToggleSave, savePending }: Props) {
   const navigate = useNavigate()
@@ -76,63 +75,78 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
       ? getSupportTypeLabels(policy.support_type)
       : []
 
+  const goToDetail = () =>
+    navigate(`/policy/${policy.policy_id}`, {
+      // 추천 탭에서 온 경우 이유·경고를 함께 넘긴다. 서버 설명 생성이 실패했을 때
+      // 상세 화면이 이걸로 폴백한다.
+      state: policy.match_status ? { recommendation: policy } : undefined,
+    })
+
   return (
-    <article className="rounded-2xl bg-white p-4 shadow-card">
-      <div className="flex items-start justify-between gap-2">
+    <article
+      role="link"
+      tabIndex={0}
+      onClick={goToDetail}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          goToDetail()
+        }
+      }}
+      className="cursor-pointer px-4 py-4 outline-none transition-colors hover:bg-cream/60 focus-visible:bg-cream/60 active:bg-cream"
+    >
+      <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <StatusBadge info={deadline} />
 
-          {/* 제목은 두 줄로 고정한다. 한 줄짜리와 두 줄짜리가 섞이면 카드 높이가 들쭉날쭉해
-              리스트가 어수선해 보인다. min-h로 자리를 미리 잡아둔다. */}
+          {/* 제목은 두 줄로 고정한다. 한 줄짜리와 두 줄짜리가 섞이면 행 높이가 들쭉날쭉해
+              목록이 어수선해 보인다. */}
           <h4 className="mt-2 line-clamp-2 min-h-[44px] text-card text-ink">{policy.title}</h4>
 
           {policy.summary && (
-            <p className="mt-1 line-clamp-2 text-sm leading-relaxed text-muted">{policy.summary}</p>
+            <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted">
+              {policy.summary}
+            </p>
           )}
         </div>
 
-        <IconButton
-          icon={saved ? BookmarkCheck : Bookmark}
-          onClick={() => onToggleSave(policy.policy_id)}
+        {/* 행 전체가 링크이므로 저장 버튼은 클릭이 위로 새지 않게 막는다. */}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggleSave(policy.policy_id)
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
           disabled={savePending}
-          active={saved}
-          label={saved ? '저장 해제' : '정책 저장'}
-          className="-mr-1.5 -mt-1.5"
-        />
+          aria-label={saved ? '저장 해제' : '정책 저장'}
+          className={`-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors active:scale-95 disabled:pointer-events-none disabled:text-faint ${
+            saved ? 'text-brand' : 'text-subtle hover:text-muted'
+          }`}
+        >
+          {saved ? <BookmarkCheck size={19} /> : <Bookmark size={19} />}
+        </button>
       </div>
 
       {categoryLabels.length > 0 && (
-        <div className="mt-3">
+        <div className="mt-2.5">
           <TagList items={categoryLabels} max={2} />
         </div>
       )}
 
-      {/* 추천 이유는 한 줄만. 여러 줄이면 카드가 아니라 문서가 된다. */}
+      {/* 추천 이유는 한 줄만. 여러 줄이면 목록이 아니라 문서가 된다. */}
       {policy.reasons?.[0] && (
-        <p className="mt-3 line-clamp-1 text-xs text-subtle">{policy.reasons[0]}</p>
+        <p className="mt-2.5 line-clamp-1 border-l-2 border-line pl-2.5 text-xs text-subtle">
+          {policy.reasons[0]}
+        </p>
       )}
 
       {needsReview && (
         <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-muted">
-          <AlertCircle size={13} className="mt-px shrink-0 text-subtle" />
+          <AlertCircle size={13} className="mt-px shrink-0 text-faint" />
           {policy.warnings?.[0] || '지원 조건을 다시 확인해보세요'}
         </p>
       )}
-
-      <Button
-        onClick={() =>
-          navigate(`/policy/${policy.policy_id}`, {
-            // 추천 탭에서 온 경우 이유·경고를 함께 넘긴다. 서버 설명 생성이 실패했을 때
-            // 상세 화면이 이걸로 폴백한다.
-            state: policy.match_status ? { recommendation: policy } : undefined,
-          })
-        }
-        size="sm"
-        full
-        className="mt-3"
-      >
-        상세보기 <ArrowRight size={14} />
-      </Button>
     </article>
   )
 }

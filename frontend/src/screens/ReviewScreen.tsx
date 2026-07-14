@@ -235,7 +235,7 @@ function IdleForm({
         </h3>
 
         {noSaved ? (
-          <div className="mt-3 rounded-2xl bg-white p-4 shadow-card">
+          <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card">
             <p className="text-sm leading-relaxed text-muted">
               저장한 정책이 없어요. 정책을 저장하면 그 정책이 요구하는 서류가
               빠지지 않았는지도 함께 확인해드려요.
@@ -324,7 +324,7 @@ function Progress({
 
   return (
     <section className="mt-8 px-5">
-      <div className="rounded-3xl bg-white p-6 shadow-card">
+      <div className="rounded-3xl bg-surface p-6 shadow-card">
         <div className="space-y-5">
           {stages.map((stage, i) => {
             const done = activeIndex > i
@@ -478,7 +478,7 @@ function FindingList({
         : 'bg-brand-light/20 text-brand'
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-card">
+    <div className="rounded-2xl bg-surface p-4 shadow-card">
       <div className="flex items-center gap-2">
         <h4 className="text-sm font-bold text-ink">{title}</h4>
         {empty ? (
