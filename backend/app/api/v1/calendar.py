@@ -328,7 +328,21 @@ async def get_calendar_coach_timeline(
         time_part = f" ({item['time']})" if item.get('time') else ""
         schedules_list.append(f"{item['date']}{time_part}: {item['summary']}")
     schedules_text = "\n".join(schedules_list) if schedules_list else "등록된 개인 일정이 없어 매우 한가한 상태입니다."
-    required_docs_text = str(policy.required_documents) if policy.required_documents else "공고 참조"
+    required_docs_text = "공고 참조"
+    if policy.required_documents:
+        if isinstance(policy.required_documents, list):
+            doc_names = []
+            for doc in policy.required_documents:
+                if isinstance(doc, dict) and "name" in doc:
+                    doc_names.append(doc["name"])
+                elif isinstance(doc, str):
+                    doc_names.append(doc)
+            if doc_names:
+                required_docs_text = ", ".join(doc_names)
+            else:
+                required_docs_text = str(policy.required_documents)
+        else:
+            required_docs_text = str(policy.required_documents)
 
     system_prompt = (
         "당신은 소상공인 사장님들의 지원금 신청 일정을 밀착 코칭해 주는 친절하고 전문적인 AI 비서 '소복이'입니다. "

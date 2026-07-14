@@ -169,13 +169,15 @@ export default function HomeScreen() {
 
     if (!targetPolicyId) return
     if (loadingCoach) return
+    setCoachGuide(null) // 기존 코칭 가이드 텍스트 리셋
+    setIsOpenCoachModal(true) // 즉각 모달을 먼저 띄움!
     setLoadingCoach(true)
     try {
       const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicyId}&target_date=${selected}`)
       setCoachGuide(data.coach_guide)
-      setIsOpenCoachModal(true)
     } catch (e) {
       alert(e instanceof Error ? e.message : 'AI 코칭 일정을 불러오지 못했어요. 구글 연동 상태를 확인해 주세요.')
+      setIsOpenCoachModal(false) // 에러 시 모달 닫기
     } finally {
       setLoadingCoach(false)
     }
@@ -383,7 +385,7 @@ export default function HomeScreen() {
       </section>
 
       {/* [이재혁 - 홈 화면 즉시 AI 코칭 모달 팝업] */}
-      {isOpenCoachModal && coachGuide && (
+      {isOpenCoachModal && (coachGuide || loadingCoach) && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-xs">
           <div className="relative w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-cream p-6 shadow-2xl max-h-[80vh] flex flex-col overflow-hidden border border-line">
             <div className="flex items-center justify-between border-b border-line pb-3">
@@ -400,15 +402,35 @@ export default function HomeScreen() {
             </div>
             
             <div className="flex-1 overflow-y-auto mt-4 text-[14px] leading-relaxed text-ink/80 whitespace-pre-line pr-1 no-scrollbar">
-              {coachGuide}
+              {loadingCoach ? (
+                <div className="space-y-4 animate-pulse py-2">
+                  <div className="h-4 bg-line/80 rounded-lg w-3/4" />
+                  <div className="space-y-2 mt-4">
+                    <div className="h-3 bg-line/60 rounded-md w-full" />
+                    <div className="h-3 bg-line/60 rounded-md w-5/6" />
+                    <div className="h-3 bg-line/60 rounded-md w-4/5" />
+                  </div>
+                  <div className="h-4 bg-line/80 rounded-lg w-1/2 mt-6" />
+                  <div className="space-y-2 mt-3">
+                    <div className="h-3 bg-line/60 rounded-md w-full" />
+                    <div className="h-3 bg-line/60 rounded-md w-2/3" />
+                  </div>
+                  <p className="text-center text-xs text-subtle font-medium mt-6 pt-4 border-t border-line/40">
+                    소복이 AI가 사장님의 구글 일정과 대조해<br />스케줄을 치밀하게 분석하고 있어요... 🤖✍️
+                  </p>
+                </div>
+              ) : (
+                cleanMarkdown(coachGuide)
+              )}
             </div>
             
             <button
               type="button"
+              disabled={loadingCoach}
               onClick={() => setIsOpenCoachModal(false)}
-              className="mt-5 w-full rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98]"
+              className="mt-5 w-full rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98] disabled:bg-line disabled:text-subtle disabled:cursor-not-allowed"
             >
-              확인했습니다
+              {loadingCoach ? '분석 중...' : '확인했습니다'}
             </button>
           </div>
         </div>
@@ -447,4 +469,19 @@ function DeadlineCard({ policy }: { policy: SavedPolicy }) {
       </div>
     </article>
   )
+}
+
+// [이재혁 - AI 출력값 마크다운 특수기호 세탁 헬퍼]
+function cleanMarkdown(text: string | null): string {
+  if (!text) return ''
+  return text
+    .replace(/###\s*(.*)/g, '$1')     // '### 제목' -> '제목' (샵 제거)
+    .replace(/##\s*(.*)/g, '$1')      // '## 제목' -> '제목'
+    .replace(/#\s*(.*)/g, '$1')       // '# 제목' -> '제목'
+    .replace(/\*\*(.*?)\*\*/g, '$1')  // '**강조**' -> '강조' (별표 제거)
+    .replace(/\*(.*?)\*/g, '$1')      // '*이탤릭*' -> '이탤릭'
+    .replace(/^\s*-\s+/gm, '• ')      // '- 리스트' -> '• 리스트' (대시를 동그라미 불릿으로 변환)
+    .replace(/\{[^{}]+\}/g, '')       // [이재혁] '{...}' 형태의 원시 JSON/딕셔너리 코드 블록 제거
+    .replace(/\(\s*예:\s*\)/g, '')    // [이재혁] 남겨진 빈 예시 괄호 '(예: )' 정리
+    .replace(/`([^`]+)`/g, '$1')      // '`코드`' -> '코드'
 }
