@@ -186,6 +186,22 @@ export type ReviewStatus =
  */
 export type RequirementStatus = 'not_requested' | 'no_requirement_data' | 'matched'
 
+/**
+ * 서류 발급 가이드 — 어디서 어떻게 떼는가.
+ *
+ * 소상공인이 지원금을 못 받는 이유는 '무슨 서류가 필요한지 몰라서'만이 아니다.
+ * 이름을 알아도 '어디서 어떻게 떼는지' 몰라서 못 낸다. 목록만 던지는 건 절반이다.
+ */
+export interface DocumentGuide {
+  issuer: string
+  online: string | null
+  online_url: string | null
+  offline: string | null
+  duration: string
+  fee: string
+  tip: string | null
+}
+
 export interface RequirementMatch {
   document_name: string
   best_similarity: number
@@ -193,6 +209,8 @@ export interface RequirementMatch {
   likely_covered: boolean
   /** 이 요건을 커버하는 것으로 보이는 파일명 */
   matched_file: string | null
+  /** 아직 정리되지 않은 서류면 null */
+  guide: DocumentGuide | null
 }
 
 /** 파일 하나의 자체 검토 결과. 요건 대조는 여기 없다 — 그건 세션 전체 기준이다. */
