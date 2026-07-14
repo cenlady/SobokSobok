@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Button, Notice } from '../components/ui'
 import { useAuth } from '../lib/auth'
 
 // 백엔드 콜백이 여기로 리다이렉트한다: /auth/callback?token=… 또는 ?error=…
@@ -46,21 +47,25 @@ export default function AuthCallbackScreen() {
 
   if (error) {
     return (
-      <div className="app-frame flex flex-col items-center justify-center px-8 text-center">
-        <p className="text-base font-semibold text-status-red">{error}</p>
-        <button
-          onClick={() => navigate('/login', { replace: true })}
-          className="mt-6 rounded-2xl bg-primary px-6 py-3 text-sm font-bold text-white"
-        >
-          로그인으로 돌아가기
-        </button>
+      <div className="app-frame flex items-center justify-center px-5">
+        <Notice tone="error" className="w-full" title="로그인을 완료하지 못했습니다">
+          <p>{error}</p>
+          <Button
+            onClick={() => navigate('/login', { replace: true })}
+            variant="secondary"
+            size="sm"
+            className="mt-3"
+          >
+            로그인으로 돌아가기
+          </Button>
+        </Notice>
       </div>
     )
   }
 
   return (
     <div className="app-frame flex flex-col items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-line border-t-brand" />
+      <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-line border-t-primary" />
       <p className="mt-4 text-sm font-medium text-muted">로그인 중이에요…</p>
     </div>
   )

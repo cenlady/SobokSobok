@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Sparkles } from 'lucide-react'
+import { FileSearch } from 'lucide-react'
+import { Button, Notice } from '../components/ui'
 import { apiFetch } from '../lib/api'
 
 export default function LoginScreen() {
@@ -26,30 +27,34 @@ export default function LoginScreen() {
   return (
     <div className="app-frame flex flex-col items-center justify-center px-8">
       <div className="flex flex-col items-center text-center">
-        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-accent-soft">
-          <Sparkles size={36} className="text-accent" />
+        <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-surface">
+          <FileSearch size={28} strokeWidth={1.7} className="text-brand" />
         </div>
 
-        <h1 className="mt-6 text-3xl font-extrabold tracking-tight text-brand">소복소복</h1>
+        <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-brand">소복소복</h1>
         <p className="mt-3 text-[15px] leading-relaxed text-muted">
-          사장님께 딱 맞는 지원 정책을
+          사업장 조건에 맞는 지원 정책을
           <br />
-          AI가 찾아 알려드려요.
+          한곳에서 확인하세요.
         </p>
       </div>
 
       <div className="mt-12 w-full">
-        <button
+        <Button
           onClick={startGoogleLogin}
           disabled={loading}
-          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-line bg-white text-[15px] font-semibold text-ink shadow-card transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle"
+          variant="secondary"
+          full
+          className="gap-3"
         >
           <GoogleMark />
           {loading ? '이동 중…' : 'Google로 시작하기'}
-        </button>
+        </Button>
 
         {error && (
-          <p className="mt-4 text-center text-sm font-medium text-status-red">{error}</p>
+          <Notice tone="error" className="mt-4">
+            {error}
+          </Notice>
         )}
 
         <p className="mt-6 text-center text-xs leading-relaxed text-subtle">

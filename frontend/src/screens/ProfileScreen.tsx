@@ -116,7 +116,7 @@ export default function ProfileScreen() {
               }`}
             >
               <span
-                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
+                className={`absolute top-1 h-4 w-4 rounded-full bg-surface shadow-sm transition-all ${
                   alarm ? 'left-6' : 'left-1'
                 }`}
               />

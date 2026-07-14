@@ -17,7 +17,7 @@ export default function TopBar({ onNotifications }: TopBarProps) {
       <span className="text-[17px] font-extrabold tracking-tight text-brand">소복소복</span>
       <button
         onClick={onNotifications}
-        className="-mr-1 p-1 text-muted active:text-ink"
+        className="-mr-2 flex h-11 w-11 items-center justify-center rounded-full text-muted transition-colors active:bg-line/40 active:text-ink"
         aria-label="알림"
       >
         <Bell size={20} strokeWidth={2} />

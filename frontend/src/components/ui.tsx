@@ -1,3 +1,4 @@
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronLeft, Info } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { DeadlineInfo } from '../lib/deadline'
@@ -6,6 +7,259 @@ import type { DeadlineInfo } from '../lib/deadline'
 //
 // 이전 화면들은 배지·버튼 스타일을 각자 인라인으로 적어서, 색만 다르고 급이 같은
 // 배지가 카드 하나에 넷씩 붙었다. 여기서 '급'을 강제한다.
+
+/* ─────────────────────── 화면 구조 ─────────────────────── */
+
+interface ScreenHeaderProps {
+  title: string
+  onBack?: () => void
+  backLabel?: string
+  action?: ReactNode
+  sticky?: boolean
+}
+
+/** 뒤로가기 화면의 공통 헤더. 좌우 슬롯을 고정해 제목이 항상 화면 중앙에 놓인다. */
+export function ScreenHeader({
+  title,
+  onBack,
+  backLabel = '뒤로',
+  action,
+  sticky = true,
+}: ScreenHeaderProps) {
+  return (
+    <header
+      className={`grid h-14 grid-cols-[44px_1fr_44px] items-center bg-cream/95 px-3 backdrop-blur ${
+        sticky ? 'sticky top-0 z-10' : ''
+      }`}
+    >
+      {onBack ? (
+        <IconButton icon={ChevronLeft} onClick={onBack} label={backLabel} />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      <h1 className="truncate px-2 text-center text-[15px] font-semibold text-ink">{title}</h1>
+      <div className="flex justify-end">{action}</div>
+    </header>
+  )
+}
+
+export function PageIntro({
+  title,
+  description,
+  className = '',
+}: {
+  title: string
+  description?: ReactNode
+  className?: string
+}) {
+  return (
+    <section className={`px-5 pt-2 ${className}`}>
+      <h2 className="text-title text-ink">{title}</h2>
+      {description && <p className="mt-1 text-sm leading-relaxed text-muted">{description}</p>}
+    </section>
+  )
+}
+
+export function Panel({
+  children,
+  divided = false,
+  className = '',
+}: {
+  children: ReactNode
+  divided?: boolean
+  className?: string
+}) {
+  return (
+    <div
+      className={`surface-panel ${divided ? 'divide-y divide-line overflow-hidden' : ''} ${className}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+type NoticeTone = 'neutral' | 'warning' | 'success' | 'error'
+
+const NOTICE_STYLE: Record<NoticeTone, { box: string; icon: string; Icon: LucideIcon }> = {
+  neutral: { box: 'border-line bg-surface', icon: 'text-subtle', Icon: Info },
+  warning: { box: 'border-accent/25 bg-accent-soft/45', icon: 'text-brand', Icon: AlertTriangle },
+  success: {
+    box: 'border-status-green/20 bg-status-green/5',
+    icon: 'text-status-green',
+    Icon: CheckCircle2,
+  },
+  error: {
+    box: 'border-status-red/20 bg-status-red/5',
+    icon: 'text-status-red',
+    Icon: AlertCircle,
+  },
+}
+
+export function Notice({
+  children,
+  title,
+  tone = 'neutral',
+  className = '',
+}: {
+  children: ReactNode
+  title?: string
+  tone?: NoticeTone
+  className?: string
+}) {
+  const { box, icon, Icon } = NOTICE_STYLE[tone]
+  return (
+    <div className={`flex items-start gap-2.5 rounded-xl border p-4 ${box} ${className}`}>
+      <Icon size={17} strokeWidth={1.8} className={`mt-0.5 shrink-0 ${icon}`} />
+      <div className="min-w-0 text-sm leading-relaxed text-muted">
+        {title && <p className="mb-1 font-semibold text-ink">{title}</p>}
+        {children}
+      </div>
+    </div>
+  )
+}
+
+export const fieldControlClass =
+  'h-12 w-full rounded-xl border border-line bg-surface px-4 text-[15px] text-ink outline-none transition-colors placeholder:text-subtle focus:border-primary disabled:bg-line/40 disabled:text-subtle'
+
+export function Field({
+  label,
+  htmlFor,
+  hint,
+  error,
+  children,
+}: {
+  label: string
+  htmlFor?: string
+  hint?: string
+  error?: string | null
+  children: ReactNode
+}) {
+  return (
+    <div>
+      <label htmlFor={htmlFor} className="mb-2 block text-[15px] font-semibold text-ink">
+        {label}
+      </label>
+      {children}
+      {hint && !error && <p className="mt-1.5 text-xs leading-relaxed text-muted">{hint}</p>}
+      {error && <p className="mt-1.5 text-xs font-medium text-status-red">{error}</p>}
+    </div>
+  )
+}
+
+export function ChoiceChip({
+  children,
+  selected,
+  onClick,
+  variant = 'pill',
+  className = '',
+}: {
+  children: ReactNode
+  selected: boolean
+  onClick: () => void
+  variant?: 'pill' | 'compact'
+  className?: string
+}) {
+  if (variant === 'compact') {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        className={`inline-flex min-h-11 items-center justify-center text-xs font-semibold ${className}`}
+      >
+        <span
+          className={`inline-flex h-9 w-full items-center justify-center rounded-xl border px-2 text-center leading-tight transition-colors ${
+            selected
+              ? 'border-primary bg-primary-soft text-primary'
+              : 'border-line bg-surface text-muted active:bg-line/40'
+          }`}
+        >
+          {children}
+        </span>
+      </button>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={`flex min-h-11 items-center justify-center rounded-full border px-3 py-2 text-center text-xs font-semibold transition-colors ${
+        selected
+          ? 'border-primary bg-primary-soft text-primary'
+          : 'border-line bg-surface text-muted active:bg-line/40'
+      } ${className}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+export function Pagination({
+  page,
+  pageCount,
+  inputValue,
+  onInputChange,
+  onSubmit,
+  onPrevious,
+  onNext,
+  previousDisabled,
+  nextDisabled,
+  label = '페이지',
+}: {
+  page: number
+  pageCount: number
+  inputValue: string
+  onInputChange: (value: string) => void
+  onSubmit: () => void
+  onPrevious: () => void
+  onNext: () => void
+  previousDisabled: boolean
+  nextDisabled: boolean
+  label?: string
+}) {
+  const inputId = `pagination-${label.replace(/\s+/g, '-')}`
+  return (
+    <div className="grid grid-cols-[auto_1fr_auto] items-center gap-2 pt-1">
+      <Button variant="secondary" size="sm" disabled={previousDisabled} onClick={onPrevious}>
+        이전
+      </Button>
+      <div className="flex min-w-0 items-center justify-center gap-1.5">
+        <label htmlFor={inputId} className="sr-only">
+          이동할 {label}
+        </label>
+        <input
+          id={inputId}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={pageCount}
+          value={inputValue}
+          onChange={(event) => onInputChange(event.target.value.replace(/[^0-9]/g, ''))}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onSubmit()
+          }}
+          className="h-11 w-12 rounded-lg border border-line bg-surface px-1 text-center text-sm font-bold text-ink outline-none focus:border-primary"
+        />
+        <span className="whitespace-nowrap text-xs font-semibold text-muted">/ {pageCount}</span>
+        <button
+          type="button"
+          onClick={onSubmit}
+          className="h-11 rounded-lg bg-line/40 px-2.5 text-xs font-bold text-ink active:bg-line"
+        >
+          이동
+        </button>
+      </div>
+      <Button variant="primary" size="sm" disabled={nextDisabled} onClick={onNext}>
+        다음
+      </Button>
+      <span className="sr-only" aria-live="polite">
+        현재 {page + 1}{label}
+      </span>
+    </div>
+  )
+}
 
 /* ────────────────────────── 배지 ────────────────────────── */
 
@@ -81,7 +335,7 @@ const VARIANT: Record<ButtonVariant, string> = {
   // 같은 투명도는 색이 살아 있어 활성 버튼처럼 보인다. 회색 면 + 흐린 글자로 확실히 끈다.
   primary: 'bg-primary text-white active:bg-primary-hover disabled:bg-line disabled:text-subtle',
   secondary:
-    'bg-white text-ink border border-line active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent',
+    'bg-surface text-ink border border-line active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent',
   ghost: 'text-muted active:text-ink disabled:text-subtle',
 }
 
