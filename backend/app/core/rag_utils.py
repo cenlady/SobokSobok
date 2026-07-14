@@ -145,10 +145,46 @@ class OllamaEmbeddingModel(EmbeddingModel):
 class SimpleTextSplitter:
     """
     텍스트를 지정한 문자 수 및 오버랩(겹침) 기준으로 분할해 주는 기본 청커.
+
+    chunk_size는 목표가 아니라 최대 길이입니다. 분할 결과 마지막에 오버랩으로
+    이미 포함된 짧은 꼬리가 생기면 중복을 제거하고, 합칠 수 있는 경우 앞 청크에
+    합쳐 검색용 청크가 지나치게 짧아지지 않도록 합니다.
     """
-    def __init__(self, chunk_size: int = 280, chunk_overlap: int = 40):
+    def __init__(
+        self,
+        chunk_size: int = 280,
+        chunk_overlap: int = 40,
+        min_chunk_size: int = settings.CHAT_MIN_CHUNK_SIZE,
+    ):
+        if chunk_size <= 0:
+            raise ValueError("chunk_size는 양수여야 합니다.")
+        if chunk_overlap < 0 or chunk_overlap >= chunk_size:
+            raise ValueError("chunk_overlap은 0 이상 chunk_size 미만이어야 합니다.")
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.min_chunk_size = max(0, min(min_chunk_size, chunk_size))
+
+    def _coalesce_short_tail(self, chunks: List[str]) -> List[str]:
+        """마지막에 생긴 중복/짧은 꼬리 청크를 안전하게 정리합니다."""
+        if len(chunks) < 2 or self.min_chunk_size <= 0:
+            return chunks
+
+        tail = chunks[-1].strip()
+        previous = chunks[-2].strip()
+        if not tail or len(tail) >= self.min_chunk_size:
+            return chunks
+
+        # 오버랩 때문에 마지막 조각이 앞 청크에 이미 들어 있으면 제거합니다.
+        if tail in previous:
+            return [*chunks[:-1]]
+
+        # 새 내용인 짧은 꼬리는 최대 길이를 넘지 않을 때만 합칩니다.
+        merged = f"{previous} {tail}".strip()
+        if len(merged) <= self.chunk_size:
+            return [*chunks[:-2], merged]
+
+        # 정보 손실을 막기 위해 합칠 수 없는 새 내용은 별도 청크로 보존합니다.
+        return chunks
 
     def split_text(self, text: str) -> List[str]:
         if not text:
@@ -164,7 +200,8 @@ class SimpleTextSplitter:
                 chunk_overlap=self.chunk_overlap,
                 separators=["\n\n", "\n", ". ", "。", "? ", "! ", " ", ""],
             )
-            return [chunk.strip() for chunk in splitter.split_text(text) if chunk.strip()]
+            chunks = [chunk.strip() for chunk in splitter.split_text(text) if chunk.strip()]
+            return self._coalesce_short_tail(chunks)
         except ImportError:
             pass
         
@@ -183,7 +220,7 @@ class SimpleTextSplitter:
             if start >= text_len or (self.chunk_size - self.chunk_overlap) <= 0:
                 break
                 
-        return chunks
+        return self._coalesce_short_tail(chunks)
 
 
 def create_embedding_model(
@@ -236,7 +273,7 @@ def upsert_policy_chunks(
 
     # 3) 임베딩 벡터 생성
     embedding_inputs = [
-        f"{embedding_context}\n본문: {chunk_text}" if embedding_context else chunk_text
+        f"{embedding_context}\n청크 본문:\n{chunk_text}" if embedding_context else chunk_text
         for chunk_text in chunks
     ]
     embeddings = embedding_model.embed_documents(embedding_inputs)
@@ -249,7 +286,7 @@ def upsert_policy_chunks(
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
             "length": len(chunk_text),
-            "embedding_input_strategy": "document_context_plus_chunk" if embedding_context else "chunk_only",
+            "embedding_input_strategy": "document_context_section_plus_chunk" if embedding_context else "chunk_only",
         }
         
         db_chunk = PolicyChunk(

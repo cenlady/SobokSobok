@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     CHAT_EMBEDDING_MODEL: str = "bge-m3:latest"   # 통일
     CHAT_CHUNK_SIZE: int = 280
     CHAT_CHUNK_OVERLAP: int = 40
+    CHAT_MIN_CHUNK_SIZE: int = 80
+    CHAT_NEIGHBOR_CHUNK_WINDOW: int = 1
     CHAT_RETRIEVAL_LIMIT: int = 6
     EMBED_CHAT_CHUNKS_AFTER_NORMALIZE: bool = True
     CHAT_COMPLETION_PROVIDER: str = "gemini"  # gemini | openai | disabled

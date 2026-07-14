@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -51,21 +51,54 @@ class ChatChunkSource(BaseModel):
     question_hints: List[str] = []
 
 
+class ChatPolicyCandidate(BaseModel):
+    """메인 채팅에서 사용자가 선택할 수 있는 공고 후보."""
+
+    policy_id: str
+    title: str
+    summary: Optional[str] = None
+    support_type: Optional[str] = None
+    apply_end: Optional[str] = None
+    score: float
+    source_count: int
+
+
 class ChatSearchResponse(BaseModel):
     query: str
     expanded_query: str
     intent_tags: List[str]
+    response_mode: Literal["answer", "policy_selection", "out_of_scope", "no_result"] = "answer"
+    candidates: List[ChatPolicyCandidate] = []
     sources: List[ChatChunkSource]
 
 
 class ChatAnswerRequest(ChatSearchRequest):
-    pass
+    session_id: Optional[UUID] = Field(
+        default=None,
+        description="로그인 사용자의 대화 세션 ID. 없으면 새 세션을 만든다.",
+    )
+    selected_policy_id: Optional[UUID] = Field(
+        default=None,
+        description="프론트가 로컬에 들고 있는 선택 공고 ID. 서버 세션 문맥 복구용으로 사용한다.",
+    )
 
 
 class ChatAnswerResponse(ChatSearchResponse):
     answer: str
+    session_id: UUID
+    context_policy_id: Optional[str] = None
+    active_policy_id: Optional[str] = None
     langsmith_enabled: bool
     langsmith_project: Optional[str] = None
+
+
+class SelectChatPolicyRequest(BaseModel):
+    policy_id: UUID
+
+
+class ChatSessionResponse(BaseModel):
+    session_id: UUID
+    active_policy_id: Optional[str] = None
 
 
 class PolicyChunkStatsResponse(BaseModel):

@@ -6,6 +6,7 @@ from app.api.api import api_router
 from app import models  # noqa: F401
 from app.models.normalized_policy import ensure_normalized_policy_schema
 from app.models.recommend import ensure_recommendation_vector_schema
+from app.models.prep import ensure_prep_schema
 from app.models.review import ensure_review_legacy_cleanup, ensure_review_schema
 from app.models.user import ensure_user_legacy_cleanup, ensure_user_schema
 
@@ -51,6 +52,7 @@ def create_tables() -> None:
         ensure_normalized_policy_schema(conn)
         ensure_recommendation_vector_schema(conn)
         ensure_review_schema(conn)
+        ensure_prep_schema(conn)
 
 
 @app.get("/", tags=["Root"])

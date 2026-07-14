@@ -8,13 +8,20 @@ import { Panel } from '../components/ui'
 import { apiFetch } from '../lib/api'
 import { buildRecommendationRequest } from '../lib/recommend'
 import { useProfile, useSavedPolicies } from '../lib/storage'
-import type { ChatAnswerResponse, ChatChunkSource, RecommendationPreviewResponse } from '../types'
+import type {
+  ChatAnswerResponse,
+  ChatChunkSource,
+  ChatPolicyCandidate,
+  ChatSessionResponse,
+  RecommendationPreviewResponse,
+} from '../types'
 
 interface Message {
   id: number
   role: 'bot' | 'user'
   text?: string
   sources?: ChatChunkSource[]
+  candidates?: ChatPolicyCandidate[]
   policies?: PolicyCardData[]
   pending?: boolean
 }
@@ -47,6 +54,41 @@ function initialMessagesFor(policyId: string | null): Message[] {
     : initialMessages
 }
 
+function sessionStorageKey(policyId: string | null) {
+  return policyId ? `sobok.chat.session.policy.${policyId}` : 'sobok.chat.session.main'
+}
+
+function policyStorageKey(policyId: string | null) {
+  return policyId ? `sobok.chat.policy.policy.${policyId}` : 'sobok.chat.policy.main'
+}
+
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function writeStorage(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, value)
+  } catch {
+    // 브라우저 저장소를 쓸 수 없어도 현재 화면의 채팅은 계속 동작한다.
+  }
+}
+
+function readStoredCandidate(policyId: string | null): ChatPolicyCandidate | null {
+  const raw = readStorage(policyStorageKey(policyId))
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as ChatPolicyCandidate
+  } catch {
+    return null
+  }
+}
+
 export default function ChatScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -54,8 +96,11 @@ export default function ChatScreen() {
   const { profile } = useProfile()
   const { has, toggle } = useSavedPolicies()
   const [messages, setMessages] = useState<Message[]>(() => initialMessagesFor(policyId))
+  const [chatSessionId, setChatSessionId] = useState<string | null>(() => readStorage(sessionStorageKey(policyId)))
+  const [sessionPolicy, setSessionPolicy] = useState<ChatPolicyCandidate | null>(() => readStoredCandidate(policyId))
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [selectingPolicyId, setSelectingPolicyId] = useState<string | null>(null)
   const [pendingSave, setPendingSave] = useState<string | null>(null)
   const [policyContext, setPolicyContext] = useState<PolicyContext | null>(null)
   const nextId = useRef(2)
@@ -73,8 +118,11 @@ export default function ChatScreen() {
 
   useEffect(() => {
     setMessages(initialMessagesFor(policyId))
+    setChatSessionId(readStorage(sessionStorageKey(policyId)))
+    setSessionPolicy(readStoredCandidate(policyId))
     setInput('')
     setSending(false)
+    setSelectingPolicyId(null)
     nextId.current = 2
   }, [policyId])
 
@@ -106,9 +154,34 @@ export default function ChatScreen() {
     setMessages((prev) => prev.map((message) => (message.id === id ? { ...next, id } : message)))
   }
 
+  const persistSessionId = (sessionId: string) => {
+    setChatSessionId(sessionId)
+    writeStorage(sessionStorageKey(policyId), sessionId)
+  }
+
+  const persistSessionPolicy = (candidate: ChatPolicyCandidate | null) => {
+    setSessionPolicy(candidate)
+    writeStorage(policyStorageKey(policyId), candidate ? JSON.stringify(candidate) : null)
+  }
+
+  const clearSelectedPolicy = async () => {
+    if (chatSessionId) {
+      await apiFetch<ChatSessionResponse>(`/api/v1/chat/sessions/${chatSessionId}/policy`, {
+        method: 'DELETE',
+      })
+    }
+    persistSessionPolicy(null)
+  }
+
   const askChatbot = async (query: string) => {
     if (!policyId && isRecommendationRequest(query)) {
-      await askRecommendations()
+      try {
+        await clearSelectedPolicy()
+      } catch {
+        // 추천 기능 자체는 세션 정리 실패와 무관하게 실행한다.
+        persistSessionPolicy(null)
+      }
+      await askRecommendations(query)
       return
     }
 
@@ -116,8 +189,10 @@ export default function ChatScreen() {
     const pendingId = push({
       role: 'bot',
       text: policyId
-        ? '공고문에서 답변에 필요한 내용을 확인하고 있습니다.'
-        : '정책 문서에서 관련 내용을 확인하고 있습니다.',
+        ? '선택한 공고문에서 답변에 필요한 내용을 확인하고 있습니다.'
+        : sessionPolicy
+          ? '선택한 공고문과 이전 대화를 기준으로 내용을 확인하고 있습니다.'
+          : '정책 문서에서 관련 내용을 확인하고 있습니다.',
       pending: true,
     })
 
@@ -125,23 +200,36 @@ export default function ChatScreen() {
       const path = policyId
         ? `/api/v1/chat/ask?policy_id=${encodeURIComponent(policyId)}`
         : '/api/v1/chat/ask'
-      const data = await apiFetch<ChatAnswerResponse>(
-        path,
-        {
-          method: 'POST',
-          json: { query, limit: 6 },
+      const data = await apiFetch<ChatAnswerResponse>(path, {
+        method: 'POST',
+        json: {
+          query,
+          limit: 6,
+          ...(chatSessionId ? { session_id: chatSessionId } : {}),
+          ...(!policyId && sessionPolicy?.policy_id ? { selected_policy_id: sessionPolicy.policy_id } : {}),
         },
-      )
+      })
+      persistSessionId(data.session_id)
+
+      if (!policyId && data.active_policy_id === null) {
+        persistSessionPolicy(null)
+      }
       replace(pendingId, {
         role: 'bot',
-        text: data.answer || '공고문에서 답변을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해주세요.',
-        sources: data.sources,
+        text: data.answer || '공고문에서 답변 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요.',
+        sources: data.response_mode === 'policy_selection' ? [] : data.sources,
+        candidates: data.candidates,
       })
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
+      if (detail.includes('대화 세션')) {
+        setChatSessionId(null)
+        writeStorage(sessionStorageKey(policyId), null)
+        persistSessionPolicy(null)
+      }
       replace(pendingId, {
         role: 'bot',
-        text: detail === '정책을 찾을 수 없습니다.' || detail.includes('로그인')
+        text: detail.includes('로그인')
           ? detail
           : '정책 내용을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
       })
@@ -150,7 +238,7 @@ export default function ChatScreen() {
     }
   }
 
-  const askRecommendations = async () => {
+  const askRecommendations = async (sourceQuery = '맞춤 정책 추천해줘') => {
     setSending(true)
     const pendingId = push({
       role: 'bot',
@@ -159,13 +247,20 @@ export default function ChatScreen() {
     })
 
     try {
-      const data = await apiFetch<RecommendationPreviewResponse>(
-        '/api/v1/recommend/preview?limit=3',
-        {
-          method: 'POST',
-          json: buildRecommendationRequest(profile),
-        },
-      )
+      const params = new URLSearchParams({
+        limit: '3',
+        source_query: sourceQuery,
+      })
+      if (chatSessionId) {
+        params.set('chat_session_id', chatSessionId)
+      }
+      const data = await apiFetch<RecommendationPreviewResponse>(`/api/v1/recommend/preview?${params.toString()}`, {
+        method: 'POST',
+        json: buildRecommendationRequest(profile),
+      })
+      if (data.chat_session_id) {
+        persistSessionId(data.chat_session_id)
+      }
       const policies = data.results.map((item) => ({
         policy_id: item.policy_id,
         title: item.title,
@@ -197,12 +292,36 @@ export default function ChatScreen() {
     }
   }
 
+  const selectCandidate = async (candidate: ChatPolicyCandidate) => {
+    if (!chatSessionId || selectingPolicyId) return
+    setSelectingPolicyId(candidate.policy_id)
+    try {
+      const data = await apiFetch<ChatSessionResponse>(`/api/v1/chat/sessions/${chatSessionId}/policy`, {
+        method: 'POST',
+        json: { policy_id: candidate.policy_id },
+      })
+      persistSessionId(data.session_id)
+      persistSessionPolicy(candidate)
+      push({
+        role: 'bot',
+        text: `‘${candidate.title}’ 공고가 상담 기준으로 선택되었습니다. 이후 질문은 이 공고문을 기준으로 확인합니다.`,
+      })
+    } catch {
+      push({
+        role: 'bot',
+        text: '선택한 공고를 상담 기준으로 저장하지 못했습니다. 다시 선택해 주세요.',
+      })
+    } finally {
+      setSelectingPolicyId(null)
+    }
+  }
+
   const send = (text: string) => {
-    const t = text.trim()
-    if (!t || sending) return
-    push({ role: 'user', text: t })
+    const trimmed = text.trim()
+    if (!trimmed || sending) return
+    push({ role: 'user', text: trimmed })
     setInput('')
-    void askChatbot(t)
+    void askChatbot(trimmed)
   }
 
   const handleToggleSave = async (targetPolicyId: string) => {
@@ -216,6 +335,7 @@ export default function ChatScreen() {
 
   const lastMessage = messages[messages.length - 1]
   const showQuickQuestions = !sending && lastMessage?.role === 'bot' && !lastMessage.pending
+  const isPolicyContextActive = Boolean(policyId || sessionPolicy)
 
   return (
     <div className="flex h-full flex-col">
@@ -254,21 +374,42 @@ export default function ChatScreen() {
           </section>
         )}
 
-        {messages.map((m) =>
-          m.role === 'bot' ? (
+        {!policyId && sessionPolicy && (
+          <div className="flex items-start justify-between gap-3 rounded-2xl bg-brand-dark p-4 text-white shadow-card">
+            <div>
+              <p className="text-xs text-white/70">현재 상담 중인 정책</p>
+              <p className="mt-1 text-sm font-semibold">{sessionPolicy.title}</p>
+              <p className="mt-1 text-xs text-white/70">후속 질문은 이 공고문을 기준으로 답변합니다.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void clearSelectedPolicy()}
+              className="rounded-xl bg-white/15 p-2 text-white"
+              aria-label="전체 정책 검색으로 전환"
+              title="전체 정책 검색으로 전환"
+            >
+              <X size={17} />
+            </button>
+          </div>
+        )}
+
+        {messages.map((message) =>
+          message.role === 'bot' ? (
             <BotBubble
-              key={m.id}
-              m={m}
+              key={message.id}
+              message={message}
               navigate={navigate}
               has={has}
               onToggleSave={handleToggleSave}
               pendingSave={pendingSave}
+              onSelectCandidate={selectCandidate}
+              selectingPolicyId={selectingPolicyId}
               detailMode={Boolean(policyId)}
             />
           ) : (
-            <div key={m.id} className="flex justify-end">
+            <div key={message.id} className="flex justify-end">
               <p className="max-w-[82%] whitespace-pre-line rounded-2xl rounded-tr-md bg-primary px-4 py-3 text-sm font-semibold leading-relaxed text-white shadow-card">
-                {m.text}
+                {message.text}
               </p>
             </div>
           ),
@@ -276,7 +417,7 @@ export default function ChatScreen() {
 
         {showQuickQuestions && (
           <section className="flex flex-wrap gap-2 pt-1" aria-label="추천 질문">
-            {(policyId ? DETAIL_QUICK : QUICK).map((question) => (
+            {(isPolicyContextActive ? DETAIL_QUICK : QUICK).map((question) => (
               <button
                 key={question}
                 type="button"
@@ -295,8 +436,8 @@ export default function ChatScreen() {
           답변은 공고문을 자동으로 정리한 참고 내용입니다.
         </p>
         <form
-          onSubmit={(e) => {
-            e.preventDefault()
+          onSubmit={(event) => {
+            event.preventDefault()
             send(input)
           }}
           className="flex h-14 items-center rounded-full border border-line bg-surface p-1.5 pl-5 shadow-card transition-colors focus-within:border-primary/40"
@@ -323,28 +464,32 @@ export default function ChatScreen() {
 }
 
 function BotBubble({
-  m,
+  message,
   navigate,
   has,
   onToggleSave,
   pendingSave,
+  onSelectCandidate,
+  selectingPolicyId,
   detailMode,
 }: {
-  m: Message
+  message: Message
   navigate: ReturnType<typeof useNavigate>
   has: (id: string) => boolean
   onToggleSave: (policyId: string) => void
   pendingSave: string | null
+  onSelectCandidate: (candidate: ChatPolicyCandidate) => void
+  selectingPolicyId: string | null
   detailMode: boolean
 }) {
   const [sourcesExpanded, setSourcesExpanded] = useState(false)
-  const uniqueSources = m.sources
+  const uniqueSources = message.sources
     ? detailMode
-      ? uniqueSourcesByDocument(m.sources)
-      : uniqueSourcesByPolicy(m.sources)
+      ? uniqueSourcesByDocument(message.sources)
+      : uniqueSourcesByPolicy(message.sources)
     : []
   const visibleSources = uniqueSources.slice(0, 3)
-  const displayText = cleanChatDisplayText(m.text || '')
+  const displayText = cleanChatDisplayText(message.text || '')
 
   return (
     <div className="space-y-2">
@@ -364,11 +509,49 @@ function BotBubble({
             aria-label="소복소복 답변"
             className="max-w-[calc(100%-60px)] rounded-2xl rounded-tl-md border border-line bg-surface px-4 py-3 shadow-card"
           >
-            {m.pending && (
+            {message.pending && (
               <LoaderCircle size={17} className="mr-2 inline-block animate-spin text-muted" />
             )}
             <p className="inline whitespace-pre-line text-sm leading-[1.75] text-ink">{displayText}</p>
           </div>
+        </div>
+      )}
+
+      {message.candidates && message.candidates.length > 0 && (
+        <div className="ml-[60px] overflow-hidden rounded-2xl border border-line bg-surface shadow-card">
+          {message.candidates.map((candidate, index) => (
+            <article
+              key={candidate.policy_id}
+              className={`p-4 ${index > 0 ? 'border-t border-line' : ''}`}
+            >
+              <p className="text-sm font-bold leading-snug text-ink">{candidate.title}</p>
+              {candidate.support_type && (
+                <p className="mt-1 text-xs font-medium text-brand">{candidate.support_type}</p>
+              )}
+              {candidate.summary && (
+                <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-muted">
+                  {candidate.summary}
+                </p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => onSelectCandidate(candidate)}
+                  disabled={selectingPolicyId !== null}
+                  className="flex min-h-10 items-center rounded-xl bg-primary px-3 text-xs font-bold text-white outline-none transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle focus-visible:ring-2 focus-visible:ring-primary/25"
+                >
+                  {selectingPolicyId === candidate.policy_id ? '선택 중' : '이 정책으로 질문하기'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/policy/${candidate.policy_id}`)}
+                  className="flex min-h-10 items-center gap-1 rounded-xl border border-line bg-surface px-3 text-xs font-bold text-brand outline-none transition-colors active:bg-line/40 focus-visible:ring-2 focus-visible:ring-primary/20"
+                >
+                  상세 보기 <ArrowRight size={13} />
+                </button>
+              </div>
+            </article>
+          ))}
         </div>
       )}
 
@@ -419,9 +602,9 @@ function BotBubble({
         </div>
       )}
 
-      {m.policies && m.policies.length > 0 && (
+      {message.policies && message.policies.length > 0 && (
         <Panel divided className="ml-[60px]">
-          {m.policies.map((policy) => (
+          {message.policies.map((policy) => (
             <PolicyCard
               key={policy.policy_id}
               policy={policy}
@@ -449,19 +632,19 @@ function cleanChatDisplayText(value: string) {
 
 function isRecommendationRequest(text: string) {
   const normalized = text.trim().toLowerCase()
-  const recommendationSignals = [
-    '추천',
-    '찾아줘',
-    '찾아 줘',
-    '받을 수',
-    '내가 받을',
-    '맞는',
-  ]
+  const recommendationSignals = ['추천', '맞춤', '나에게', '내게', '내가 받을', '받을 수', '찾아줘', '찾아 줘']
+  const nonPolicySignals = ['맛집', '음식', '메뉴', '노래', '영화', '드라마', '여행', '옷', '코디', '머리', '단발', '미용실']
   const policyDomainSignals = [
     '정책',
     '공고',
+    '복지',
     '지원',
     '지원금',
+    '현금',
+    '현금성',
+    '지급',
+    '장려금',
+    '급여',
     '보조금',
     '혜택',
     '대출',
@@ -473,10 +656,12 @@ function isRecommendationRequest(text: string) {
     '업종',
     '매출',
   ]
+  if (nonPolicySignals.some((keyword) => normalized.includes(keyword))) return false
 
-  const hasRecommendationSignal = recommendationSignals.some((keyword) => normalized.includes(keyword))
-  const hasPolicyDomainSignal = policyDomainSignals.some((keyword) => normalized.includes(keyword))
-  return hasRecommendationSignal && hasPolicyDomainSignal
+  // 로그인 사용자의 메인 채팅에서 "추천해줘"만 입력해도 프로필 기반 추천으로 연결한다.
+  // 다만 정책과 무관한 추천 키워드는 위에서 먼저 제외한다.
+  return recommendationSignals.some((keyword) => normalized.includes(keyword))
+    && (policyDomainSignals.some((keyword) => normalized.includes(keyword)) || normalized.length <= 8)
 }
 
 function uniqueSourcesByPolicy(sources: ChatChunkSource[]) {
