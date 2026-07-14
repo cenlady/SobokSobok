@@ -10,13 +10,12 @@ import type { RecommendationPreviewResponse, SavedPolicy } from '../types'
 type Tab = 'recommend' | 'saved' | 'all'
 type AllSort = 'deadline' | 'latest'
 type AllStatus = 'available' | 'all'
-type RecommendationFilter = 'all' | 'eligible' | 'needs_review' | 'near_match'
+type RecommendationStatus = 'eligible' | 'needs_review' | 'near_match'
 
 const ALL_PAGE_SIZE = 12
 const RECOMMENDATION_PAGE_SIZE = ALL_PAGE_SIZE
 const ALL_SIDO_OPTIONS = ['전체', ...Object.keys(REGION_MAP)]
-const RECOMMENDATION_FILTERS: { key: RecommendationFilter; label: string }[] = [
-  { key: 'all', label: '추천 전체' },
+const RECOMMENDATION_FILTERS: { key: RecommendationStatus; label: string }[] = [
   { key: 'eligible', label: '바로 확인 가능' },
   { key: 'needs_review', label: '조건 확인 필요' },
   { key: 'near_match', label: '유사 정책' },
@@ -64,7 +63,9 @@ export default function PolicySearchScreen() {
     hasNext: boolean
     statusCounts: RecommendationPreviewResponse['status_counts']
   } | null>(null)
-  const [recFilter, setRecFilter] = useState<RecommendationFilter>('all')
+  // 아무 상태도 선택하지 않으면 전체 추천을 보여준다. 여러 상태를 동시에
+  // 선택하면 선택한 상태들의 합집합을 한 목록으로 보여준다.
+  const [recFilters, setRecFilters] = useState<RecommendationStatus[]>([])
   const [recPage, setRecPage] = useState(0)
   const [recPageInput, setRecPageInput] = useState('1')
   const [profileWarnings, setProfileWarnings] = useState<string[]>([])
@@ -95,8 +96,12 @@ export default function PolicySearchScreen() {
     const params = new URLSearchParams({
       skip: String(recPage * RECOMMENDATION_PAGE_SIZE),
       limit: String(RECOMMENDATION_PAGE_SIZE),
-      status: recFilter,
     })
+    if (recFilters.length === 0) {
+      params.set('status', 'all')
+    } else {
+      recFilters.forEach((filter) => params.append('status', filter))
+    }
     try {
       const data = await apiFetch<RecommendationPreviewResponse>(
         `/api/v1/recommend/preview?${params.toString()}`,
@@ -132,7 +137,7 @@ export default function PolicySearchScreen() {
     } finally {
       setRecLoading(false)
     }
-  }, [profile, recFilter, recPage])
+  }, [profile, recFilters, recPage])
 
   const loadAll = useCallback(async () => {
     setAllLoading(true)
@@ -279,19 +284,22 @@ export default function PolicySearchScreen() {
               </button>
             </div>
 
-            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
               {RECOMMENDATION_FILTERS.map((filter) => {
-                const count =
-                  filter.key === 'all'
-                    ? recMeta?.total
-                    : recMeta?.statusCounts[filter.key]
+                const count = recMeta?.statusCounts[filter.key]
+                const active = recFilters.includes(filter.key)
                 return (
                   <CategoryChip
                     key={filter.key}
-                    active={recFilter === filter.key}
+                    active={active}
                     label={`${filter.label}${count === undefined ? '' : ` ${count}`}`}
                     onClick={() => {
-                      setRecFilter(filter.key)
+                      const status = filter.key
+                      setRecFilters((current) =>
+                        current.includes(status)
+                          ? current.filter((selected) => selected !== status)
+                          : [...current, status],
+                      )
                       setRecPage(0)
                     }}
                   />
@@ -325,7 +333,13 @@ export default function PolicySearchScreen() {
                 </div>
               )}
               {!recLoading && !recError && recommendations.length === 0 && (
-                <InfoBox message="조건에 맞는 정책을 찾지 못했어요. 마이페이지에서 정보를 수정해보세요." />
+                <InfoBox
+                  message={
+                    recFilters.length > 0
+                      ? '선택한 분류에 해당하는 추천 정책이 없어요. 다른 분류를 선택해보세요.'
+                      : '조건에 맞는 정책을 찾지 못했어요. 마이페이지에서 정보를 수정해보세요.'
+                  }
+                />
               )}
               {!recLoading && !recError && recMeta && recMeta.filtered > 0 && (
                 <div className="flex items-center justify-between gap-2 pt-1">

@@ -25,7 +25,10 @@ def preview_recommendations(
     profile: RecommendationProfileRequest,
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=12, ge=1, le=50),
-    status: Literal["all", "eligible", "needs_review", "near_match"] = Query(default="all"),
+    status: list[Literal["all", "eligible", "needs_review", "near_match"]] = Query(
+        default=["all"],
+        description="추천 상태를 하나 이상 선택합니다. 반복 query parameter로 전달합니다.",
+    ),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -41,10 +44,11 @@ def preview_recommendations(
         "needs_review": sum(item.match_status == "needs_review" for item in all_results),
         "near_match": sum(item.match_status == "near_match" for item in all_results),
     }
+    selected_statuses = set(status)
     filtered_results = (
         all_results
-        if status == "all"
-        else [item for item in all_results if item.match_status == status]
+        if not selected_statuses or "all" in selected_statuses
+        else [item for item in all_results if item.match_status in selected_statuses]
     )
     results = filtered_results[skip : skip + limit]
     return RecommendationPreviewResponse(
