@@ -18,6 +18,14 @@ def _source(chunk_text: str):
     }
 
 
+def _typed_source(chunk_text: str, document_type: str, intent_tags: list[str]):
+    source = _source(chunk_text)
+    source["policy_title"] = "소상공인 특례보증"
+    source["document_type"] = document_type
+    source["metadata"] = {"intent_tags": intent_tags, "support_type": "현금(융자)"}
+    return source
+
+
 def test_retrieval_only_answer_focuses_on_eligibility_section():
     answer = build_retrieval_only_answer(
         "지원 대상이 누구야?",
@@ -50,6 +58,39 @@ def test_retrieval_only_answer_focuses_on_required_documents_section():
     assert "document_type" not in answer
 
 
+def test_retrieval_only_answer_prefers_required_document_sources_over_candidate_fallback():
+    answer = build_retrieval_only_answer(
+        "소상공인 특례보증 지원 받으려면 준비해야 되는 서류 알려줘",
+        [
+            _typed_source(
+                "신청서 사업자등록증 사본 금융거래사실확인서 최근3년간 재무제표 부동산등기부등본",
+                "requirements",
+                ["requirements", "documents"],
+            ),
+            _typed_source(
+                "광주 소재 소기업, 소상공인, 자영업자",
+                "eligibility",
+                ["eligibility", "target"],
+            ),
+            _typed_source(
+                "구비서류 : 사업자등록증 사업장 및 거주주택 임차계약서",
+                "requirements",
+                ["requirements", "documents"],
+            ),
+        ],
+    )
+
+    assert "필요한 서류는 다음과 같아요" in answer
+    assert "관련성이 높은 소상공인 정책 후보" not in answer
+    assert "신청서" in answer
+    assert "사업자등록증 사본" in answer
+    assert "금융거래사실확인서" in answer
+    assert "최근 3년간 재무제표" in answer
+    assert "부동산등기부등본" in answer
+    assert "사업장 및 거주주택 임차계약서" in answer
+    assert "광주 소재" not in answer
+
+
 def test_out_of_scope_weather_question_does_not_search_policy_chunks():
     response = answer_policy_question(
         db=None,
@@ -80,4 +121,6 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
 
     assert is_out_of_policy_scope("이거 요약해줘", policy_id=policy_id) is False
     assert is_out_of_policy_scope("미용실 지원금 있어?", policy_id=None) is False
+    assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
+    assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
