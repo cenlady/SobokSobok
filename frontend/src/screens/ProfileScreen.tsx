@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   Bell,
   BriefcaseBusiness,
@@ -6,7 +7,6 @@ import {
   Lock,
   LogOut,
   MapPin,
-  Pencil,
   SlidersHorizontal,
   User,
   Users,
@@ -17,9 +17,8 @@ import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
 import { Button } from '../components/ui'
 import { useAuth } from '../lib/auth'
-import { useProfile } from '../lib/storage'
-import { useState } from 'react'
 import { NEED_OPTIONS } from '../lib/recommend'
+import { useProfile } from '../lib/storage'
 
 export default function ProfileScreen() {
   const navigate = useNavigate()
@@ -33,116 +32,113 @@ export default function ProfileScreen() {
   }
 
   const initial = profile.ownerName?.trim()?.[0] || null
+  const interestLabel = profile.needTags
+    .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
+    .join(', ')
 
   return (
     <div className="pb-8">
       <TopBar />
 
-      {/* 프로필 헤더.
-          이모지 아바타를 이니셜로 바꿨다. 이모지는 "손댈 시간이 없어 대충 채웠다"는 인상을
-          주고, 무엇보다 모든 사장님이 요리사인 것도 아니다. 이니셜은 에셋이 필요 없고,
-          이름이 곧 그 사람이라 개인적이다. */}
-      <section className="flex flex-col items-center px-5 pt-2">
-        <div className="relative">
-          {/* 이름이 없으면 물음표(?) 대신 중립적인 사람 아이콘을 쓴다.
-              물음표는 "데이터를 못 불러왔다"는 오류처럼 읽힌다. */}
-          <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary-soft text-2xl font-bold text-primary">
-            {initial ?? <User size={30} strokeWidth={1.8} className="text-primary/60" />}
+      {/* 헤더는 좌측 정렬. 가운데 정렬된 큰 아바타는 SNS 프로필처럼 보이는데,
+          여기는 '내 사업장 정보'를 확인하는 화면이지 자기소개가 아니다. */}
+      <section className="px-5 pt-4">
+        <div className="flex items-center gap-4">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl font-bold text-brand">
+            {/* 이름이 없으면 물음표(?) 대신 사람 아이콘.
+                물음표는 "데이터를 못 불러왔다"는 오류처럼 읽힌다. */}
+            {initial ?? <User size={26} strokeWidth={1.8} className="text-subtle" />}
           </div>
-          {/* 터치 영역 44px. 보이는 원은 28px이지만 손가락이 닿는 영역은 넓힌다. */}
-          <button
-            onClick={() => navigate('/onboarding')}
-            aria-label="프로필 수정"
-            className="tap-44 absolute bottom-0 right-0 flex h-7 w-7 items-center justify-center rounded-full bg-ink text-white ring-4 ring-cream active:scale-95"
-          >
-            <Pencil size={12} />
-          </button>
-        </div>
-
-        <h2 className="mt-3 text-xl font-bold text-ink">
-          {profile.ownerName ? `${profile.ownerName} 사장님` : '사장님'}
-        </h2>
-        {profile.storeName && <p className="mt-0.5 text-sm text-muted">{profile.storeName}</p>}
-        {user?.email && <p className="mt-1 text-xs text-subtle">{user.email}</p>}
-      </section>
-
-      {/* 사업장 정보 */}
-      <section className="mt-6 px-5">
-        <div className="flex items-start justify-between">
-          <h3 className="text-section text-ink">맞춤 정책을 위한 사업장 정보</h3>
-          <button
-            onClick={() => navigate('/onboarding')}
-            className="flex items-center whitespace-nowrap text-sm font-medium text-brand"
-          >
-            수정하기 <ChevronRight size={16} />
-          </button>
-        </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-3">
-          <InfoTile icon={Utensils} label="업종" value={profile.industry} />
-          <InfoTile icon={MapPin} label="지역" value={profile.region} />
-          <InfoTile icon={BriefcaseBusiness} label="사업자 상태" value={profile.businessStatus} />
-          <InfoTile icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
-        </div>
-        {/* '성장중' 배지를 뺐다. 아무 데이터도 근거하지 않은 장식이었다. */}
-        <div className="mt-3 grid grid-cols-2 gap-3">
-          <InfoTile icon={Wallet} label="매출 규모" value={profile.revenue} />
-          <InfoTile icon={Users} label="직원 수" value={profile.employees} />
-        </div>
-
-        {profile.needTags.length > 0 && (
-          <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card">
-            <p className="text-xs text-subtle">관심 지원</p>
-            <p className="mt-1 text-sm font-semibold text-ink">
-              {profile.needTags
-                .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
-                .join(' · ')}
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-[0.08em] text-brand">내 사업장</p>
+            <h2 className="mt-1 text-xl font-bold tracking-[-0.02em] text-ink">
+              {profile.ownerName ? `${profile.ownerName} 사장님` : '사장님'}
+            </h2>
+            <p className="mt-1 truncate text-sm text-muted">
+              {profile.storeName || '사업장 이름 미입력'}
             </p>
           </div>
+        </div>
+        {user?.email && (
+          <p className="mt-4 border-t border-line pt-3 text-xs text-subtle">{user.email}</p>
         )}
       </section>
 
-      {/* 설정 및 관리 */}
+      {/* 사업장 정보 — 2열 타일 대신 라벨/값 행 목록.
+          타일은 값이 짧을 때만 예쁘고, '서울특별시 마포구'처럼 길어지면 줄바꿈으로
+          높이가 들쭉날쭉해진다. 행 목록은 훑기도 쉽고 값 길이에도 강하다. */}
+      <section className="mt-8 px-5">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h3 className="text-section text-ink">사업장 정보</h3>
+            <p className="mt-1 text-xs text-muted">정책 조건 확인에 사용하는 정보입니다.</p>
+          </div>
+          <button
+            onClick={() => navigate('/onboarding')}
+            className="flex h-11 shrink-0 items-center whitespace-nowrap text-xs font-semibold text-primary"
+          >
+            수정하기 <ChevronRight size={15} />
+          </button>
+        </div>
+
+        <dl className="surface-panel mt-2 divide-y divide-line overflow-hidden">
+          <InfoRow icon={Utensils} label="업종" value={profile.industry} />
+          <InfoRow icon={MapPin} label="지역" value={profile.region} />
+          <InfoRow icon={BriefcaseBusiness} label="사업자 상태" value={profile.businessStatus} />
+          <InfoRow icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
+          <InfoRow icon={Wallet} label="매출 규모" value={profile.revenue} />
+          <InfoRow icon={Users} label="직원 수" value={profile.employees} />
+          {interestLabel && <InfoRow label="관심 지원" value={interestLabel} />}
+        </dl>
+
+        <p className="mt-3 border-l-2 border-status-green pl-3 text-xs leading-relaxed text-muted">
+          사업장 정보가 최신일수록 조건이 맞는 정책을 더 정확하게 확인할 수 있습니다.
+        </p>
+      </section>
+
       <section className="mt-8 px-5">
         <h3 className="text-section text-ink">설정 및 관리</h3>
-        {/* 아이콘 배경을 뉴트럴로 통일했다. 항목마다 파랑·오렌지·회색을 돌려쓰면
-            색이 아무 의미도 갖지 못하고 화면만 시끄러워진다. */}
-        <div className="mt-4 divide-y divide-line overflow-hidden rounded-2xl bg-surface shadow-card">
-          <div className="flex items-center gap-3 p-4">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-line/60">
-              <Bell size={17} strokeWidth={1.8} className="text-muted" />
-            </span>
+
+        <div className="surface-panel mt-2 divide-y divide-line overflow-hidden">
+          <div className="flex items-center gap-3 px-4 py-3.5">
+            <Bell size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
             <span className="flex-1">
-              <span className="block text-sm font-semibold text-ink">알림 설정</span>
-              <span className="block text-xs text-subtle">지원금 소식 및 마감 알림</span>
+              <span className="block text-sm font-medium text-ink">마감 알림</span>
+              <span className="mt-0.5 block text-xs text-muted">저장한 정책의 신청 마감 안내</span>
             </span>
             <button
-              onClick={() => setAlarm((v) => !v)}
-              aria-label="알림 설정 전환"
+              onClick={() => setAlarm((value) => !value)}
+              role="switch"
+              aria-checked={alarm}
+              aria-label="마감 알림"
               className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
                 alarm ? 'bg-primary' : 'bg-line'
               }`}
             >
               <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all ${
-                  alarm ? 'left-[22px]' : 'left-0.5'
+                className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition-all ${
+                  alarm ? 'left-6' : 'left-1'
                 }`}
               />
             </button>
           </div>
 
-          <SettingRow icon={CalendarSync} title="캘린더 연동 관리" desc="구글 캘린더 자동 동기화" />
-          <SettingRow icon={Lock} title="로그인 및 보안" desc="연결된 계정 관리" />
+          <SettingRow
+            icon={CalendarSync}
+            title="Google Calendar"
+            description="정책 마감일 일정 등록"
+          />
+          <SettingRow icon={Lock} title="로그인 및 보안" description="계정과 로그인 정보 관리" />
         </div>
 
-        {/* 로그아웃이 탈퇴보다 훨씬 흔한 동작인데, 탈퇴만 빨간 글씨라 오히려 그쪽이
-            먼저 눈에 들어왔다. 로그아웃을 버튼으로 세우고 탈퇴는 아래로 물린다.
+        {/* 로그아웃이 탈퇴보다 훨씬 흔한 동작인데, 탈퇴만 빨간 글씨면 그쪽이 먼저
+            눈에 들어온다. 로그아웃을 버튼으로 세우고 탈퇴는 아래로 물린다.
             빨강도 뺐다 — 이 앱에서 빨강은 '마감 임박'에만 쓴다. */}
-        <div className="mt-8 space-y-3">
+        <div className="mt-8 space-y-3 border-t border-line pt-6">
           <Button variant="secondary" full onClick={handleLogout}>
             <LogOut size={16} /> 로그아웃
           </Button>
-          <button className="w-full py-2 text-center text-xs font-medium text-subtle underline underline-offset-2">
+          <button className="h-11 w-full text-center text-xs font-medium text-subtle underline underline-offset-2">
             회원 탈퇴
           </button>
         </div>
@@ -151,20 +147,31 @@ export default function ProfileScreen() {
   )
 }
 
-function InfoTile({
+function InfoRow({
   icon: Icon,
   label,
   value,
 }: {
-  icon: typeof MapPin
+  icon?: typeof MapPin
   label: string
   value: string
 }) {
   return (
-    <div className="rounded-2xl bg-surface p-4 shadow-card">
-      <Icon size={18} strokeWidth={1.8} className="text-subtle" />
-      <p className="mt-2.5 text-xs text-subtle">{label}</p>
-      <p className="mt-0.5 text-[15px] font-semibold text-ink">{value || '—'}</p>
+    <div className="flex items-start gap-3 px-4 py-3.5">
+      {Icon ? (
+        <Icon size={17} strokeWidth={1.8} className="mt-0.5 shrink-0 text-brand" />
+      ) : (
+        <span className="w-[17px] shrink-0" />
+      )}
+      <dt className="w-20 shrink-0 text-sm text-muted">{label}</dt>
+      {/* 값이 없으면 '—'가 아니라 '입력 필요'. 사용자가 할 일이 있다는 걸 알려준다. */}
+      <dd
+        className={`min-w-0 flex-1 text-right text-sm leading-relaxed ${
+          value ? 'font-medium text-ink' : 'text-subtle'
+        }`}
+      >
+        {value || '입력 필요'}
+      </dd>
     </div>
   )
 }
@@ -172,22 +179,20 @@ function InfoTile({
 function SettingRow({
   icon: Icon,
   title,
-  desc,
+  description,
 }: {
   icon: typeof MapPin
   title: string
-  desc: string
+  description: string
 }) {
   return (
-    <button className="flex w-full items-center gap-3 p-4 text-left active:bg-line/30">
-      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-line/60">
-        <Icon size={17} strokeWidth={1.8} className="text-muted" />
-      </span>
+    <button className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-cream/60 active:bg-cream">
+      <Icon size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
       <span className="flex-1">
-        <span className="block text-sm font-semibold text-ink">{title}</span>
-        <span className="block text-xs text-subtle">{desc}</span>
+        <span className="block text-sm font-medium text-ink">{title}</span>
+        <span className="mt-0.5 block text-xs text-muted">{description}</span>
       </span>
-      <ChevronRight size={18} className="text-subtle" />
+      <ChevronRight size={17} className="shrink-0 text-subtle" />
     </button>
   )
 }
