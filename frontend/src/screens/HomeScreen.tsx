@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
@@ -8,6 +8,7 @@ import { toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { useSavedPolicies } from '../lib/storage'
+import { apiFetch } from '../lib/api'
 import type { SavedPolicy } from '../types'
 
 // 홈은 달력이다. 저장한 정책의 마감일을 한눈에 보여주는 게 앱의 첫 화면.
@@ -32,6 +33,31 @@ export default function HomeScreen() {
     month: todayDate.getMonth(),
   })
   const [selected, setSelected] = useState(TODAY)
+
+  // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
+  const [googleEvents, setGoogleEvents] = useState<{ date: string; summary: string }[]>([])
+
+  useEffect(() => {
+    let ignore = false
+    apiFetch<{ date: string; summary: string }[]>('/api/v1/calendar/events')
+      .then((data) => {
+        if (!ignore) setGoogleEvents(data)
+      })
+      .catch((err) => {
+        console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
+      })
+    return () => {
+      ignore = true
+    }
+  }, [])
+
+  const googleEventsMap = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const ev of googleEvents) {
+      ;(map[ev.date] ??= []).push(ev.summary)
+    }
+    return map
+  }, [googleEvents])
 
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
   const { dated, always, unknown } = useMemo(() => {
@@ -97,23 +123,7 @@ export default function HomeScreen() {
     )
   }
 
-  if (isEmpty) {
-    return (
-      <div>
-        <TopBar />
-        <section className="px-5 pt-2">
-          <h2 className="text-title text-ink">내 정책 달력</h2>
-        </section>
-        <EmptyState
-          icon={CalendarDays}
-          title="아직 저장한 정책이 없어요"
-          description="관심 있는 정책을 저장하면 마감일이 이 달력에 표시돼요."
-          actionLabel="맞춤 정책 찾아보기"
-          onAction={() => navigate('/policies')}
-        />
-      </div>
-    )
-  }
+
 
   return (
     <div className="pb-6">
@@ -159,6 +169,7 @@ export default function HomeScreen() {
               const isSel = c.dateKey === selected
               const isToday = c.dateKey === TODAY
               const dayDots = c.dateKey ? dots[c.dateKey] : undefined
+              const hasGoogle = c.dateKey ? Boolean(googleEventsMap[c.dateKey]) : false
               return (
                 <button
                   key={`${c.dateKey ?? 'empty'}-${idx}`}
@@ -180,7 +191,7 @@ export default function HomeScreen() {
                     {c.day}
                   </span>
                   <span className="mt-0.5 flex h-1.5 gap-0.5">
-                    {dayDots?.slice(0, 3).map((kind, i) => (
+                    {dayDots?.slice(0, 2).map((kind, i) => (
                       <span
                         key={i}
                         className={`h-1.5 w-1.5 rounded-full ${
@@ -188,6 +199,9 @@ export default function HomeScreen() {
                         }`}
                       />
                     ))}
+                    {hasGoogle && (
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                    )}
                   </span>
                 </button>
               )
@@ -203,13 +217,38 @@ export default function HomeScreen() {
         </h3>
 
         <div className="mt-3 space-y-2.5">
-          {dayList.length === 0 ? (
-            <p className="rounded-2xl bg-white px-4 py-5 text-center text-sm text-subtle shadow-card">
-              이 날 마감되는 정책이 없어요
-            </p>
-          ) : (
-            dayList.map((policy) => <DeadlineCard key={policy.policy_id} policy={policy} />)
-          )}
+          {/* [이재혁 - 실시간 구글 캘린더 개인 일정 연동 리스트] */}
+          {(() => {
+            const selGoogleEvents = googleEventsMap[selected] || []
+            const hasNoEvents = dayList.length === 0 && selGoogleEvents.length === 0
+
+            return (
+              <>
+                {selGoogleEvents.length > 0 && (
+                  <div className="mb-3 space-y-2">
+                    {selGoogleEvents.map((summary, i) => (
+                      <div key={i} className="flex items-center gap-3 rounded-2xl bg-blue-50/70 p-4 border border-blue-100/60 shadow-card">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600">
+                          <CalendarDays size={16} />
+                        </div>
+                        <div className="flex-1">
+                          <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">구글 캘린더 일정</span>
+                          <p className="text-sm font-semibold text-ink leading-snug mt-0.5">{summary}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {hasNoEvents ? (
+                  <p className="rounded-2xl bg-white px-4 py-5 text-center text-sm text-subtle shadow-card">
+                    이 날 등록된 일정이 없어요
+                  </p>
+                ) : (
+                  dayList.map((policy) => <DeadlineCard key={policy.policy_id} policy={policy} />)
+                )}
+              </>
+            )
+          })()}
         </div>
       </section>
 

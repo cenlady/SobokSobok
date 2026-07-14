@@ -198,6 +198,35 @@ async def register_policy_calendar_event(
                 detail=f"Failed to connect to Google Calendar API: {e}"
             )
 
+@router.get("/events", summary="구글 캘린더 개인 일정 목록 조회")
+async def get_my_google_events(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    [이재혁 - 캘린더 영역]
+    - 현재 로그인한 유저의 구글 캘린더를 실시간 조회하여 향후 2주간의 일정 목록을 반환합니다.
+    """
+    try:
+        access_token = await get_valid_google_token(current_user, db)
+        raw_schedules = await get_google_calendar_events(access_token)
+        
+        parsed_events = []
+        for item in raw_schedules:
+            if ":" in item:
+                parts = item.split(":", 1)
+                event_date = parts[0].strip()
+                event_summary = parts[1].strip()
+                parsed_events.append({
+                    "date": event_date,
+                    "summary": event_summary
+                })
+        return parsed_events
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        return []
+
 @router.get("/coach", summary="RAG 일정 관리 AI 가이드 코치 스케줄러")
 async def get_calendar_coach_timeline(
     policy_id: UUID4,
