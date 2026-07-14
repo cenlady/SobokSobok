@@ -12,9 +12,22 @@ body,
 
 body {
   margin: 0;
-  background: #e9e4dc; /* 앱 프레임 바깥 배경 */
+  background: #ded8cf;
   font-family: 'Pretendard', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  color: theme('colors.brand.dark');
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* 모바일 프레임: 데스크톱에서는 가운데 정렬된 폰 크기, 모바일에서는 풀스크린 */
@@ -25,7 +38,35 @@ body {
   min-height: 100dvh;
   background: theme('colors.cream');
   position: relative;
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.08);
+  border-left: 1px solid rgba(48, 41, 34, 0.06);
+  border-right: 1px solid rgba(48, 41, 34, 0.06);
+  box-shadow: 0 8px 30px rgba(48, 41, 34, 0.08);
+}
+
+@layer components {
+  .page-title {
+    @apply text-[22px] font-bold tracking-[-0.02em] text-brand-dark;
+  }
+
+  .section-title {
+    @apply text-base font-bold tracking-[-0.01em] text-brand-dark;
+  }
+
+  .surface-panel {
+    @apply rounded-xl border border-line bg-surface;
+  }
+
+  .field-control {
+    @apply w-full rounded-lg border border-line bg-surface px-3.5 py-3 text-[15px] text-brand-dark outline-none transition-colors focus:border-brand;
+  }
+
+  .primary-button {
+    @apply rounded-lg bg-brand-dark px-4 py-3 text-sm font-semibold text-white transition-opacity active:opacity-85 disabled:cursor-not-allowed disabled:opacity-35;
+  }
+
+  .secondary-button {
+    @apply rounded-lg border border-line bg-surface px-4 py-3 text-sm font-semibold text-brand-dark transition-colors active:bg-black/[0.03];
+  }
 }
 
 /* 스크롤바 숨김 (가로 칩 등) */

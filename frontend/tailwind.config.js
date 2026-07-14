@@ -4,25 +4,28 @@ export default {
   theme: {
     extend: {
       colors: {
-        // 소복소복 브랜드 팔레트
+        // 따뜻하지만 업무 도구답게 채도를 낮춘 소복소복 팔레트
         brand: {
-          DEFAULT: '#8B5E1C', // 로고/기본 브라운
-          dark: '#6F4A12', // 버튼 진한 브라운
-          light: '#B5915A',
+          DEFAULT: '#765337',
+          dark: '#302922',
+          light: '#BDA58F',
         },
         accent: {
-          DEFAULT: '#F5A623', // 오렌지 (FAB, 전송, 활성 탭)
-          soft: '#FCE9CC', // 연한 오렌지 배경
+          DEFAULT: '#C76C32',
+          soft: '#F3E6DA',
         },
-        cream: '#FBF7F1', // 앱 배경
+        cream: '#F6F2EB',
+        surface: '#FFFDF9',
+        line: '#E3DBD1',
+        muted: '#746C63',
         status: {
-          red: '#E5484D', // 마감
-          green: '#2FA36B', // 접수/성장
-          blue: '#4C7DF0', // 안내/공고
+          red: '#C54F49',
+          green: '#4E7F62',
+          blue: '#55748F',
         },
       },
       boxShadow: {
-        card: '0 2px 12px rgba(80, 60, 30, 0.06)',
+        card: '0 1px 2px rgba(48, 41, 34, 0.05)',
       },
       fontFamily: {
         sans: ['Pretendard', 'system-ui', 'sans-serif'],

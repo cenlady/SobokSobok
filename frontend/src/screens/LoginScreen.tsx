@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sparkles } from 'lucide-react'
+import { CalendarDays, FileCheck2, Search } from 'lucide-react'
 import { apiFetch } from '../lib/api'
 
 export default function LoginScreen() {
@@ -10,12 +10,10 @@ export default function LoginScreen() {
     setLoading(true)
     setError(null)
     try {
-      // 로그인 URL 생성은 인증 전에 부르는 유일한 API라 anonymous로 호출한다.
       const { login_url } = await apiFetch<{ login_url: string }>(
         '/api/v1/auth/google/login-url',
         { anonymous: true },
       )
-      // 구글 동의 → 백엔드 콜백 → /auth/callback?token=… 으로 돌아온다.
       window.location.href = login_url
     } catch {
       setError('로그인을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.')
@@ -24,40 +22,62 @@ export default function LoginScreen() {
   }
 
   return (
-    <div className="app-frame flex flex-col items-center justify-center px-8">
-      <div className="flex flex-col items-center text-center">
-        <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-accent-soft">
-          <Sparkles size={36} className="text-accent" />
-        </div>
+    <div className="app-frame flex min-h-[100dvh] flex-col justify-between px-6 pb-8 pt-7">
+      <div>
+        <header className="flex items-center gap-2.5">
+          <span className="grid h-7 w-7 grid-cols-2 gap-1" aria-hidden="true">
+            <span className="rounded-[3px] bg-brand" />
+            <span className="rounded-[3px] bg-accent/70" />
+            <span className="rounded-[3px] bg-brand-light" />
+            <span className="rounded-[3px] bg-brand-dark" />
+          </span>
+          <span className="text-xl font-bold tracking-[-0.03em] text-brand-dark">소복소복</span>
+        </header>
 
-        <h1 className="mt-6 text-3xl font-extrabold tracking-tight text-brand">소복소복</h1>
-        <p className="mt-3 text-[15px] leading-relaxed text-brand-dark/60">
-          사장님께 딱 맞는 지원 정책을
-          <br />
-          AI가 찾아 알려드려요.
-        </p>
+        <main className="pt-20">
+          <p className="text-xs font-semibold tracking-[0.08em] text-brand">소상공인 정책 관리</p>
+          <h1 className="mt-3 text-[30px] font-bold leading-[1.28] tracking-[-0.04em] text-brand-dark">
+            놓치기 쉬운 지원 정책을
+            <br />
+            한곳에서 관리하세요.
+          </h1>
+          <p className="mt-4 max-w-[320px] text-[15px] leading-relaxed text-muted">
+            내 사업장 조건에 맞는 공고를 확인하고, 신청 마감과 준비 서류를 차근차근 챙길 수 있습니다.
+          </p>
+
+          <div className="mt-9 border-y border-line">
+            <FeatureRow icon={Search} label="사업장 조건에 맞는 정책 확인" />
+            <FeatureRow icon={CalendarDays} label="저장한 정책의 마감 일정 관리" />
+            <FeatureRow icon={FileCheck2} label="제출 전 서류 내용 점검" />
+          </div>
+        </main>
       </div>
 
-      <div className="mt-12 w-full">
+      <div className="pt-10">
         <button
           onClick={startGoogleLogin}
           disabled={loading}
-          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-black/10 bg-white py-3.5 text-base font-semibold text-brand-dark shadow-card active:scale-[0.99] disabled:opacity-60"
+          className="flex w-full items-center justify-center gap-3 rounded-lg border border-line bg-surface py-3.5 text-[15px] font-semibold text-brand-dark active:bg-black/[0.025] disabled:opacity-50"
         >
           <GoogleMark />
-          {loading ? '이동 중…' : 'Google로 시작하기'}
+          {loading ? '로그인 페이지로 이동 중…' : 'Google로 시작하기'}
         </button>
 
-        {error && (
-          <p className="mt-4 text-center text-sm font-medium text-status-red">{error}</p>
-        )}
+        {error && <p className="mt-3 text-sm font-medium text-status-red">{error}</p>}
 
-        <p className="mt-6 text-center text-xs leading-relaxed text-brand-dark/40">
-          로그인하면 저장한 정책이 계정에 보관되고,
-          <br />
-          마감일을 구글 캘린더에 등록할 수 있어요.
+        <p className="mt-4 text-xs leading-relaxed text-muted">
+          로그인하면 저장한 정책을 계정에 보관하고 마감일을 Google Calendar에 등록할 수 있습니다.
         </p>
       </div>
+    </div>
+  )
+}
+
+function FeatureRow({ icon: Icon, label }: { icon: typeof Search; label: string }) {
+  return (
+    <div className="flex items-center gap-3 border-b border-line px-1 py-3.5 last:border-b-0">
+      <Icon size={18} className="text-brand" />
+      <span className="text-sm font-medium text-brand-dark/80">{label}</span>
     </div>
   )
 }

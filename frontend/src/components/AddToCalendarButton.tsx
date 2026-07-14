@@ -55,8 +55,8 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
 
   const full = variant === 'full'
   const base = full
-    ? 'flex w-full items-center justify-center gap-1.5 rounded-2xl py-3 text-sm font-bold'
-    : 'flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-bold'
+    ? 'flex w-full items-center justify-center gap-1.5 rounded-lg border py-3 text-sm font-semibold'
+    : 'flex items-center justify-center gap-1 rounded-md border px-2.5 py-2 text-xs font-semibold'
 
   if (state === 'done') {
     return (
@@ -64,7 +64,7 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         href={link ?? '#'}
         target="_blank"
         rel="noopener noreferrer"
-        className={`${base} bg-green-50 text-status-green`}
+        className={`${base} border-status-green/20 bg-green-50 text-status-green`}
       >
         <CalendarCheck size={full ? 16 : 13} /> 등록됨
       </a>
@@ -80,8 +80,8 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         title={noDeadline ? '마감일이 정해지지 않아 캘린더에 등록할 수 없어요' : undefined}
         className={`${base} ${
           noDeadline
-            ? 'cursor-not-allowed bg-black/[0.04] text-brand-dark/30'
-            : 'bg-accent-soft text-accent active:scale-[0.98]'
+            ? 'cursor-not-allowed border-line bg-black/[0.025] text-brand-dark/30'
+            : 'border-line bg-surface text-brand-dark active:bg-black/[0.03]'
         }`}
       >
         {state === 'loading' ? (

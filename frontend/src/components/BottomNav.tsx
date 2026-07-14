@@ -1,34 +1,30 @@
-import { Bot, FileCheck2, Home, Search, User } from 'lucide-react'
+import { FileCheck2, Home, MessageCircleQuestion, Search, User } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
-// 홈은 이제 달력이다. 정책 찾기 안에 전체 조회·AI 추천·저장한 정책이 들어간다.
 const tabs = [
   { to: '/', label: '홈', icon: Home, end: true },
   { to: '/policies', label: '정책 찾기', icon: Search, end: false },
   { to: '/review', label: '서류검토', icon: FileCheck2, end: false },
-  { to: '/chat', label: '챗봇', icon: Bot, end: false },
+  { to: '/chat', label: '정책 문의', icon: MessageCircleQuestion, end: false },
   { to: '/profile', label: '마이', icon: User, end: false },
 ]
 
 export default function BottomNav() {
   return (
-    <nav className="sticky bottom-0 z-10 border-t border-black/5 bg-cream/95 backdrop-blur">
-      <ul className="mx-auto flex max-w-[430px] items-stretch justify-around px-1 py-2">
+    <nav className="sticky bottom-0 z-10 border-t border-line bg-surface/95 backdrop-blur-sm">
+      <ul className="mx-auto flex max-w-[430px] items-stretch justify-around px-1 pb-2 pt-1">
         {tabs.map(({ to, label, icon: Icon, end }) => (
           <li key={to} className="flex-1">
-            <NavLink to={to} end={end} className="flex flex-col items-center gap-1 py-1">
+            <NavLink to={to} end={end} className="relative flex flex-col items-center gap-0.5 py-2">
               {({ isActive }) => (
                 <>
-                  <span
-                    className={`flex h-8 w-14 items-center justify-center rounded-full transition-colors ${
-                      isActive ? 'bg-accent-soft text-accent' : 'text-brand-dark/50'
-                    }`}
-                  >
-                    <Icon size={21} strokeWidth={isActive ? 2.4 : 2} />
+                  {isActive && <span className="absolute -top-1 h-0.5 w-7 bg-brand-dark" />}
+                  <span className={isActive ? 'text-brand-dark' : 'text-brand-dark/40'}>
+                    <Icon size={20} strokeWidth={isActive ? 2.2 : 1.8} />
                   </span>
                   <span
-                    className={`text-[10.5px] font-medium ${
-                      isActive ? 'text-accent' : 'text-brand-dark/50'
+                    className={`text-[10px] ${
+                      isActive ? 'font-semibold text-brand-dark' : 'font-medium text-brand-dark/45'
                     }`}
                   >
                     {label}

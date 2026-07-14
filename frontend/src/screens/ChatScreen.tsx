@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { ArrowRight, Bot, LoaderCircle, Plus, Send } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Send } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import PolicyCard, { type PolicyCardData } from '../components/PolicyCard'
 import TopBar from '../components/TopBar'
@@ -26,7 +26,7 @@ const initialMessages: Message[] = [
   {
     id: 1,
     role: 'bot',
-    text: '안녕하세요 사장님! 오늘도 소복소복 쌓이는 소식들을 전해드릴게요.\n궁금하신 정책이나 지원금이 있으신가요?',
+    text: '궁금한 정책이나 지원 조건을 입력해주세요. 공고문에 적힌 내용을 기준으로 확인해드립니다.',
     time: '오전 10:05',
   },
 ]
@@ -170,14 +170,19 @@ export default function ChatScreen() {
     <div className="flex h-full flex-col">
       <TopBar />
 
-      <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+      <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        <div className="border-b border-line pb-4">
+          <h2 className="page-title">정책 문의</h2>
+          <p className="mt-1.5 text-sm text-muted">지원 대상, 신청 기간, 필요 서류를 물어보세요.</p>
+        </div>
+
         {policyId && (
-          <div className="rounded-2xl bg-brand-dark p-4 text-white shadow-card">
-            <p className="text-sm font-semibold">선택한 정책 상담을 이어갈 수 있어요.</p>
-            <p className="mt-1 break-all text-xs text-white/70">policyId: {policyId}</p>
+          <div className="surface-panel border-l-4 border-l-brand p-4">
+            <p className="text-sm font-semibold text-brand-dark">선택한 정책 공고를 기준으로 답변합니다.</p>
+            <p className="mt-1 text-xs text-muted">다른 정책을 보려면 상세 화면으로 돌아가세요.</p>
             <button
               onClick={() => navigate(`/policy/${policyId}`)}
-              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-brand-dark"
+              className="mt-3 text-xs font-semibold text-brand underline decoration-brand/30 underline-offset-4"
             >
               정책 상세 다시 보기
             </button>
@@ -196,7 +201,7 @@ export default function ChatScreen() {
             />
           ) : (
             <div key={m.id} className="flex justify-end">
-              <p className="max-w-[78%] whitespace-pre-line rounded-2xl rounded-tr-md bg-brand-dark px-4 py-3 text-[15px] leading-relaxed text-white">
+              <p className="max-w-[82%] whitespace-pre-line rounded-lg bg-brand-dark px-4 py-3 text-[15px] leading-relaxed text-white">
                 {m.text}
               </p>
             </div>
@@ -204,13 +209,13 @@ export default function ChatScreen() {
         )}
 
         {/* 추천 질문 칩 */}
-        <div className="flex flex-wrap gap-2 pt-1">
+        <div className="grid gap-2 border-t border-line pt-4">
           {(policyId ? DETAIL_QUICK : QUICK).map((q) => (
             <button
               key={q}
               onClick={() => send(q)}
               disabled={sending}
-              className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-brand-dark/80 active:bg-black/5"
+              className="rounded-lg border border-line bg-surface px-3.5 py-2.5 text-left text-sm font-medium text-brand-dark/75 active:bg-black/[0.03]"
             >
               {q}
             </button>
@@ -219,27 +224,24 @@ export default function ChatScreen() {
       </div>
 
       {/* 입력창 */}
-      <div className="border-t border-black/5 bg-cream px-4 py-3">
+      <div className="border-t border-line bg-surface px-4 py-3">
         <form
           onSubmit={(e) => {
             e.preventDefault()
             send(input)
           }}
-          className="flex items-center gap-2 rounded-full border border-brand-light/40 bg-white py-1.5 pl-2 pr-1.5"
+          className="flex items-center gap-2 rounded-lg border border-line bg-white py-1.5 pl-3 pr-1.5 focus-within:border-brand"
         >
-          <button type="button" className="p-2 text-brand-dark/40">
-            <Plus size={22} />
-          </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="메시지를 입력하세요..."
+            placeholder="정책에 대해 질문하기"
             className="flex-1 bg-transparent text-[15px] text-brand-dark outline-none placeholder:text-brand-dark/35"
           />
           <button
             type="submit"
             disabled={sending}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95 disabled:opacity-50"
+            className="flex h-10 w-10 items-center justify-center rounded-md bg-brand-dark text-white active:opacity-85 disabled:opacity-40"
           >
             {sending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
           </button>
@@ -263,13 +265,11 @@ function BotBubble({
   pendingSave: string | null
 }) {
   return (
-    <div className="flex items-start gap-2">
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-brand-dark">
-        <Bot size={20} className="text-status-blue" />
-      </span>
-      <div className="max-w-[82%] space-y-2">
+    <div className="max-w-[90%] space-y-2">
+      <p className="pl-1 text-[11px] font-semibold text-brand">소복소복 안내</p>
+      <div className="space-y-2">
         {m.text && (
-          <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-brand-dark shadow-card">
+          <p className="whitespace-pre-line rounded-lg border border-line bg-surface px-4 py-3 text-[15px] leading-relaxed text-brand-dark">
             <span className="flex items-start gap-2">
               {m.pending && <LoaderCircle size={17} className="mt-0.5 flex-shrink-0 animate-spin" />}
               <span>{m.text}</span>
@@ -277,11 +277,11 @@ function BotBubble({
           </p>
         )}
         {m.sources && m.sources.length > 0 && (
-          <div className="rounded-2xl border border-brand-light/30 bg-white p-3 shadow-card">
-            <p className="text-xs font-bold text-brand-dark/70">답변 근거</p>
-            <div className="mt-2 space-y-2">
+          <div className="surface-panel overflow-hidden">
+            <p className="border-b border-line px-3.5 py-2.5 text-xs font-semibold text-brand-dark/70">답변 근거</p>
+            <div className="divide-y divide-line">
               {uniqueSourcesByPolicy(m.sources).slice(0, 3).map((source) => (
-                <div key={source.chunk_id} className="rounded-xl bg-cream px-3 py-2.5">
+                <div key={source.chunk_id} className="px-3.5 py-3">
                   <p className="text-xs font-semibold text-brand-dark/70">
                     {source.policy_title || source.document_title || '공고문'}
                   </p>
@@ -291,7 +291,7 @@ function BotBubble({
                   <button
                     type="button"
                     onClick={() => navigate(`/policy/${source.policy_id}`)}
-                    className="mt-2 flex items-center gap-1 text-xs font-bold text-brand"
+                    className="mt-2 flex items-center gap-1 text-xs font-semibold text-brand"
                   >
                     정책 상세 보기 <ArrowRight size={13} />
                   </button>
@@ -301,7 +301,7 @@ function BotBubble({
           </div>
         )}
         {m.policies && m.policies.length > 0 && (
-          <div className="space-y-3">
+          <div className="surface-panel divide-y divide-line overflow-hidden">
             {m.policies.map((policy) => (
               <PolicyCard
                 key={policy.policy_id}
@@ -313,7 +313,7 @@ function BotBubble({
             ))}
           </div>
         )}
-        {m.time && <p className="pl-1 text-xs text-brand-dark/40">{m.time}</p>}
+        {m.time && <p className="pl-1 text-xs text-muted">{m.time}</p>}
       </div>
     </div>
   )

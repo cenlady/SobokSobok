@@ -1,13 +1,5 @@
 import { useMemo, useState } from 'react'
-import {
-  ArrowRight,
-  CalendarDays,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Info,
-  Sparkles,
-} from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
@@ -15,9 +7,6 @@ import { formatDate, toDateKey } from '../lib/calendar'
 import { ddayLabel, statusMeta, TODAY } from '../lib/format'
 import { useSavedPolicies } from '../lib/storage'
 import type { BenefitStatus, SavedPolicy } from '../types'
-
-// 홈은 달력이다. 저장한 정책의 마감일을 한눈에 보여주는 게 앱의 첫 화면.
-// 저장한 정책이 없으면 달력이 텅 비므로, 그때만 정책 찾기로 유도한다.
 
 const WEEK = ['일', '월', '화', '수', '목', '금', '토']
 
@@ -34,12 +23,6 @@ function statusForPolicy(policy: SavedPolicy): BenefitStatus {
   return diff <= 14 ? 'closing' : 'open'
 }
 
-const statusIcon: Record<BenefitStatus, typeof Clock> = {
-  closing: Clock,
-  open: CalendarDays,
-  notice: Info,
-}
-
 export default function HomeScreen() {
   const navigate = useNavigate()
   const { policies, loading } = useSavedPolicies()
@@ -51,8 +34,24 @@ export default function HomeScreen() {
   })
   const [selected, setSelected] = useState(TODAY)
 
-  const scheduled = policies.filter((p) => toDateKey(p.apply_end))
-  const unscheduled = policies.filter((p) => !toDateKey(p.apply_end))
+  const scheduled = policies.filter((policy) => toDateKey(policy.apply_end))
+  const unscheduled = policies.filter((policy) => !toDateKey(policy.apply_end))
+  const ordered = useMemo(
+    () =>
+      [...scheduled].sort((left, right) => {
+        const leftEnd = toDateKey(left.apply_end) || '9999-12-31'
+        const rightEnd = toDateKey(right.apply_end) || '9999-12-31'
+        const leftPast = leftEnd < TODAY
+        const rightPast = rightEnd < TODAY
+        if (leftPast !== rightPast) return leftPast ? 1 : -1
+        return leftEnd.localeCompare(rightEnd)
+      }),
+    [scheduled],
+  )
+  const priority = ordered[0]
+  const upcoming = priority
+    ? ordered.filter((policy) => policy.policy_id !== priority.policy_id).slice(0, 3)
+    : []
 
   const dots = useMemo(() => {
     const map: Record<string, BenefitStatus[]> = {}
@@ -73,8 +72,8 @@ export default function HomeScreen() {
   for (let i = 0; i < startDow; i++) {
     cells.push({ day: prevDays - startDow + 1 + i, inMonth: false })
   }
-  for (let d = 1; d <= daysInMonth; d++) {
-    cells.push({ day: d, inMonth: true, dateKey: ymd(year, month, d) })
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push({ day, inMonth: true, dateKey: ymd(year, month, day) })
   }
   let tail = 1
   while (cells.length % 7 !== 0 || cells.length < 42) {
@@ -82,98 +81,100 @@ export default function HomeScreen() {
     if (cells.length >= 42) break
   }
 
-  const shift = (dir: number) => {
-    const m = month + dir
-    setCursor({ year: year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 })
+  const shift = (direction: number) => {
+    const nextMonth = month + direction
+    setCursor({
+      year: year + Math.floor(nextMonth / 12),
+      month: ((nextMonth % 12) + 12) % 12,
+    })
   }
 
-  const dayList = scheduled.filter((p) => toDateKey(p.apply_end) === selected)
-  const selDate = new Date(`${selected}T00:00:00`)
+  const dayList = scheduled.filter((policy) => toDateKey(policy.apply_end) === selected)
+  const selectedDate = new Date(`${selected}T00:00:00`)
   const isEmpty = !loading && policies.length === 0
 
   return (
-    <div className="pb-6">
+    <div className="pb-8">
       <TopBar />
 
-      {/* 달력 */}
-      <section className="px-5">
-        <div className="rounded-3xl bg-white p-5 shadow-card">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-lg font-bold text-brand-dark">
-                {year}년 {month + 1}월
-              </p>
-              <p className="mt-1 text-xs font-medium text-brand-dark/45">
-                저장한 정책의 마감일이 표시돼요.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => shift(-1)}
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
-                aria-label="이전 달"
-              >
-                <ChevronLeft size={18} />
-              </button>
-              <button
-                onClick={() => shift(1)}
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-black/5 text-brand-dark/60 active:bg-black/5"
-                aria-label="다음 달"
-              >
-                <ChevronRight size={18} />
-              </button>
-            </div>
+      <section className="px-5 pt-6">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold tracking-[0.08em] text-brand">저장한 정책 일정</p>
+            <h2 className="mt-1 page-title">마감 달력</h2>
           </div>
+          {!loading && policies.length > 0 && (
+            <span className="pb-0.5 text-xs text-muted">저장 {policies.length}건</span>
+          )}
+        </div>
 
+        <div className="mt-5 flex items-center justify-between">
+          <p className="text-base font-semibold text-brand-dark">
+            {year}년 {month + 1}월
+          </p>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => shift(-1)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-brand-dark/55 active:bg-black/5"
+              aria-label="이전 달"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              onClick={() => shift(1)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-brand-dark/55 active:bg-black/5"
+              aria-label="다음 달"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="surface-panel mt-3 p-5">
           <div className="grid grid-cols-7 text-center">
-            {WEEK.map((w, i) => (
+            {WEEK.map((weekday, index) => (
               <div
-                key={w}
-                className={`pb-2 text-xs font-semibold ${
-                  i === 0
-                    ? 'text-status-red/70'
-                    : i === 6
-                      ? 'text-status-blue/70'
-                      : 'text-brand-dark/40'
+                key={weekday}
+                className={`pb-3 text-[11px] font-medium ${
+                  index === 0
+                    ? 'text-status-red/75'
+                    : index === 6
+                      ? 'text-status-blue/75'
+                      : 'text-muted'
                 }`}
               >
-                {w}
+                {weekday}
               </div>
             ))}
-            {cells.map((c, idx) => {
-              const isSel = c.dateKey === selected
-              const isToday = c.dateKey === TODAY
-              const dow = idx % 7
-              const dayDots = c.dateKey ? dots[c.dateKey] : undefined
+            {cells.map((cell, index) => {
+              const isSelected = cell.dateKey === selected
+              const isToday = cell.dateKey === TODAY
+              const dayDots = cell.dateKey ? dots[cell.dateKey] : undefined
               return (
                 <button
-                  key={`${c.dateKey ?? 'empty'}-${idx}`}
-                  disabled={!c.inMonth}
-                  onClick={() => c.dateKey && setSelected(c.dateKey)}
+                  key={`${cell.dateKey ?? 'empty'}-${index}`}
+                  disabled={!cell.inMonth}
+                  onClick={() => cell.dateKey && setSelected(cell.dateKey)}
                   className="relative flex flex-col items-center py-1.5"
                 >
                   <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-full text-sm ${
-                      isSel
-                        ? 'bg-brand-dark font-bold text-white'
-                        : !c.inMonth
-                          ? 'text-brand-dark/20'
+                    className={`flex h-8 w-8 items-center justify-center rounded-md text-sm ${
+                      isSelected
+                        ? 'bg-brand-dark font-semibold text-white'
+                        : !cell.inMonth
+                          ? 'text-brand-dark/15'
                           : isToday
-                            ? 'font-bold text-brand'
-                            : dow === 0
-                              ? 'text-status-red'
-                              : dow === 6
-                                ? 'text-status-blue'
-                                : 'text-brand-dark/80'
+                            ? 'border border-brand/40 font-semibold text-brand'
+                            : 'text-brand-dark/75'
                     }`}
                   >
-                    {c.day}
+                    {cell.day}
                   </span>
-                  <span className="mt-1 flex h-1.5 gap-0.5">
-                    {dayDots?.slice(0, 3).map((s, i) => (
+                  <span className="mt-1 flex h-1 gap-0.5">
+                    {dayDots?.slice(0, 3).map((status, dotIndex) => (
                       <span
-                        key={`${s}-${i}`}
-                        className={`h-1.5 w-1.5 rounded-full ${statusMeta[s].bar}`}
+                        key={`${status}-${dotIndex}`}
+                        className={`h-1 w-1 rounded-full ${statusMeta[status].bar}`}
                       />
                     ))}
                   </span>
@@ -184,115 +185,146 @@ export default function HomeScreen() {
         </div>
       </section>
 
-      {/* 저장한 정책이 없으면 여기서 유도한다. 있으면 이 카드는 사라지고 달력이 주인공이 된다. */}
-      {isEmpty && (
-        <section className="mt-6 px-5">
-          <div className="rounded-3xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-6 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white/70">
-              <Sparkles size={22} className="text-accent" />
-            </div>
-            <h3 className="mt-4 text-lg font-bold leading-snug text-brand-dark">
-              아직 저장한 정책이 없어요
-            </h3>
-            <p className="mt-2 text-sm leading-relaxed text-brand-dark/70">
-              AI가 사장님께 맞는 지원금을 찾아드려요.
-              <br />
-              저장하면 마감일이 이 달력에 표시돼요.
-            </p>
-            <button
-              onClick={() => navigate('/policies')}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-2xl bg-brand-dark py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-dark/20 active:scale-[0.99]"
-            >
-              맞춤 정책 찾아보기 <ArrowRight size={18} />
-            </button>
-          </div>
-        </section>
-      )}
-
-      {/* 선택한 날짜의 마감 정책 */}
       {!isEmpty && (
-        <section className="mt-6 px-5">
-          <h3 className="text-xl font-bold text-brand-dark">
-            {selDate.getMonth() + 1}월 {selDate.getDate()}일 마감 정책
+        <section className="mt-5 px-5">
+          <h3 className="section-title">
+            {selectedDate.getMonth() + 1}월 {selectedDate.getDate()}일 마감
           </h3>
-          <p className="mt-1 text-sm text-brand-dark/50">
-            저장한 정책 {policies.length}건 중 이 날짜 일정이에요.
-          </p>
-
-          <div className="mt-4 space-y-3">
-            {dayList.length === 0 && (
-              <div className="rounded-2xl bg-white p-6 text-center shadow-card">
-                <p className="text-sm font-medium text-brand-dark/45">
-                  이 날 마감되는 저장 정책이 없어요.
-                </p>
-              </div>
-            )}
-
-            {dayList.map((policy) => (
-              <DeadlineCard key={policy.policy_id} policy={policy} />
-            ))}
-          </div>
+          {dayList.length > 0 ? (
+            <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
+              {dayList.map((policy) => (
+                <DeadlineRow key={policy.policy_id} policy={policy} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 border-y border-line py-4 text-sm text-muted">
+              이 날 마감되는 저장 정책이 없습니다.
+            </p>
+          )}
 
           {unscheduled.length > 0 && (
-            <div className="mt-6">
-              <h3 className="text-lg font-bold text-brand-dark">
-                기한 미정 정책 ({unscheduled.length}건)
-              </h3>
-              <div className="mt-3 space-y-3">
+            <div className="mt-7">
+              <h3 className="section-title">마감일 미정</h3>
+              <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
                 {unscheduled.map((policy) => (
-                  <DeadlineCard key={policy.policy_id} policy={policy} />
+                  <DeadlineRow key={policy.policy_id} policy={policy} />
                 ))}
               </div>
             </div>
           )}
         </section>
       )}
+
+      <section className="mt-8 border-t border-line px-5 pt-7">
+        <p className="text-xs font-semibold tracking-[0.08em] text-brand">오늘의 정책 일정</p>
+        <div className="mt-1 flex items-end justify-between gap-3">
+          <h2 className="page-title">이번 주 꼭 확인할 정책</h2>
+          {!loading && policies.length > 0 && (
+            <span className="pb-0.5 text-xs text-muted">저장 {policies.length}건</span>
+          )}
+        </div>
+
+        {loading && (
+          <div className="mt-4 border-y border-line py-5 text-sm text-muted">
+            저장한 정책을 불러오는 중입니다.
+          </div>
+        )}
+
+        {!loading && priority && <PriorityPolicy policy={priority} />}
+
+        {isEmpty && (
+          <div className="surface-panel mt-4 border-dashed p-5">
+            <h3 className="text-base font-semibold text-brand-dark">저장한 정책이 없습니다</h3>
+            <p className="mt-2 text-sm leading-relaxed text-muted">
+              내 사업장에 맞는 정책을 저장하면 마감 순서대로 이곳에서 관리할 수 있습니다.
+            </p>
+            <button onClick={() => navigate('/policies')} className="primary-button mt-4">
+              정책 찾아보기
+            </button>
+          </div>
+        )}
+      </section>
+
+      {upcoming.length > 0 && (
+        <section className="mt-8 px-5">
+          <div className="flex items-end justify-between">
+            <h3 className="section-title">다가오는 마감</h3>
+            <button
+              onClick={() => navigate('/policies')}
+              className="text-xs font-semibold text-brand active:opacity-60"
+            >
+              전체 정책 보기
+            </button>
+          </div>
+          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
+            {upcoming.map((policy) => (
+              <DeadlineRow key={policy.policy_id} policy={policy} />
+            ))}
+          </div>
+        </section>
+      )}
+
     </div>
   )
 }
 
-function DeadlineCard({ policy }: { policy: SavedPolicy }) {
+function PriorityPolicy({ policy }: { policy: SavedPolicy }) {
+  const navigate = useNavigate()
+  const end = toDateKey(policy.apply_end)
+
+  return (
+    <article className="surface-panel mt-4 overflow-hidden border-l-4 border-l-status-red">
+      <button
+        onClick={() => navigate(`/policy/${policy.policy_id}`)}
+        className="flex w-full items-start justify-between gap-4 px-4 py-4 text-left active:bg-black/[0.02]"
+      >
+        <span className="min-w-0">
+          <span className="text-xs font-semibold text-muted">
+            {policy.support_type || '지원 정책'}
+          </span>
+          <strong className="mt-1.5 block line-clamp-2 text-base font-semibold leading-snug text-brand-dark">
+            {policy.title}
+          </strong>
+          <span className="mt-2 block text-xs text-muted">
+            {formatDate(policy.apply_start)} ~ {formatDate(policy.apply_end)}
+          </span>
+        </span>
+        <span className="flex-shrink-0 text-lg font-bold tabular-nums text-status-red">
+          {end ? ddayLabel(end) : '미정'}
+        </span>
+      </button>
+      <div className="flex items-center justify-between border-t border-line px-4 py-2.5">
+        <span className="text-xs text-muted">마감 전에 신청 조건을 확인하세요.</span>
+        <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
+      </div>
+    </article>
+  )
+}
+
+function DeadlineRow({ policy }: { policy: SavedPolicy }) {
   const navigate = useNavigate()
   const end = toDateKey(policy.apply_end)
   const status = statusForPolicy(policy)
   const meta = statusMeta[status]
-  const Icon = statusIcon[status]
 
   return (
-    <article className="flex w-full items-stretch gap-3 overflow-hidden rounded-2xl bg-white text-left shadow-card">
-      <span className={`w-1.5 flex-shrink-0 ${meta.bar}`} />
-      <span
-        className={`my-4 flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${meta.iconBg}`}
+    <article className="flex items-center gap-3 bg-surface px-4 py-3.5">
+      <span className={`h-9 w-1 flex-shrink-0 rounded-full ${meta.bar}`} aria-hidden="true" />
+      <button
+        onClick={() => navigate(`/policy/${policy.policy_id}`)}
+        className="min-w-0 flex-1 text-left active:opacity-60"
       >
-        <Icon size={22} className={meta.iconColor} />
-      </span>
-      <div className="min-w-0 flex-1 py-4 pr-4">
-        <div className="flex items-center justify-between gap-2">
-          <span className={`text-sm font-bold ${meta.text}`}>
-            {end ? ddayLabel(end) : '기한 미정'}
-          </span>
-          {policy.support_type && (
-            <span className="truncate text-xs font-medium text-brand-dark/50">
-              {policy.support_type}
-            </span>
-          )}
-        </div>
-        <h4 className="mt-1 line-clamp-2 text-base font-semibold text-brand-dark">
+        <span className={`text-xs font-bold ${meta.text}`}>
+          {end ? ddayLabel(end) : '마감일 미정'}
+        </span>
+        <strong className="mt-1 block line-clamp-2 text-sm font-semibold leading-snug text-brand-dark">
           {policy.title}
-        </h4>
-        <p className="mt-1 text-sm text-brand-dark/50">
-          {formatDate(policy.apply_start)} ~ {formatDate(policy.apply_end)}
-        </p>
-        <div className="mt-3 grid grid-cols-2 items-start gap-2">
-          <button
-            onClick={() => navigate(`/policy/${policy.policy_id}`)}
-            className="flex items-center justify-center gap-1 rounded-xl bg-brand-dark px-3 py-2 text-xs font-bold text-white"
-          >
-            상세보기 <ArrowRight size={13} />
-          </button>
-          <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
-        </div>
-      </div>
+        </strong>
+        <span className="mt-1 flex items-center gap-1 text-xs text-muted">
+          <CalendarDays size={12} /> {formatDate(policy.apply_end)}
+        </span>
+      </button>
+      <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
     </article>
   )
 }

@@ -1,43 +1,41 @@
 import { useEffect, useState } from 'react'
 import {
+  AlertCircle,
   ArrowRight,
-  Bot,
   Bookmark,
   CalendarDays,
-  ChevronLeft,
-  MapPin,
-  Sparkles,
-  Tag,
   CheckCircle2,
-  AlertCircle,
-  Zap,
-  Paperclip,
-  FileText,
+  ChevronLeft,
   Download,
+  FileText,
+  LoaderCircle,
+  MapPin,
+  MessageCircleQuestion,
+  Paperclip,
+  Tag,
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
 import { formatDate } from '../lib/calendar'
-import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
+import { useProfile, useSavedPolicies } from '../lib/storage'
 import type {
   PolicyDetailResponse,
-  RecommendationResult,
   RecommendationExplanationResponse,
+  RecommendationResult,
 } from '../types'
 
 export default function PolicyDetailScreen() {
   const { policyId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  // 추천 탭에서 넘어온 경우에만 채워진다. 없어도 서버가 설명을 만들어주므로 필수는 아니다.
   const recommendation = (location.state as { recommendation?: RecommendationResult } | null)
     ?.recommendation
   const { has, toggle } = useSavedPolicies()
-  const [savePending, setSavePending] = useState(false)
   const { profile, loading: profileLoading } = useProfile()
+  const [savePending, setSavePending] = useState(false)
   const [policy, setPolicy] = useState<PolicyDetailResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -67,15 +65,11 @@ export default function PolicyDetailScreen() {
   }, [policyId])
 
   useEffect(() => {
-    if (!policyId || !policy) return
-    // 프로필은 서버에서 비동기로 온다. 빈 프로필로 요청하면 엉뚱한 설명이 나온다.
-    if (profileLoading) return
+    if (!policyId || !policy || profileLoading) return
 
     let ignore = false
     setExplaining(true)
 
-    // apiFetch를 써야 JWT가 붙는다. /recommend는 인증 가드가 걸려 있어
-    // 날것의 fetch로는 401이 나고 설명이 통째로 사라진다.
     apiFetch<RecommendationExplanationResponse>(`/api/v1/recommend/explain/${policyId}`, {
       method: 'POST',
       json: buildRecommendationRequest(profile),
@@ -89,14 +83,14 @@ export default function PolicyDetailScreen() {
 
         const fallbackSummary =
           recommendation?.match_status === 'eligible'
-            ? '지원 조건 충족률이 높은 추천 정책입니다.'
-            : '세부 조건 확인이 필요한 정책입니다.'
+            ? '등록한 사업장 정보와 주요 지원 조건이 잘 맞습니다.'
+            : '신청 전에 세부 조건을 추가로 확인해야 합니다.'
         const fallbackStrengths = recommendation?.reasons?.length
           ? recommendation.reasons
-          : ['사용자 업종 및 사업자 정보에 부합하는 지원 정책입니다.']
+          : ['업종과 사업장 정보를 기준으로 확인할 가치가 있는 정책입니다.']
         const fallbackAspects = recommendation?.warnings?.length
           ? recommendation.warnings
-          : ['상세 공고의 세부 자격 조건을 다시 한번 확인해 보세요.']
+          : ['공고 원문에서 세부 자격 조건을 다시 확인해주세요.']
 
         const fallbackNext: string[] = []
         if (policy.apply_end) {
@@ -105,13 +99,13 @@ export default function PolicyDetailScreen() {
           )
           fallbackNext.push(
             daysLeft >= 0
-              ? `마감일(${formatDate(policy.apply_end)})까지 ${daysLeft}일 남았으니 늦지 않게 신청해 보세요.`
-              : '신청 기간이 마감되었는지 확인해 보세요.',
+              ? `마감일(${formatDate(policy.apply_end)})까지 ${daysLeft}일 남았습니다.`
+              : '신청 기간이 마감되었는지 확인해주세요.',
           )
         } else {
-          fallbackNext.push('신청 기한을 확인해 보세요.')
+          fallbackNext.push('신청 기한을 공고 원문에서 확인해주세요.')
         }
-        fallbackNext.push('챗봇 탭에서 상세 지원 서류와 자격을 물어보세요.')
+        fallbackNext.push('정책 문의에서 필요 서류와 접수 방법을 확인하세요.')
 
         setExplanation({
           summary: fallbackSummary,
@@ -141,13 +135,8 @@ export default function PolicyDetailScreen() {
     }
   }
 
-  if (loading) {
-    return <StateScreen label="정책 정보를 불러오는 중이에요." />
-  }
-
-  if (error || !policy) {
-    return <StateScreen label={error || '정책 정보를 찾을 수 없어요.'} />
-  }
+  if (loading) return <StateScreen label="정책 정보를 불러오는 중입니다." />
+  if (error || !policy) return <StateScreen label={error || '정책 정보를 찾을 수 없습니다.'} />
 
   const regionText =
     policy.region_scope === 'national'
@@ -158,158 +147,130 @@ export default function PolicyDetailScreen() {
 
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
-      <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-4 py-4 backdrop-blur">
-        <button onClick={() => navigate(-1)} className="p-1 text-brand-dark active:opacity-60">
-          <ChevronLeft size={26} />
+      <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-line bg-cream/95 px-4 backdrop-blur-sm">
+        <button
+          onClick={() => navigate(-1)}
+          className="p-1 text-brand-dark active:opacity-60"
+          aria-label="뒤로"
+        >
+          <ChevronLeft size={23} />
         </button>
-        <h1 className="text-lg font-semibold text-brand-dark">정책 상세</h1>
-        <button onClick={toggleSave} className="p-1" aria-label="정책 저장">
+        <h1 className="text-base font-semibold text-brand-dark">정책 상세</h1>
+        <button
+          onClick={toggleSave}
+          disabled={savePending}
+          className="p-1 disabled:opacity-40"
+          aria-label={isSaved ? '정책 저장 해제' : '정책 저장'}
+        >
           <Bookmark
-            size={24}
-            className={isSaved ? 'fill-brand text-brand' : 'text-brand-dark/40'}
+            size={21}
+            className={isSaved ? 'fill-brand text-brand' : 'text-brand-dark/35'}
           />
         </button>
       </header>
 
-      <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-lg bg-brand-light/20 px-2.5 py-1 text-sm font-bold text-brand">
-            {policy.support_type || '지원정책'}
-          </span>
-          {recommendation && (
-            <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-sm font-bold text-accent">
-              {Math.round(recommendation.rank_score)}점
-            </span>
-          )}
-          <span className="rounded-lg bg-white px-2.5 py-1 text-sm font-semibold text-brand-dark/60">
-            {policy.status || '상태 확인'}
-          </span>
+      <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-8 pt-5">
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="font-semibold text-brand">{policy.support_type || '지원 정책'}</span>
+          <span className="text-muted">{policy.status || '상태 확인 필요'}</span>
         </div>
 
-        <h2 className="mt-4 text-2xl font-bold leading-snug text-brand-dark">
+        <h2 className="mt-3 text-[25px] font-bold leading-[1.35] tracking-[-0.03em] text-brand-dark">
           {policy.title}
         </h2>
-        {policy.organization && (
-          <p className="mt-2 text-sm font-semibold text-brand-dark/50">{policy.organization}</p>
-        )}
+        <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+          {policy.organization && <span>{policy.organization}</span>}
+          {recommendation && (
+            <>
+              <span className="h-0.5 w-0.5 rounded-full bg-brand-dark/30" />
+              <span>조건 일치도 {Math.round(recommendation.rank_score)}점</span>
+            </>
+          )}
+        </div>
+
         {policy.summary && (
-          <p className="mt-4 rounded-2xl bg-white p-4 text-[15px] leading-relaxed text-brand-dark/70 shadow-card">
+          <p className="mt-5 border-l-2 border-brand pl-4 text-[15px] leading-relaxed text-brand-dark/75">
             {policy.summary}
           </p>
         )}
 
-        <div className="mt-5 space-y-3 rounded-2xl bg-white p-5 shadow-card">
-          <InfoLine icon={MapPin} label="지역" value={regionText} />
+        <div className="surface-panel mt-6 divide-y divide-line overflow-hidden">
+          <InfoLine icon={MapPin} label="지원 지역" value={regionText} />
           <InfoLine
             icon={CalendarDays}
-            label="기간"
+            label="신청 기간"
             value={`${formatDate(policy.apply_start)} ~ ${formatDate(policy.apply_end)}`}
           />
-          <InfoLine icon={Tag} label="유형" value={policy.support_type || '확인 필요'} />
+          <InfoLine icon={Tag} label="지원 유형" value={policy.support_type || '확인 필요'} />
         </div>
 
-        {/* AI 추천 이유 및 설명 로딩 상태 */}
-        {explaining && (
-          <section className="mt-6">
-            <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-              <Sparkles size={19} className="text-brand animate-pulse" /> AI 추천 이유
-            </h3>
-            <div className="mt-3 rounded-2xl bg-white p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
-              <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-brand-light/10 text-brand">
-                <Sparkles size={20} className="animate-bounce" />
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/10 opacity-75"></span>
-              </div>
-              <div className="space-y-1">
-                <p className="text-[14px] font-bold text-brand-dark">AI가 추천 이유를 분석 중이에요</p>
-                <p className="text-[12px] font-medium text-brand-dark/50">소복이가 사장님의 조건과 공고 내용을 대조해보고 있어요.</p>
-              </div>
+        <section className="mt-8 border-t border-line pt-7">
+          <h3 className="section-title">내 정보와 맞는 조건</h3>
+          <p className="mt-1 text-xs text-muted">등록한 사업장 정보와 공고 조건을 비교한 내용입니다.</p>
+
+          {explaining && (
+            <div className="mt-4 flex items-center gap-3 border-y border-line py-4 text-sm text-brand-dark/70">
+              <LoaderCircle size={18} className="animate-spin text-brand" />
+              사업장 정보와 공고 조건을 확인하고 있습니다.
             </div>
-          </section>
-        )}
+          )}
 
-        {!explaining && explanation && (
-          <div className="space-y-6">
-            {/* AI 추천 이유 (한 줄 요약) */}
-            <section className="mt-6">
-              <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-                <Sparkles size={19} className="text-brand fill-brand/10" /> AI 추천 이유
-              </h3>
-              <div className="mt-3 rounded-2xl bg-white p-4 shadow-card border-l-4 border-brand">
-                <p className="text-[15px] font-bold leading-relaxed text-brand-dark">
-                  {explanation.summary}
-                </p>
-              </div>
-            </section>
+          {!explaining && explanation && (
+            <div className="mt-4 space-y-5">
+              <p className="border-l-2 border-brand-light pl-3 text-sm font-medium leading-relaxed text-brand-dark">
+                {explanation.summary}
+              </p>
 
-            {/* 잘 맞는 부분 */}
-            {explanation.strengths.length > 0 && (
-              <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-                  <CheckCircle2 size={19} className="text-brand" /> 잘 맞는 부분
-                </h3>
-                <div className="mt-3 space-y-2">
-                  {explanation.strengths.map((strength) => (
-                    <div key={strength} className="flex items-start gap-2 rounded-2xl bg-white p-3.5 shadow-card">
-                      <span className="text-brand font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-brand-dark/80">
-                        {strength.replace(/^-\s*/, '')}
-                      </p>
-                    </div>
-                  ))}
+              {explanation.strengths.length > 0 && (
+                <ExplanationList
+                  title="조건이 맞는 부분"
+                  icon={CheckCircle2}
+                  tone="good"
+                  items={explanation.strengths}
+                />
+              )}
+
+              {explanation.aspects_to_check.length > 0 && (
+                <ExplanationList
+                  title="신청 전 확인할 부분"
+                  icon={AlertCircle}
+                  tone="check"
+                  items={explanation.aspects_to_check}
+                />
+              )}
+
+              {explanation.next_actions.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-brand-dark">다음에 할 일</h4>
+                  <ol className="mt-2 border-y border-line">
+                    {explanation.next_actions.map((action, index) => (
+                      <li
+                        key={action}
+                        className="flex gap-3 border-b border-line py-3 text-sm leading-relaxed text-brand-dark/75 last:border-b-0"
+                      >
+                        <span className="w-5 flex-shrink-0 font-semibold tabular-nums text-brand">
+                          {String(index + 1).padStart(2, '0')}
+                        </span>
+                        <span>{action.replace(/^-\s*/, '')}</span>
+                      </li>
+                    ))}
+                  </ol>
                 </div>
-              </section>
-            )}
-
-            {/* 확인할 부분 */}
-            {explanation.aspects_to_check.length > 0 && (
-              <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-                  <AlertCircle size={19} className="text-status-blue" /> 확인할 부분
-                </h3>
-                <div className="mt-3 space-y-2">
-                  {explanation.aspects_to_check.map((warning) => (
-                    <div key={warning} className="flex items-start gap-2 rounded-2xl bg-blue-50/60 p-3.5 shadow-card">
-                      <span className="text-status-blue font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-status-blue">
-                        {warning.replace(/^-\s*/, '')}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* 다음 행동 */}
-            {explanation.next_actions.length > 0 && (
-              <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-                  <Zap size={19} className="text-accent" /> 다음 행동
-                </h3>
-                <div className="mt-3 space-y-2">
-                  {explanation.next_actions.map((action) => (
-                    <div key={action} className="flex items-start gap-2 rounded-2xl bg-accent-soft/45 p-3.5 shadow-card">
-                      <span className="text-accent font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-brand-dark">
-                        {action.replace(/^-\s*/, '')}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        )}
+              )}
+            </div>
+          )}
+        </section>
 
         <Section title="지원 대상" content={policy.target_text} />
         <Section title="지원 내용" content={policy.support_content || policy.body} />
         <Section title="필요 서류" content={documentList(policy.required_documents)} />
 
         {policy.attachments && policy.attachments.length > 0 && (
-          <section className="mt-6">
-            <h3 className="text-lg font-bold text-brand-dark flex items-center gap-1.5">
-              <Paperclip size={18} className="text-brand" /> 첨부 파일
+          <section className="mt-8 border-t border-line pt-7">
+            <h3 className="section-title flex items-center gap-2">
+              <Paperclip size={17} className="text-brand" /> 첨부 파일
             </h3>
-            <div className="mt-3 space-y-2">
+            <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
               {policy.attachments.map((file) => (
                 <a
                   key={file.attachment_file_id}
@@ -317,13 +278,13 @@ export default function PolicyDetailScreen() {
                   download={file.original_file_name || 'attachment'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 rounded-2xl bg-white p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
+                  className="flex items-center gap-3 px-4 py-3.5 active:bg-black/[0.02]"
                 >
-                  <FileText size={18} className="text-brand flex-shrink-0" />
-                  <span className="text-[14px] font-semibold truncate flex-1 text-brand-dark/80">
+                  <FileText size={17} className="flex-shrink-0 text-brand" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-brand-dark/80">
                     {file.original_file_name || '첨부파일'}
                   </span>
-                  <Download size={16} className="text-brand-dark/30 flex-shrink-0" />
+                  <Download size={15} className="flex-shrink-0 text-muted" />
                 </a>
               ))}
             </div>
@@ -331,20 +292,22 @@ export default function PolicyDetailScreen() {
         )}
       </div>
 
-      <div className="space-y-2 border-t border-black/5 bg-cream px-5 py-3">
+      <div className="space-y-2 border-t border-line bg-surface px-5 py-3">
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => navigate(`/chat?policyId=${policy.id}`)}
-            className="flex items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-brand-dark shadow-card active:scale-[0.99]"
+            className="secondary-button flex items-center justify-center gap-1.5 px-2"
           >
-            <Bot size={17} /> AI 상담
+            <MessageCircleQuestion size={16} /> 정책에 대해 물어보기
           </button>
           <AddToCalendarButton policyId={policy.id} applyEnd={policy.apply_end} variant="full" />
         </div>
         <button
           disabled={!policy.apply_url}
-          onClick={() => policy.apply_url && window.open(policy.apply_url, '_blank', 'noopener,noreferrer')}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-white disabled:bg-brand-dark/20 active:scale-[0.99]"
+          onClick={() =>
+            policy.apply_url && window.open(policy.apply_url, '_blank', 'noopener,noreferrer')
+          }
+          className="primary-button flex w-full items-center justify-center gap-2 py-3.5 text-base"
         >
           신청 페이지 보기 <ArrowRight size={17} />
         </button>
@@ -358,8 +321,8 @@ function StateScreen({ label }: { label: string }) {
   const navigate = useNavigate()
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-cream px-6 text-center">
-      <p className="text-brand-dark/60">{label}</p>
-      <button onClick={() => navigate('/')} className="rounded-xl bg-brand-dark px-5 py-2.5 text-white">
+      <p className="text-sm text-muted">{label}</p>
+      <button onClick={() => navigate('/')} className="primary-button">
         홈으로
       </button>
     </div>
@@ -376,10 +339,46 @@ function InfoLine({
   value: string
 }) {
   return (
-    <div className="flex items-start gap-3">
-      <Icon size={18} className="mt-0.5 flex-shrink-0 text-brand" />
-      <span className="w-12 flex-shrink-0 text-sm text-brand-dark/50">{label}</span>
-      <span className="min-w-0 text-[15px] font-semibold text-brand-dark">{value}</span>
+    <div className="flex items-start gap-3 px-4 py-3.5">
+      <Icon size={17} className="mt-0.5 flex-shrink-0 text-brand" />
+      <span className="w-16 flex-shrink-0 text-sm text-muted">{label}</span>
+      <span className="min-w-0 text-sm font-medium leading-relaxed text-brand-dark">{value}</span>
+    </div>
+  )
+}
+
+function ExplanationList({
+  title,
+  icon: Icon,
+  tone,
+  items,
+}: {
+  title: string
+  icon: typeof CheckCircle2
+  tone: 'good' | 'check'
+  items: string[]
+}) {
+  return (
+    <div>
+      <h4 className="flex items-center gap-2 text-sm font-semibold text-brand-dark">
+        <Icon size={16} className={tone === 'good' ? 'text-status-green' : 'text-status-blue'} />
+        {title}
+      </h4>
+      <ul className="mt-2 border-y border-line">
+        {items.map((item) => (
+          <li
+            key={item}
+            className="flex gap-2.5 border-b border-line py-3 text-sm leading-relaxed text-brand-dark/75 last:border-b-0"
+          >
+            <span
+              className={`mt-2 h-1.5 w-1.5 flex-shrink-0 rounded-full ${
+                tone === 'good' ? 'bg-status-green' : 'bg-status-blue'
+              }`}
+            />
+            <span>{item.replace(/^-\s*/, '')}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
@@ -387,9 +386,9 @@ function InfoLine({
 function Section({ title, content }: { title: string; content?: string | null }) {
   if (!content) return null
   return (
-    <section className="mt-6">
-      <h3 className="text-lg font-bold text-brand-dark">{title}</h3>
-      <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-brand-dark/70">
+    <section className="mt-8 border-t border-line pt-7">
+      <h3 className="section-title">{title}</h3>
+      <p className="mt-3 whitespace-pre-line text-[15px] leading-[1.75] text-brand-dark/75">
         {content}
       </p>
     </section>

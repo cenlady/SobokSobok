@@ -1,4 +1,4 @@
-import { ArrowRight, Bookmark, BookmarkCheck } from 'lucide-react'
+import { Bookmark, BookmarkCheck, ChevronRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ddayLabel } from '../lib/format'
 import { toDateKey } from '../lib/calendar'
@@ -56,97 +56,98 @@ interface Props {
 export default function PolicyCard({ policy, saved, onToggleSave, savePending }: Props) {
   const navigate = useNavigate()
   const deadline = toDateKey(policy.apply_end)
+  const categoryLabel = policy.categories?.[0]
+    ? NEED_OPTIONS.find((option) => option.tag === policy.categories?.[0])?.label || policy.categories[0]
+    : null
+  const supportLabel = policy.support_type
+    ? getSupportTypeLabels(policy.support_type)[0]
+    : null
+  const goToDetail = () =>
+    navigate(`/policy/${policy.policy_id}`, {
+      // 추천 탭에서 온 경우 이유·경고를 함께 넘긴다. 서버 설명 생성이 실패했을 때
+      // 상세 화면이 이걸로 폴백한다. 다른 탭에서는 undefined라 폴백만 일반 문구가 된다.
+      state: policy.match_status ? { recommendation: policy } : undefined,
+    })
 
   return (
-    <article className="rounded-2xl bg-white p-4 shadow-card">
-      <div className="flex items-start justify-between gap-3">
+    <article
+      role="link"
+      tabIndex={0}
+      onClick={goToDetail}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') goToDetail()
+      }}
+      className="group cursor-pointer bg-surface px-4 py-4 outline-none transition-colors hover:bg-white focus-visible:bg-white"
+    >
+      <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex items-center gap-2 text-xs font-medium text-muted">
+            <span>{categoryLabel || supportLabel || '지원 정책'}</span>
             {policy.match_status && (
-              <span
-                className={`rounded-lg px-2 py-0.5 text-xs font-bold ${
-                  policy.match_status === 'eligible'
-                    ? 'bg-green-50 text-status-green'
-                    : 'bg-blue-50 text-status-blue'
-                }`}
-              >
-                {policy.match_status === 'eligible' ? '추천 가능' : '확인 필요'}
-              </span>
-            )}
-            {policy.categories?.map((category) => (
-              <span
-                key={category}
-                className="rounded-lg bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent"
-              >
-                {NEED_OPTIONS.find((option) => option.tag === category)?.label || category}
-              </span>
-            ))}
-            {!policy.categories?.length &&
-              policy.support_type &&
-              getSupportTypeLabels(policy.support_type).map((label) => (
+              <>
+                <span className="h-0.5 w-0.5 rounded-full bg-brand-dark/30" />
                 <span
-                  key={label}
-                  className="rounded-lg bg-brand-light/20 px-2 py-0.5 text-xs font-semibold text-brand"
+                  className={
+                    policy.match_status === 'eligible' ? 'text-status-green' : 'text-status-blue'
+                  }
                 >
-                  {label}
+                  {policy.match_status === 'eligible' ? '조건 일치' : '추가 확인 필요'}
                 </span>
-              ))}
-            {deadline && (
-              <span className="rounded-lg bg-red-50 px-2 py-0.5 text-xs font-bold text-status-red">
-                {ddayLabel(deadline)}
-              </span>
+              </>
             )}
           </div>
-          <h4 className="mt-2 line-clamp-2 text-base font-bold leading-snug text-brand-dark">
+          <h4 className="mt-1.5 line-clamp-2 text-[15px] font-semibold leading-snug text-brand-dark">
             {policy.title}
           </h4>
+          {policy.summary && (
+            <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-muted">
+              {policy.summary}
+            </p>
+          )}
         </div>
 
+        <div className="flex flex-shrink-0 flex-col items-end gap-2">
+          {deadline && (
+            <span className="text-xs font-bold tabular-nums text-status-red">
+              {ddayLabel(deadline)}
+            </span>
+          )}
         <button
           type="button"
-          onClick={() => onToggleSave(policy.policy_id)}
+          onClick={(event) => {
+            event.stopPropagation()
+            onToggleSave(policy.policy_id)
+          }}
+          onKeyDown={(event) => event.stopPropagation()}
           disabled={savePending}
           aria-label={saved ? '저장 해제' : '정책 저장'}
-          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full transition-colors ${
-            saved ? 'bg-accent-soft text-accent' : 'bg-black/[0.04] text-brand-dark/40'
-          } active:scale-95 disabled:opacity-50`}
+          className={`flex h-8 w-8 items-center justify-center rounded-md border transition-colors ${
+            saved
+              ? 'border-brand/20 bg-accent-soft text-brand'
+              : 'border-line bg-transparent text-brand-dark/35'
+          } active:bg-black/5 disabled:opacity-50`}
         >
-          {saved ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+          {saved ? <BookmarkCheck size={17} /> : <Bookmark size={17} />}
         </button>
+        </div>
       </div>
 
-      {policy.summary && (
-        <p className="mt-2 line-clamp-2 text-sm leading-relaxed text-brand-dark/60">
-          {policy.summary}
-        </p>
-      )}
-
       {(policy.reasons?.length || policy.warnings?.length) && (
-        <div className="mt-3 space-y-1">
-          {policy.reasons?.slice(0, 2).map((reason) => (
-            <p key={reason} className="text-xs font-medium text-brand-dark/60">
-              {reason}
+        <div className="mt-3 border-l-2 border-brand-light pl-3">
+          <p className="text-[11px] font-semibold text-brand">내 정보와 맞는 조건</p>
+          {policy.reasons?.[0] && (
+            <p className="mt-1 text-xs leading-relaxed text-brand-dark/65">
+              {policy.reasons[0]}
             </p>
-          ))}
+          )}
           {policy.warnings?.[0] && (
-            <p className="text-xs font-medium text-status-blue">{policy.warnings[0]}</p>
+            <p className="mt-1 text-xs leading-relaxed text-status-blue">{policy.warnings[0]}</p>
           )}
         </div>
       )}
-
-      <button
-        type="button"
-        onClick={() =>
-          navigate(`/policy/${policy.policy_id}`, {
-            // 추천 탭에서 온 경우 이유·경고를 함께 넘긴다. 서버 설명 생성이 실패했을 때
-            // 상세 화면이 이걸로 폴백한다. 다른 탭에서는 undefined라 폴백만 일반 문구가 된다.
-            state: policy.match_status ? { recommendation: policy } : undefined,
-          })
-        }
-        className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-brand-dark py-2.5 text-sm font-semibold text-white active:scale-[0.99]"
-      >
-        상세보기 <ArrowRight size={15} />
-      </button>
+      <span className="mt-3 flex items-center justify-end gap-0.5 text-[11px] font-medium text-brand-dark/45">
+        공고 자세히 보기 <ChevronRight size={13} />
+      </span>
     </article>
   )
 }

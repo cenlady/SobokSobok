@@ -16,7 +16,7 @@ export default function BenefitDetailScreen() {
         <p className="text-brand-dark/60">혜택 정보를 찾을 수 없어요.</p>
         <button
           onClick={() => navigate('/')}
-          className="rounded-xl bg-brand-dark px-5 py-2.5 text-white"
+          className="primary-button"
         >
           홈으로
         </button>
@@ -29,11 +29,11 @@ export default function BenefitDetailScreen() {
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col bg-cream">
       {/* 헤더 */}
-      <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-4 py-4 backdrop-blur">
+      <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-line bg-cream/95 px-4 backdrop-blur-sm">
         <button onClick={() => navigate(-1)} className="p-1 text-brand-dark active:opacity-60">
-          <ChevronLeft size={26} />
+          <ChevronLeft size={23} />
         </button>
-        <h1 className="text-lg font-semibold text-brand-dark">혜택 상세</h1>
+        <h1 className="text-base font-semibold text-brand-dark">혜택 상세</h1>
         <button onClick={() => toggle(benefit.id)} className="p-1">
           <Bookmark
             size={24}
@@ -42,12 +42,12 @@ export default function BenefitDetailScreen() {
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-28">
-        <div className="flex items-center gap-2">
-          <span className={`rounded-lg px-2.5 py-1 text-sm font-bold ${meta.iconBg} ${meta.text}`}>
+      <div className="flex-1 overflow-y-auto px-5 pb-28 pt-5">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className={`font-semibold ${meta.text}`}>
             {meta.label}
           </span>
-          <span className="rounded-lg bg-brand-dark/5 px-2.5 py-1 text-sm font-bold text-brand-dark/70">
+          <span className="font-bold text-status-red">
             {ddayLabel(benefit.dueDate)}
           </span>
         </div>
@@ -57,12 +57,12 @@ export default function BenefitDetailScreen() {
         </h2>
 
         {benefit.amount && (
-          <div className="mt-4 inline-flex items-center gap-2 rounded-xl bg-green-100 px-4 py-2">
-            <span className="text-lg font-bold text-status-green">🎁 {benefit.amount}</span>
+          <div className="mt-4 border-l-2 border-status-green pl-3">
+            <span className="text-lg font-bold text-status-green">{benefit.amount}</span>
           </div>
         )}
 
-        <div className="mt-6 space-y-3 rounded-2xl bg-white p-5 shadow-card">
+        <div className="surface-panel mt-6 divide-y divide-line overflow-hidden">
           <InfoLine icon={Tag} label="분야" value={benefit.category} />
           <InfoLine icon={MapPin} label="지역" value={benefit.region ?? '전국'} />
           <InfoLine
@@ -76,15 +76,15 @@ export default function BenefitDetailScreen() {
           />
         </div>
 
-        <h3 className="mt-6 text-lg font-bold text-brand-dark">지원 내용</h3>
-        <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-brand-dark/70">
+        <h3 className="mt-8 border-t border-line pt-7 text-base font-bold text-brand-dark">지원 내용</h3>
+        <p className="mt-3 whitespace-pre-line text-[15px] leading-[1.75] text-brand-dark/75">
           {benefit.content ?? benefit.summary}
         </p>
       </div>
 
       {/* 하단 고정 CTA */}
-      <div className="absolute bottom-0 left-0 right-0 border-t border-black/5 bg-cream px-5 py-4">
-        <button className="w-full rounded-2xl bg-brand-dark py-4 text-lg font-bold text-white active:scale-[0.99]">
+      <div className="absolute bottom-0 left-0 right-0 border-t border-line bg-surface px-5 py-3">
+        <button className="primary-button w-full py-3.5 text-base">
           신청하러 가기
         </button>
       </div>
@@ -102,10 +102,10 @@ function InfoLine({
   value: string
 }) {
   return (
-    <div className="flex items-center gap-3">
-      <Icon size={18} className="text-brand" />
-      <span className="w-12 text-sm text-brand-dark/50">{label}</span>
-      <span className="text-[15px] font-semibold text-brand-dark">{value}</span>
+    <div className="flex items-start gap-3 px-4 py-3.5">
+      <Icon size={17} className="mt-0.5 text-brand" />
+      <span className="w-12 text-sm text-muted">{label}</span>
+      <span className="min-w-0 text-sm font-medium leading-relaxed text-brand-dark">{value}</span>
     </div>
   )
 }
