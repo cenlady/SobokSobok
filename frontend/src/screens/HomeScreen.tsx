@@ -35,11 +35,11 @@ export default function HomeScreen() {
   const [selected, setSelected] = useState(TODAY)
 
   // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
-  const [googleEvents, setGoogleEvents] = useState<{ date: string; summary: string }[]>([])
+  const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string }[]>([])
 
   useEffect(() => {
     let ignore = false
-    apiFetch<{ date: string; summary: string }[]>('/api/v1/calendar/events')
+    apiFetch<{ date: string; time: string | null; summary: string }[]>('/api/v1/calendar/events')
       .then((data) => {
         if (!ignore) setGoogleEvents(data)
       })
@@ -52,9 +52,9 @@ export default function HomeScreen() {
   }, [])
 
   const googleEventsMap = useMemo(() => {
-    const map: Record<string, string[]> = {}
+    const map: Record<string, { time: string | null; summary: string }[]> = {}
     for (const ev of googleEvents) {
-      ;(map[ev.date] ??= []).push(ev.summary)
+      ;(map[ev.date] ??= []).push({ time: ev.time, summary: ev.summary })
     }
     return map
   }, [googleEvents])
@@ -226,14 +226,21 @@ export default function HomeScreen() {
               <>
                 {selGoogleEvents.length > 0 && (
                   <div className="mb-3 space-y-2">
-                    {selGoogleEvents.map((summary, i) => (
+                    {selGoogleEvents.map((ev, i) => (
                       <div key={i} className="flex items-center gap-3 rounded-2xl bg-blue-50/70 p-4 border border-blue-100/60 shadow-card">
                         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 text-blue-600">
                           <CalendarDays size={16} />
                         </div>
                         <div className="flex-1">
-                          <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">구글 캘린더 일정</span>
-                          <p className="text-sm font-semibold text-ink leading-snug mt-0.5">{summary}</p>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">구글 캘린더 일정</span>
+                            {ev.time && (
+                              <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] font-bold text-blue-600">
+                                {ev.time}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm font-semibold text-ink leading-snug mt-0.5">{ev.summary}</p>
                         </div>
                       </div>
                     ))}

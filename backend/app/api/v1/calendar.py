@@ -78,9 +78,10 @@ async def get_valid_google_token(user: User, db: Session) -> str:
                 detail=f"Google Token refresh connection error: {e}"
             )
 
-async def get_google_calendar_events(access_token: str) -> List[str]:
+async def get_google_calendar_events(access_token: str) -> List[dict]:
     """
     구글 캘린더 API를 찔러 사용자의 향후 2주일간의 개인 일정을 조회합니다. (MCP Tool 역할 래퍼)
+    시간(dateTime) 정보가 있으면 시/분 범위도 함께 파싱해 반환합니다.
     """
     now = datetime.now(timezone.utc)
     time_min = now.isoformat()
@@ -109,10 +110,29 @@ async def get_google_calendar_events(access_token: str) -> List[str]:
             schedules = []
             for item in items:
                 summary = item.get("summary", "이름 없음")
-                start_date = item.get("start", {}).get("date") or item.get("start", {}).get("dateTime", "")
-                if start_date:
-                    short_date = start_date[:10]  # YYYY-MM-DD
-                    schedules.append(f"{short_date}: {summary}")
+                start_date_obj = item.get("start", {})
+                end_date_obj = item.get("end", {})
+                
+                start_dt = start_date_obj.get("dateTime")
+                start_d = start_date_obj.get("date")
+                
+                if start_dt:
+                    date_str = start_dt[:10]
+                    start_time = start_dt[11:16]
+                    end_dt = end_date_obj.get("dateTime")
+                    end_time = end_dt[11:16] if end_dt else None
+                    time_str = f"{start_time} ~ {end_time}" if end_time else start_time
+                elif start_d:
+                    date_str = start_d[:10]
+                    time_str = None
+                else:
+                    continue
+
+                schedules.append({
+                    "date": date_str,
+                    "time": time_str,
+                    "summary": summary
+                })
             return schedules
         except Exception:
             return []
@@ -209,19 +229,7 @@ async def get_my_google_events(
     """
     try:
         access_token = await get_valid_google_token(current_user, db)
-        raw_schedules = await get_google_calendar_events(access_token)
-        
-        parsed_events = []
-        for item in raw_schedules:
-            if ":" in item:
-                parts = item.split(":", 1)
-                event_date = parts[0].strip()
-                event_summary = parts[1].strip()
-                parsed_events.append({
-                    "date": event_date,
-                    "summary": event_summary
-                })
-        return parsed_events
+        return await get_google_calendar_events(access_token)
     except Exception as e:
         if isinstance(e, HTTPException):
             raise
@@ -271,7 +279,11 @@ async def get_calendar_coach_timeline(
 
     # 4) AI 프롬프트 콘텍스트 조립
     deadline_str = policy.apply_end.strftime("%Y-%m-%d")
-    schedules_text = "\n".join(user_schedules) if user_schedules else "등록된 개인 일정이 없어 매우 한가한 상태입니다."
+    schedules_list = []
+    for item in user_schedules:
+        time_part = f" ({item['time']})" if item.get('time') else ""
+        schedules_list.append(f"{item['date']}{time_part}: {item['summary']}")
+    schedules_text = "\n".join(schedules_list) if schedules_list else "등록된 개인 일정이 없어 매우 한가한 상태입니다."
     required_docs_text = str(policy.required_documents) if policy.required_documents else "공고 참조"
 
     system_prompt = (
