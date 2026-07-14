@@ -42,7 +42,7 @@ export default function LoginScreen() {
         <button
           onClick={startGoogleLogin}
           disabled={loading}
-          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-line bg-white py-3.5 text-base font-semibold text-ink shadow-card active:scale-[0.99] disabled:opacity-60"
+          className="flex h-12 w-full items-center justify-center gap-3 rounded-xl border border-line bg-white text-[15px] font-semibold text-ink shadow-card transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle"
         >
           <GoogleMark />
           {loading ? '이동 중…' : 'Google로 시작하기'}

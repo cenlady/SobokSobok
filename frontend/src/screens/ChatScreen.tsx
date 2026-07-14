@@ -177,7 +177,7 @@ export default function ChatScreen() {
             <p className="mt-1 break-all text-xs text-white/70">policyId: {policyId}</p>
             <button
               onClick={() => navigate(`/policy/${policyId}`)}
-              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-ink"
+              className="mt-3 rounded-xl bg-surface px-3 py-2 text-xs font-bold text-ink"
             >
               정책 상세 다시 보기
             </button>
@@ -239,7 +239,7 @@ export default function ChatScreen() {
           <button
             type="submit"
             disabled={sending}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-accent text-white active:scale-95 disabled:opacity-50"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
           >
             {sending ? <LoaderCircle size={18} className="animate-spin" /> : <Send size={18} />}
           </button>

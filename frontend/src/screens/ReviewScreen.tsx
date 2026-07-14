@@ -235,7 +235,7 @@ function IdleForm({
         </h3>
 
         {noSaved ? (
-          <div className="mt-3 rounded-2xl bg-white p-4 shadow-card">
+          <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card">
             <p className="text-sm leading-relaxed text-muted">
               저장한 정책이 없어요. 정책을 저장하면 그 정책이 요구하는 서류가
               빠지지 않았는지도 함께 확인해드려요.
@@ -304,7 +304,7 @@ function IdleForm({
         <button
           onClick={onSubmit}
           disabled={!file}
-          className="mt-5 w-full rounded-2xl bg-primary py-3.5 text-base font-semibold text-white shadow-lg shadow-primary/20 active:scale-[0.99] disabled:bg-primary/30 disabled:shadow-none"
+          className="mt-5 flex h-12 w-full items-center justify-center rounded-xl bg-primary text-[15px] font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           검토 시작하기
         </button>
@@ -324,7 +324,7 @@ function Progress({
 
   return (
     <section className="mt-8 px-5">
-      <div className="rounded-3xl bg-white p-6 shadow-card">
+      <div className="rounded-3xl bg-surface p-6 shadow-card">
         <div className="space-y-5">
           {stages.map((stage, i) => {
             const done = activeIndex > i
@@ -478,7 +478,7 @@ function FindingList({
         : 'bg-brand-light/20 text-brand'
 
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-card">
+    <div className="rounded-2xl bg-surface p-4 shadow-card">
       <div className="flex items-center gap-2">
         <h4 className="text-sm font-bold text-ink">{title}</h4>
         {empty ? (

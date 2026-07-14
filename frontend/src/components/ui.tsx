@@ -76,13 +76,18 @@ interface ButtonProps {
 
 const VARIANT: Record<ButtonVariant, string> = {
   // 진흙빛 초콜릿(#6F4A12) 대신 채도 높은 테라코타. 밝기가 아니라 채도가 생기를 만든다.
-  primary: 'bg-primary text-white active:bg-primary-hover disabled:bg-subtle',
-  secondary: 'bg-white text-ink border border-line active:bg-line/40 disabled:text-subtle',
+  //
+  // disabled는 '채도를 낮춘 primary'가 아니라 아예 다른 색이어야 한다. bg-primary/30
+  // 같은 투명도는 색이 살아 있어 활성 버튼처럼 보인다. 회색 면 + 흐린 글자로 확실히 끈다.
+  primary: 'bg-primary text-white active:bg-primary-hover disabled:bg-line disabled:text-subtle',
+  secondary:
+    'bg-white text-ink border border-line active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent',
   ghost: 'text-muted active:text-ink disabled:text-subtle',
 }
 
+// 최소 높이 44px — 손가락이 닿는 영역의 하한이다.
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'h-9 px-3 text-[13px] font-semibold rounded-lg gap-1',
+  sm: 'h-11 px-3.5 text-[13px] font-semibold rounded-lg gap-1',
   md: 'h-12 px-5 text-[15px] font-bold rounded-xl gap-1.5',
 }
 
@@ -110,6 +115,47 @@ export function Button({
   )
 }
 
+/* ────────────────────── 아이콘 버튼 ────────────────────── */
+
+interface IconButtonProps {
+  icon: LucideIcon
+  onClick?: () => void
+  label: string
+  disabled?: boolean
+  /** 눌린 상태 (저장됨 등) */
+  active?: boolean
+  className?: string
+}
+
+/**
+ * 아이콘만 있는 버튼.
+ *
+ * 달력 화살표·북마크·연필처럼 눈에 보이는 크기가 작은 버튼들이 터치 영역까지 작으면
+ * 누르기가 어렵다. 보이는 크기와 무관하게 손가락이 닿는 영역은 44×44를 보장한다.
+ */
+export function IconButton({
+  icon: Icon,
+  onClick,
+  label,
+  disabled,
+  active,
+  className = '',
+}: IconButtonProps) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors active:scale-95 disabled:pointer-events-none disabled:text-faint ${
+        active ? 'bg-accent-soft text-brand' : 'text-muted active:bg-line/50'
+      } ${className}`}
+    >
+      <Icon size={20} strokeWidth={1.9} />
+    </button>
+  )
+}
+
 /* ──────────────────────── 빈 상태 ──────────────────────── */
 
 interface EmptyStateProps {
@@ -133,7 +179,7 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center px-6 py-12 text-center">
-      <Icon size={40} strokeWidth={1.5} className="text-subtle" />
+      <Icon size={40} strokeWidth={1.5} className="text-faint" />
       <p className="mt-4 text-[15px] font-semibold text-ink">{title}</p>
       {description && (
         <p className="mt-1.5 max-w-[260px] text-sm leading-relaxed text-muted">{description}</p>

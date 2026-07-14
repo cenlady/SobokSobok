@@ -196,17 +196,22 @@ export default function PolicySearchScreen() {
       <section className="px-5">
         <h2 className="text-title text-ink">정책 찾기</h2>
 
-        {/* 세그먼트 탭 */}
-        <div className="mt-4 flex gap-1 rounded-2xl bg-line/60 p-1">
+        {/* 세그먼트 탭 — 밑줄형.
+            알약형(배경 채운 것)은 그 자체가 한 덩어리로 튀어서, 정작 아래 목록보다
+            먼저 눈에 들어온다. 탭은 길잡이지 주인공이 아니다. */}
+        <div className="mt-4 flex border-b border-line">
           {TABS.map(({ key, label }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`flex-1 rounded-xl py-2.5 text-sm font-bold transition-colors ${
-                tab === key ? 'bg-white text-ink shadow-card' : 'text-subtle'
+              className={`relative h-11 flex-1 text-sm transition-colors ${
+                tab === key ? 'font-bold text-ink' : 'font-medium text-muted hover:text-ink'
               }`}
             >
               {label}
+              {tab === key && (
+                <span className="absolute inset-x-3 -bottom-px h-0.5 rounded-full bg-primary" />
+              )}
             </button>
           ))}
         </div>
@@ -230,20 +235,22 @@ export default function PolicySearchScreen() {
               </button>
             </div>
 
-            <div className="mt-4 space-y-3">
+            <div className="mt-4">
               {recError && <ErrorBox message={recError} />}
               {!recError && recLoading && <InfoBox message="맞춤 정책을 계산하고 있어요." />}
-              {!recLoading &&
-                !recError &&
-                recommendations.map((policy) => (
-                  <PolicyCard
-                    key={policy.policy_id}
-                    policy={policy}
-                    saved={has(policy.policy_id)}
-                    savePending={pendingSave === policy.policy_id}
-                    onToggleSave={handleToggleSave}
-                  />
-                ))}
+              {!recLoading && !recError && recommendations.length > 0 && (
+                <div className="surface-panel divide-y divide-line overflow-hidden">
+                  {recommendations.map((policy) => (
+                    <PolicyCard
+                      key={policy.policy_id}
+                      policy={policy}
+                      saved={has(policy.policy_id)}
+                      savePending={pendingSave === policy.policy_id}
+                      onToggleSave={handleToggleSave}
+                    />
+                  ))}
+                </div>
+              )}
               {!recLoading && !recError && recommendations.length === 0 && (
                 <InfoBox message="조건에 맞는 정책을 찾지 못했어요. 마이페이지에서 정보를 수정해보세요." />
               )}
@@ -253,7 +260,7 @@ export default function PolicySearchScreen() {
 
         {tab === 'saved' && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-white p-3 shadow-card">
+            <div className="rounded-2xl bg-surface p-3 shadow-card">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-ink">저장한 정책 {savedCards.length}개</p>
                 <span className="text-xs text-subtle">마감된 정책은 기본으로 숨겨요</span>
@@ -329,21 +336,25 @@ export default function PolicySearchScreen() {
             {!savedLoading && saved.length > 0 && savedCards.length === 0 && (
               <InfoBox message="선택한 조건으로 저장한 정책이 없어요. 다른 필터를 선택해보세요." />
             )}
-            {savedCards.map((policy) => (
-              <PolicyCard
-                key={policy.policy_id}
-                policy={policy}
-                saved
-                savePending={pendingSave === policy.policy_id}
-                onToggleSave={handleToggleSave}
-              />
-            ))}
+            {savedCards.length > 0 && (
+              <div className="surface-panel divide-y divide-line overflow-hidden">
+                {savedCards.map((policy) => (
+                  <PolicyCard
+                    key={policy.policy_id}
+                    policy={policy}
+                    saved
+                    savePending={pendingSave === policy.policy_id}
+                    onToggleSave={handleToggleSave}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {tab === 'all' && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-white p-3 shadow-card">
+            <div className="rounded-2xl bg-surface p-3 shadow-card">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-ink">
                   {allMeta ? `${allMeta.total}개 정책` : '전체 정책'}
@@ -425,17 +436,19 @@ export default function PolicySearchScreen() {
 
             {allLoading && <InfoBox message="전체 정책을 불러오는 중이에요." />}
             {allError && <ErrorBox message={allError} />}
-            {!allLoading &&
-              !allError &&
-              all.map((policy) => (
-                <PolicyCard
-                  key={policy.policy_id}
-                  policy={policy}
-                  saved={has(policy.policy_id)}
-                  savePending={pendingSave === policy.policy_id}
-                  onToggleSave={handleToggleSave}
-                />
-              ))}
+            {!allLoading && !allError && all.length > 0 && (
+              <div className="surface-panel divide-y divide-line overflow-hidden">
+                {all.map((policy) => (
+                  <PolicyCard
+                    key={policy.policy_id}
+                    policy={policy}
+                    saved={has(policy.policy_id)}
+                    savePending={pendingSave === policy.policy_id}
+                    onToggleSave={handleToggleSave}
+                  />
+                ))}
+              </div>
+            )}
             {!allLoading && !allError && all.length === 0 && (
               <InfoBox message="조건에 맞는 정책이 없어요. 다른 분야나 지역을 선택해보세요." />
             )}
@@ -446,7 +459,7 @@ export default function PolicySearchScreen() {
                   disabled={allPage === 0}
                   onClick={() => setAllPage((page) => page - 1)}
                   aria-label="이전 페이지"
-                  className="shrink-0 rounded-xl bg-white px-3 py-2.5 text-sm font-bold text-ink shadow-card disabled:opacity-30"
+                  className="h-11 shrink-0 rounded-lg border border-line bg-white px-3 text-sm font-bold text-ink transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent"
                 >
                   이전
                 </button>
@@ -483,7 +496,7 @@ export default function PolicySearchScreen() {
                   disabled={!allMeta.has_next || allPage + 1 >= allPageCount}
                   onClick={() => setAllPage((page) => page + 1)}
                   aria-label="다음 페이지"
-                  className="shrink-0 rounded-xl bg-primary px-3 py-2.5 text-sm font-bold text-white disabled:opacity-30"
+                  className="h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
                 >
                   다음
                 </button>
@@ -509,7 +522,7 @@ function RefetchOnTab({ tab, onSavedTab }: { tab: Tab; onSavedTab: () => void })
 
 function InfoBox({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl bg-white p-4 text-sm font-medium text-muted shadow-card">
+    <div className="rounded-2xl bg-surface p-4 text-sm font-medium text-muted shadow-card">
       {message}
     </div>
   )
@@ -569,7 +582,7 @@ function toTimestamp(value: string | null | undefined) {
 
 function ErrorBox({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl bg-white p-4 text-sm font-medium text-status-red shadow-card">
+    <div className="rounded-2xl bg-surface p-4 text-sm font-medium text-status-red shadow-card">
       {message}
     </div>
   )

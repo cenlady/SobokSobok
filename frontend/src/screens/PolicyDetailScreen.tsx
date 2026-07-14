@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import {
   ArrowRight,
-  Bot,
   Bookmark,
+  BookmarkCheck,
+  MessageCircle,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   MapPin,
   Sparkles,
@@ -21,7 +23,8 @@ import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
 import { formatDate } from '../lib/calendar'
 import { formatPeriod, getDeadlineInfo } from '../lib/deadline'
-import { StatusBadge } from '../components/ui'
+import { cleanPolicyText, truncateAtSentence } from '../lib/text'
+import { IconButton, StatusBadge } from '../components/ui'
 import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
 import type {
@@ -160,17 +163,16 @@ export default function PolicyDetailScreen() {
 
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
-      <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-4 py-4 backdrop-blur">
-        <button onClick={() => navigate(-1)} className="p-1 text-ink active:opacity-60">
-          <ChevronLeft size={26} />
-        </button>
-        <h1 className="text-lg font-semibold text-ink">정책 상세</h1>
-        <button onClick={toggleSave} className="p-1" aria-label="정책 저장">
-          <Bookmark
-            size={24}
-            className={isSaved ? 'fill-brand text-brand' : 'text-subtle'}
-          />
-        </button>
+      <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-3 py-2 backdrop-blur">
+        <IconButton icon={ChevronLeft} onClick={() => navigate(-1)} label="뒤로" />
+        <h1 className="text-[15px] font-semibold text-ink">정책 상세</h1>
+        <IconButton
+          icon={isSaved ? BookmarkCheck : Bookmark}
+          onClick={toggleSave}
+          disabled={savePending}
+          active={isSaved}
+          label={isSaved ? '저장 해제' : '정책 저장'}
+        />
       </header>
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-6">
@@ -183,12 +185,12 @@ export default function PolicyDetailScreen() {
           <p className="mt-2 text-sm font-semibold text-muted">{policy.organization}</p>
         )}
         {policy.summary && (
-          <p className="mt-4 rounded-2xl bg-white p-4 text-[15px] leading-relaxed text-muted shadow-card">
+          <p className="mt-4 rounded-2xl bg-surface p-4 text-[15px] leading-relaxed text-muted shadow-card">
             {policy.summary}
           </p>
         )}
 
-        <div className="mt-5 space-y-3 rounded-2xl bg-white p-5 shadow-card">
+        <div className="mt-5 space-y-3 rounded-2xl bg-surface p-5 shadow-card">
           <InfoLine icon={MapPin} label="지역" value={regionText} />
           {/* 날짜가 없으면 "미정 ~ 미정" 대신, 상시 접수인지 우리가 모르는지를 말한다.
               둘은 전혀 다른 얘기다. */}
@@ -208,7 +210,7 @@ export default function PolicyDetailScreen() {
             <h3 className="flex items-center gap-1.5 text-section text-ink">
               <Sparkles size={19} className="text-brand animate-pulse" /> AI 추천 이유
             </h3>
-            <div className="mt-3 rounded-2xl bg-white p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
+            <div className="mt-3 rounded-2xl bg-surface p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
               <div className="relative flex h-10 w-10 items-center justify-center rounded-full bg-brand-light/10 text-brand">
                 <Sparkles size={20} className="animate-bounce" />
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/10 opacity-75"></span>
@@ -228,7 +230,7 @@ export default function PolicyDetailScreen() {
               <h3 className="flex items-center gap-1.5 text-section text-ink">
                 <Sparkles size={19} className="text-brand fill-brand/10" /> AI 추천 이유
               </h3>
-              <div className="mt-3 rounded-2xl bg-white p-4 shadow-card border-l-4 border-brand">
+              <div className="mt-3 rounded-2xl bg-surface p-4 shadow-card border-l-4 border-brand">
                 <p className="text-[15px] font-bold leading-relaxed text-ink">
                   {explanation.summary}
                 </p>
@@ -243,7 +245,7 @@ export default function PolicyDetailScreen() {
                 </h3>
                 <div className="mt-3 space-y-2">
                   {explanation.strengths.map((strength) => (
-                    <div key={strength} className="flex items-start gap-2 rounded-2xl bg-white p-3.5 shadow-card">
+                    <div key={strength} className="flex items-start gap-2 rounded-2xl bg-surface p-3.5 shadow-card">
                       <span className="text-brand font-bold mt-0.5">•</span>
                       <p className="text-sm font-semibold text-ink">
                         {strength.replace(/^-\s*/, '')}
@@ -311,7 +313,7 @@ export default function PolicyDetailScreen() {
                   download={file.original_file_name || 'attachment'}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 rounded-2xl bg-white p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
+                  className="flex items-center gap-2 rounded-2xl bg-surface p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
                 >
                   <FileText size={18} className="text-brand flex-shrink-0" />
                   <span className="text-[14px] font-semibold truncate flex-1 text-ink">
@@ -329,16 +331,16 @@ export default function PolicyDetailScreen() {
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => navigate(`/chat?policyId=${policy.id}`)}
-            className="flex items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-ink shadow-card active:scale-[0.99]"
+            className="flex h-12 items-center justify-center gap-1.5 rounded-xl border border-line bg-white text-[15px] font-bold text-ink transition-colors active:bg-line/40"
           >
-            <Bot size={17} /> AI 상담
+            <MessageCircle size={16} strokeWidth={1.9} /> AI 상담
           </button>
           <AddToCalendarButton policyId={policy.id} applyEnd={policy.apply_end} variant="full" />
         </div>
         <button
           disabled={!policy.apply_url}
           onClick={() => policy.apply_url && window.open(policy.apply_url, '_blank', 'noopener,noreferrer')}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-white disabled:bg-subtle active:scale-[0.99]"
+          className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-primary text-[15px] font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
         >
           신청 페이지 보기 <ArrowRight size={17} />
         </button>
@@ -378,14 +380,40 @@ function InfoLine({
   )
 }
 
+/**
+ * 공고 본문 섹션.
+ *
+ * 예전에는 원문을 whitespace-pre-line으로 그대로 뿌렸다. PDF·HWP에서 뽑은 텍스트라
+ * 문장이 중간에서 끊기고 빈 줄이 서너 개씩 이어져 읽기가 어려웠다.
+ * 다듬은 뒤, 긴 건 앞부분만 보여주고 나머지는 접는다.
+ */
 function Section({ title, content }: { title: string; content?: string | null }) {
-  if (!content) return null
+  const [expanded, setExpanded] = useState(false)
+
+  const text = cleanPolicyText(content)
+  if (!text) return null
+
+  const preview = truncateAtSentence(text)
+  const isLong = preview !== text
+
   return (
     <section className="mt-6">
       <h3 className="text-section text-ink">{title}</h3>
-      <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-muted">
-        {content}
+      <p className="mt-2 whitespace-pre-line text-[15px] leading-[1.7] text-muted">
+        {expanded || !isLong ? text : preview}
       </p>
+      {isLong && (
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-2 flex h-11 items-center gap-1 text-sm font-semibold text-primary"
+        >
+          {expanded ? '접기' : '원문 더 보기'}
+          <ChevronDown
+            size={15}
+            className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+          />
+        </button>
+      )}
     </section>
   )
 }
