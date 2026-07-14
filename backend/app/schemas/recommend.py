@@ -60,7 +60,14 @@ class RecommendationResult(BaseModel):
 
 class RecommendationPreviewResponse(BaseModel):
     total_candidates: int
+    filtered_candidates: int
     returned: int
+    skip: int
+    limit: int
+    has_next: bool
+    status_counts: dict[Literal["eligible", "needs_review", "near_match"], int] = Field(
+        default_factory=lambda: {"eligible": 0, "needs_review": 0, "near_match": 0}
+    )
     vector_used: bool
     profile_warnings: list[str] = Field(default_factory=list)
     results: list[RecommendationResult]

@@ -72,7 +72,12 @@ export interface RecommendationResult {
 
 export interface RecommendationPreviewResponse {
   total_candidates: number
+  filtered_candidates: number
   returned: number
+  skip: number
+  limit: number
+  has_next: boolean
+  status_counts: Record<'eligible' | 'needs_review' | 'near_match', number>
   vector_used: boolean
   profile_warnings: string[]
   results: RecommendationResult[]
