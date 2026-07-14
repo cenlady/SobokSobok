@@ -8,6 +8,7 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 import os
+import re
 
 from app.core.database import get_db
 # 인증은 우리 JWT로 한다(app/core/deps). 구글 access token을 브라우저에 넘기지 않으므로
@@ -110,6 +111,15 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
             schedules = []
             for item in items:
                 summary = item.get("summary", "이름 없음")
+                description = item.get("description", "")
+                
+                # 본문 설명글에서 지원사업ID를 파싱
+                policy_id_str = None
+                if description:
+                    match = re.search(r"● 지원사업ID:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", description, re.IGNORECASE)
+                    if match:
+                        policy_id_str = match.group(1)
+
                 start_date_obj = item.get("start", {})
                 end_date_obj = item.get("end", {})
                 
@@ -131,7 +141,8 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
                 schedules.append({
                     "date": date_str,
                     "time": time_str,
-                    "summary": summary
+                    "summary": summary,
+                    "policy_id": policy_id_str
                 })
             return schedules
         except Exception:
@@ -181,7 +192,8 @@ async def register_policy_calendar_event(
         "description": (
             f"● 지원사업명: {policy.title}\n"
             f"● 소관기관: {policy.organization or '확인불가'}\n"
-            f"● 온라인 신청 주소: {policy.apply_url or '외부 링크가 명시되지 않음'}\n\n"
+            f"● 온라인 신청 주소: {policy.apply_url or '외부 링크가 명시되지 않음'}\n"
+            f"● 지원사업ID: {policy.id}\n\n"
             f"* 본 일정은 소복소복 AI RAG 시스템에 의해 사장님의 캘린더에 연동된 자동 관리 일정입니다."
         ),
         "start": {
@@ -248,6 +260,7 @@ async def get_my_google_events(
 @router.get("/coach", summary="RAG 일정 관리 AI 가이드 코치 스케줄러")
 async def get_calendar_coach_timeline(
     policy_id: UUID4,
+    target_date: Optional[str] = None,  # [이재혁 - 동적 오버라이드 목표일]
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -283,14 +296,23 @@ async def get_calendar_coach_timeline(
     google_access_token = await get_valid_google_token(current_user, db)
     user_schedules = await get_google_calendar_events(google_access_token)
 
-    # AI 코칭용: 구글 일정 중 향후 2주일(14일) 범위 내의 일정만 슬라이싱 필터링
+    # AI 코칭용: 오늘부터 해당 지원사업 마감일(policy.apply_end) 또는 사장님이 선택한 목표 날짜(target_date) 당일까지 필터링
     now_utc = datetime.now(timezone.utc)
-    two_weeks_limit = now_utc + timedelta(days=14)
+    
+    if target_date:
+        try:
+            deadline_date = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except Exception:
+            deadline_date = policy.apply_end.date() if hasattr(policy.apply_end, "date") else policy.apply_end
+    else:
+        deadline_date = policy.apply_end.date() if hasattr(policy.apply_end, "date") else policy.apply_end
+    
     filtered_schedules = []
     for item in user_schedules:
         try:
             item_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
-            if now_utc.date() <= item_date <= two_weeks_limit.date():
+            # 오늘부터 지정된 목표일 당일까지의 스케줄만 수집
+            if now_utc.date() <= item_date <= deadline_date:
                 filtered_schedules.append(item)
         except Exception:
             filtered_schedules.append(item)
@@ -300,7 +322,7 @@ async def get_calendar_coach_timeline(
     rag_context = "\n".join([c.chunk_text for c in chunks]) if chunks else "상세 제출 서류 및 우대 조건이 누락되었습니다. 일반 공고 정보에 준합니다."
 
     # 4) AI 프롬프트 콘텍스트 조립
-    deadline_str = policy.apply_end.strftime("%Y-%m-%d")
+    deadline_str = deadline_date.strftime("%Y-%m-%d")
     schedules_list = []
     for item in filtered_schedules:
         time_part = f" ({item['time']})" if item.get('time') else ""
@@ -310,7 +332,10 @@ async def get_calendar_coach_timeline(
 
     system_prompt = (
         "당신은 소상공인 사장님들의 지원금 신청 일정을 밀착 코칭해 주는 친절하고 전문적인 AI 비서 '소복이'입니다. "
-        "사장님의 개인 일정이 지원사업 준비에 방해되지 않도록 캘린더 빈틈을 노린 세심한 타임라인 가이드를 짜줍니다."
+        "사장님의 개인 일정이 지원사업 준비에 방해되지 않도록 캘린더 빈틈을 노린 세심한 타임라인 가이드를 짜줍니다.\n"
+        "[중요형식지침]: 마크다운 특수기호(샵 #, 별표 *, 백틱 ` 등)를 절대 사용하지 마세요. "
+        "오직 줄바꿈(엔터), 번호 매기기(1., 2.), 그리고 적절한 이모지만을 활용하여, "
+        "모바일 화면에서 바로 읽기 쉬운 깔끔한 플레인 텍스트로만 응답해야 합니다."
     )
     
     user_prompt = (
@@ -319,12 +344,13 @@ async def get_calendar_coach_timeline(
         f"- 신청 마감일: {deadline_str}\n"
         f"- 필수 구비 서류: {required_docs_text}\n"
         f"- RAG 상세 서류 요건:\n{rag_context}\n\n"
-        f"=== [사장님의 구글 캘린더 스케줄 (향후 2주)] ===\n"
+        f"=== [사장님의 구글 캘린더 스케줄] ===\n"
         f"{schedules_text}\n\n"
         f"위 두 가지 데이터를 치밀하게 대조 및 분석하여, "
         f"사장님이 바쁜 구글 개인 일정(겹치는 날)을 피해 접수를 마감 기한 전 무사히 마칠 수 있도록 "
         f"D-14(준비 개시), D-7(우대 증빙 발급 및 보완), D-3(최종 검토), D-Day(접수 완료) "
-        f"단계별 구체적인 행동 가이드를 친근하고 상냥한 구어체 톤으로 예쁜 Markdown 형식으로 조율해 작성해 주세요."
+        f"단계별 구체적인 행동 가이드를 친근하고 상냥한 구어체 톤으로 작성해 주세요.\n"
+        f"[필수]: 절대로 # 이나 * 같은 마크다운 특수 기호를 내용에 포함하지 말고, 순수 한글 텍스트와 이모지로만 읽기 쉽게 줄바꿈해 출력하세요."
     )
 
     # 5-A) Ollama 로컬 무료 모드 실행 분기

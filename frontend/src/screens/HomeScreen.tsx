@@ -35,11 +35,11 @@ export default function HomeScreen() {
   const [selected, setSelected] = useState(TODAY)
 
   // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
-  const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string }[]>([])
+  const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>([])
 
   useEffect(() => {
     let ignore = false
-    apiFetch<{ date: string; time: string | null; summary: string }[]>('/api/v1/calendar/events')
+    apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
       .then((data) => {
         if (!ignore) setGoogleEvents(data)
       })
@@ -52,9 +52,9 @@ export default function HomeScreen() {
   }, [])
 
   const googleEventsMap = useMemo(() => {
-    const map: Record<string, { time: string | null; summary: string }[]> = {}
+    const map: Record<string, { time: string | null; summary: string; policy_id: string | null }[]> = {}
     for (const ev of googleEvents) {
-      ;(map[ev.date] ??= []).push({ time: ev.time, summary: ev.summary })
+      ;(map[ev.date] ??= []).push({ time: ev.time, summary: ev.summary, policy_id: ev.policy_id })
     }
     return map
   }, [googleEvents])
@@ -117,15 +117,36 @@ export default function HomeScreen() {
 
   // [이재혁 - 홈 화면 AI 일정 코치 비동기 호출 헬퍼]
   const handleCoachTimeline = async () => {
-    if (dayList.length === 0) {
-      alert('달력에서 마감 정책(점 표시가 있는 날짜)을 먼저 선택하신 후 코칭 버튼을 눌러주세요!')
-      return
+    const selGoogleEvents = googleEventsMap[selected] || []
+    
+    // 1순위: 선택한 날짜의 구글 일정(파란 점) 중 본문에 매핑된 지원사업 ID가 있는 일정을 역추적해 타겟팅
+    const calendarTarget = selGoogleEvents.find(ev => ev.policy_id)
+    
+    let targetPolicyId: string | null = null
+    
+    if (calendarTarget?.policy_id) {
+      targetPolicyId = calendarTarget.policy_id
+    } else {
+      // 2순위 Fallback: 선택한 날짜에 마감 공고가 없더라도, 현재 구글 캘린더 전체 일정 중 policy_id가 박힌 연동 마감 일정들을 역추적
+      const calendarPolicies = googleEvents.filter(ev => ev.policy_id)
+      if (calendarPolicies.length === 0) {
+        alert('아직 구글 캘린더에 연동된 일정(파란 점)이 없어요! 상세페이지에서 [캘린더에 연동하기] 버튼을 먼저 눌러 일정을 등록해 주세요.')
+        return
+      }
+      // 연동된 구글 일정 중 마감일이 가장 시급한 녀석을 타겟으로 자동 지정
+      const urgentCalendarTarget = [...calendarPolicies].sort((a, b) => {
+        const da = new Date(a.date).getTime()
+        const db = new Date(b.date).getTime()
+        return da - db
+      })[0]
+      targetPolicyId = urgentCalendarTarget.policy_id
     }
-    const targetPolicy = dayList[0]
+
+    if (!targetPolicyId) return
     if (loadingCoach) return
     setLoadingCoach(true)
     try {
-      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicy.policy_id}`)
+      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicyId}&target_date=${selected}`)
       setCoachGuide(data.coach_guide)
       setIsOpenCoachModal(true)
     } catch (e) {
