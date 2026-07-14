@@ -1,31 +1,8 @@
 import { AlertCircle, Bookmark, BookmarkCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { getDeadlineInfo } from '../lib/deadline'
-import { NEED_OPTIONS } from '../lib/recommend'
+import { getPolicyLabels } from '../lib/policyLabels'
 import { StatusBadge, TagList } from './ui'
-
-const SUPPORT_TYPE_LABELS: Record<string, string> = {
-  현금: '현금 지원',
-  비현금: '서비스 지원',
-  현물: '현물 지원',
-  융자: '융자',
-  보조금: '보조금',
-}
-
-function getSupportTypeLabels(value: string) {
-  const tokens = value
-    .replace(/기타\(([^)]*)\)/g, ' $1 ')
-    .split(/[,/|·;\s]+/)
-    .map((token) => token.trim())
-    .filter(Boolean)
-
-  const labels = tokens
-    .filter((token) => token !== '기타')
-    .map((token) => SUPPORT_TYPE_LABELS[token] || token)
-    .filter((token) => token.length <= 12)
-
-  return [...new Set(labels)]
-}
 
 export interface PolicyCardData {
   policy_id: string
@@ -73,13 +50,7 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
   const isPreferenceMismatch =
     policy.preference_match === 'none' || policy.match_status === 'near_match'
 
-  const categoryLabels = policy.categories?.length
-    ? policy.categories.map(
-        (category) => NEED_OPTIONS.find((option) => option.tag === category)?.label || category,
-      )
-    : policy.support_type
-      ? getSupportTypeLabels(policy.support_type)
-      : []
+  const categoryLabels = getPolicyLabels(policy)
 
   const goToDetail = () =>
     navigate(`/policy/${policy.policy_id}`, {
@@ -105,12 +76,16 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
         <div className="min-w-0 flex-1">
           <StatusBadge info={deadline} />
 
-          {/* 제목은 두 줄로 고정한다. 한 줄짜리와 두 줄짜리가 섞이면 행 높이가 들쭉날쭉해
-              목록이 어수선해 보인다. */}
-          <h4 className="mt-2 line-clamp-2 min-h-[44px] text-card text-ink">{policy.title}</h4>
+          <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>
+
+          {categoryLabels.length > 0 && (
+            <div className="mt-1.5">
+              <TagList items={categoryLabels} max={2} />
+            </div>
+          )}
 
           {policy.summary && (
-            <p className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-muted">
+            <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-muted">
               {policy.summary}
             </p>
           )}
@@ -133,12 +108,6 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
           {saved ? <BookmarkCheck size={19} /> : <Bookmark size={19} />}
         </button>
       </div>
-
-      {categoryLabels.length > 0 && (
-        <div className="mt-2.5">
-          <TagList items={categoryLabels} max={2} />
-        </div>
-      )}
 
       {/* 추천 이유는 한 줄만. 여러 줄이면 목록이 아니라 문서가 된다. */}
       {policy.reasons?.[0] && (

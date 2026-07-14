@@ -1,12 +1,21 @@
 import { useMemo, useState } from 'react'
-import { ArrowRight, CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
-import { Button, EmptyState, IconButton, LoadingLine, StatusBadge } from '../components/ui'
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  LoadingLine,
+  PageIntro,
+  StatusBadge,
+  TagList,
+} from '../components/ui'
 import { toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
 import { TODAY } from '../lib/format'
+import { getPolicyLabels } from '../lib/policyLabels'
 import { useSavedPolicies } from '../lib/storage'
 import type { SavedPolicy } from '../types'
 
@@ -101,9 +110,7 @@ export default function HomeScreen() {
     return (
       <div>
         <TopBar />
-        <section className="px-5 pt-2">
-          <h2 className="text-title text-ink">내 정책 달력</h2>
-        </section>
+        <PageIntro title="내 정책 달력" />
         <EmptyState
           icon={CalendarDays}
           title="아직 저장한 정책이 없어요"
@@ -119,14 +126,11 @@ export default function HomeScreen() {
     <div className="pb-6">
       <TopBar />
 
-      <section className="px-5 pt-2">
-        <h2 className="text-title text-ink">내 정책 달력</h2>
-        <p className="mt-1 text-sm text-muted">저장한 정책 {policies.length}건</p>
-      </section>
+      <PageIntro title="내 정책 달력" description={`저장한 정책 ${policies.length}건`} />
 
       {/* 달력 */}
       <section className="mt-4 px-5">
-        <div className="rounded-2xl bg-surface p-5 shadow-card">
+        <div className="surface-panel p-5">
           <div className="mb-4 flex items-center justify-between">
             <p className="text-section text-ink">
               {year}년 {month + 1}월
@@ -194,15 +198,17 @@ export default function HomeScreen() {
           {selDate.getMonth() + 1}월 {selDate.getDate()}일 마감
         </h3>
 
-        <div className="mt-3 space-y-2.5">
-          {dayList.length === 0 ? (
-            <p className="rounded-2xl bg-surface px-4 py-5 text-center text-sm text-subtle shadow-card">
-              이 날 마감되는 정책이 없어요
-            </p>
-          ) : (
-            dayList.map((policy) => <DeadlineCard key={policy.policy_id} policy={policy} />)
-          )}
-        </div>
+        {dayList.length === 0 ? (
+          <p className="surface-panel mt-3 px-4 py-5 text-center text-sm text-subtle">
+            이 날 마감되는 정책이 없어요
+          </p>
+        ) : (
+          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
+            {dayList.map((policy) => (
+              <DeadlineCard key={policy.policy_id} policy={policy} />
+            ))}
+          </div>
+        )}
       </section>
 
       {/* 상시 접수 — 마감이 없다는 건 나쁜 소식이 아니라 좋은 소식이다 */}
@@ -212,7 +218,7 @@ export default function HomeScreen() {
           <p className="mt-1 text-sm text-muted">
             마감 걱정 없이 언제든 신청할 수 있어요. {always.length}건
           </p>
-          <div className="mt-3 space-y-2.5">
+          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
             {always.map((policy) => (
               <DeadlineCard key={policy.policy_id} policy={policy} />
             ))}
@@ -227,7 +233,7 @@ export default function HomeScreen() {
           <p className="mt-1 text-sm text-muted">
             접수 기간이 기관마다 달라요. 공고에서 확인해주세요. {unknown.length}건
           </p>
-          <div className="mt-3 space-y-2.5">
+          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
             {unknown.map((policy) => (
               <DeadlineCard key={policy.policy_id} policy={policy} />
             ))}
@@ -249,29 +255,57 @@ function DeadlineCard({ policy }: { policy: SavedPolicy }) {
   const info = getDeadlineInfo(policy)
   // 날짜가 없으면 기간 줄을 통째로 숨긴다. "미정 ~ 미정"을 만들지 않는다.
   const period = formatPeriod(policy)
+  const labels = getPolicyLabels(policy)
+  const goToDetail = () => navigate(`/policy/${policy.policy_id}`)
 
   return (
-    <article className="rounded-2xl bg-surface p-4 shadow-card">
-      <StatusBadge info={info} />
+    <article
+      role="link"
+      tabIndex={0}
+      onClick={goToDetail}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          goToDetail()
+        }
+      }}
+      className="cursor-pointer px-4 py-4 outline-none transition-colors hover:bg-cream/60 focus-visible:bg-cream/60 active:bg-cream"
+    >
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <StatusBadge info={info} />
+          <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>
 
-      <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>
+          {labels.length > 0 && (
+            <div className="mt-1.5">
+              <TagList items={labels} max={2} />
+            </div>
+          )}
 
-      {period && <p className="mt-1 text-xs text-subtle">{period}</p>}
+          {policy.summary && (
+            <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-muted">
+              {policy.summary}
+            </p>
+          )}
+        </div>
 
-      <div className="mt-3 flex gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => navigate(`/policy/${policy.policy_id}`)}
-          className="flex-1"
-        >
-          상세보기 <ArrowRight size={13} />
-        </Button>
-        {/* 마감일이 없으면 캘린더에 넣을 날짜도 없다. 버튼 자체를 띄우지 않는다. */}
-        {info.calendarable && (
-          <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
-        )}
+        <ChevronRight size={18} className="mt-1 shrink-0 text-subtle" />
       </div>
+
+      {(period || info.calendarable) && (
+        <div className="mt-2.5 flex min-h-11 items-center justify-between gap-2 border-t border-line pt-2">
+          {period ? <p className="text-xs font-medium text-subtle">{period}</p> : <span />}
+          {/* 마감일이 없으면 캘린더에 넣을 날짜도 없다. 버튼 자체를 띄우지 않는다. */}
+          {info.calendarable && (
+            <div
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+            >
+              <AddToCalendarButton policyId={policy.policy_id} applyEnd={policy.apply_end} />
+            </div>
+          )}
+        </div>
+      )}
     </article>
   )
 }

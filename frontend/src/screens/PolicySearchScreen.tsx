@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, RefreshCw, Sparkles } from 'lucide-react'
+import { RefreshCw, Search, X } from 'lucide-react'
 import TopBar from '../components/TopBar'
 import PolicyCard, { type PolicyCardData } from '../components/PolicyCard'
+import { ChoiceChip, EmptyState, Notice, PageIntro, Pagination } from '../components/ui'
 import { apiFetch, ApiError } from '../lib/api'
 import { buildRecommendationRequest, NEED_OPTIONS, REGION_MAP } from '../lib/recommend'
 import { useProfile, useSavedPolicies } from '../lib/storage'
@@ -76,6 +77,8 @@ export default function PolicySearchScreen() {
   const [allMeta, setAllMeta] = useState<Pick<NormalizedPolicyListResponse, 'total' | 'has_next'> | null>(null)
   const [allLoading, setAllLoading] = useState(false)
   const [allError, setAllError] = useState<string | null>(null)
+  const [searchInput, setSearchInput] = useState('')
+  const [allQuery, setAllQuery] = useState('')
   const [allCategory, setAllCategory] = useState('')
   const [allSido, setAllSido] = useState('')
   const [allStatus, setAllStatus] = useState<AllStatus>('available')
@@ -148,6 +151,7 @@ export default function PolicySearchScreen() {
       status: allStatus,
       sort: allSort,
     })
+    if (allQuery) params.set('q', allQuery)
     if (allCategory) params.set('category', allCategory)
     if (allSido) params.set('sido', allSido)
 
@@ -179,7 +183,7 @@ export default function PolicySearchScreen() {
     } finally {
       setAllLoading(false)
     }
-  }, [allCategory, allPage, allSido, allSort, allStatus])
+  }, [allCategory, allPage, allQuery, allSido, allSort, allStatus])
 
   useEffect(() => {
     setRecPageInput(String(recPage + 1))
@@ -238,13 +242,30 @@ export default function PolicySearchScreen() {
     setAllPage(safePage - 1)
   }
 
+  const runPolicySearch = () => {
+    const query = searchInput.trim()
+    setSearchInput(query)
+    setAllQuery(query)
+    setAllMeta(null)
+    setAllPage(0)
+    setTab('all')
+  }
+
+  const clearPolicySearch = () => {
+    setSearchInput('')
+    setAllQuery('')
+    setAllMeta(null)
+    setAllPage(0)
+    setTab('all')
+  }
+
   return (
     <div className="pb-6">
       <TopBar />
 
-      <section className="px-5">
-        <h2 className="text-title text-ink">정책 찾기</h2>
+      <PageIntro title="정책 찾기" />
 
+      <section className="px-5">
         {/* 세그먼트 탭 — 밑줄형.
             알약형(배경 채운 것)은 그 자체가 한 덩어리로 튀어서, 정작 아래 목록보다
             먼저 눈에 들어온다. 탭은 길잡이지 주인공이 아니다. */}
@@ -253,7 +274,7 @@ export default function PolicySearchScreen() {
             <button
               key={key}
               onClick={() => setTab(key)}
-              className={`relative h-11 flex-1 text-sm transition-colors ${
+              className={`relative h-11 flex-1 rounded-t-lg text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30 ${
                 tab === key ? 'font-bold text-ink' : 'font-medium text-muted hover:text-ink'
               }`}
             >
@@ -264,58 +285,101 @@ export default function PolicySearchScreen() {
             </button>
           ))}
         </div>
+
+        <form
+          role="search"
+          className="mt-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            runPolicySearch()
+          }}
+        >
+          <div className="relative">
+            <Search
+              size={18}
+              aria-hidden="true"
+              className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-subtle"
+            />
+            <input
+              type="text"
+              inputMode="search"
+              enterKeyHint="search"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="정책명이나 지원 내용 검색"
+              aria-label="정책 검색어"
+              className="h-12 w-full rounded-xl border border-line bg-surface pl-10 pr-24 text-sm font-medium text-ink outline-none transition-colors placeholder:text-subtle hover:border-subtle focus:border-primary focus:ring-2 focus:ring-primary/10"
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={clearPolicySearch}
+                aria-label="검색어 지우기"
+                className="absolute right-[54px] top-0.5 flex h-11 w-10 items-center justify-center rounded-lg text-subtle outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-primary/20"
+              >
+                <X size={16} />
+              </button>
+            )}
+            <button
+              type="submit"
+              className="absolute right-1 top-1 flex h-10 items-center justify-center rounded-lg bg-primary px-3 text-xs font-bold text-white outline-none transition-colors active:bg-primary-hover focus-visible:ring-2 focus-visible:ring-primary/25"
+            >
+              찾기
+            </button>
+          </div>
+        </form>
       </section>
 
-      <section className="mt-5 px-5">
+      <section className="mt-4 px-5">
         {tab === 'recommend' && (
           <>
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted">
-                {recMeta
-                  ? `${recMeta.total}개 후보 중 ${recMeta.filtered}개를 보여드려요.`
-                  : '내 정보 기준으로 정책을 찾는 중이에요.'}
-              </p>
-              <button
-                onClick={loadRecommendations}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-ink shadow-card active:scale-[0.97]"
-                aria-label="추천 새로고침"
-              >
-                <RefreshCw size={16} className={recLoading ? 'animate-spin' : ''} />
-              </button>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {RECOMMENDATION_FILTERS.map((filter) => {
-                const count = recMeta?.statusCounts[filter.key]
-                const active = recFilters.includes(filter.key)
-                return (
-                  <CategoryChip
-                    key={filter.key}
-                    active={active}
-                    label={`${filter.label}${count === undefined ? '' : ` ${count}`}`}
-                    onClick={() => {
-                      const status = filter.key
-                      setRecFilters((current) =>
-                        current.includes(status)
-                          ? current.filter((selected) => selected !== status)
-                          : [...current, status],
-                      )
-                      setRecPage(0)
-                    }}
-                  />
-                )
-              })}
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {profileWarnings.map((warning) => (
-                <div
-                  key={warning}
-                  className="flex items-start gap-2 rounded-2xl border border-accent/20 bg-accent-soft/45 p-4 text-sm font-medium leading-relaxed text-ink"
+            <div className="surface-panel p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-ink">
+                  {recMeta
+                    ? `${recMeta.total}개 후보 중 ${recMeta.filtered}개 정책`
+                    : '맞춤 정책을 확인하고 있어요'}
+                </p>
+                <button
+                  onClick={loadRecommendations}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-muted outline-none transition-colors hover:border-subtle hover:text-ink active:bg-line/40 focus-visible:ring-2 focus-visible:ring-primary/20"
+                  aria-label="추천 새로고침"
                 >
-                  <AlertTriangle size={17} className="mt-0.5 shrink-0 text-accent" />
-                  <span>{warning}</span>
-                </div>
+                  <RefreshCw size={16} className={recLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+
+              <p className="mt-2.5 text-xs font-semibold text-muted">추천 상태</p>
+              <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+                {RECOMMENDATION_FILTERS.map((filter) => {
+                  const count = recMeta?.statusCounts[filter.key]
+                  const active = recFilters.includes(filter.key)
+                  return (
+                    <CategoryChip
+                      key={filter.key}
+                      compact
+                      active={active}
+                      label={`${filter.label}${count === undefined ? '' : ` ${count}`}`}
+                      onClick={() => {
+                        const status = filter.key
+                        setRecFilters((current) =>
+                          current.includes(status)
+                            ? current.filter((selected) => selected !== status)
+                            : [...current, status],
+                        )
+                        setRecPage(0)
+                      }}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="mt-3 space-y-3">
+              {profileWarnings.map((warning) => (
+                <Notice key={warning} tone="warning">
+                  {warning}
+                </Notice>
               ))}
               {recError && <ErrorBox message={recError} />}
               {!recError && recLoading && <InfoBox message="맞춤 정책을 계산하고 있어요." />}
@@ -342,69 +406,31 @@ export default function PolicySearchScreen() {
                 />
               )}
               {!recLoading && !recError && recMeta && recMeta.filtered > 0 && (
-                <div className="flex items-center justify-between gap-2 pt-1">
-                  <button
-                    type="button"
-                    disabled={recPage === 0}
-                    onClick={() => setRecPage((page) => page - 1)}
-                    aria-label="추천 이전 페이지"
-                    className="h-11 shrink-0 rounded-lg border border-line bg-white px-3 text-sm font-bold text-ink transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent"
-                  >
-                    이전
-                  </button>
-                  <div className="flex min-w-0 items-center justify-center gap-1.5">
-                    <label htmlFor="recommend-page-input" className="sr-only">
-                      이동할 추천 페이지
-                    </label>
-                    <input
-                      id="recommend-page-input"
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={recPageCount}
-                      value={recPageInput}
-                      onChange={(event) => setRecPageInput(event.target.value.replace(/[^0-9]/g, ''))}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') goToRecommendationPage()
-                      }}
-                      className="h-9 w-14 rounded-lg border border-line bg-white px-2 text-center text-sm font-bold text-ink outline-none focus:border-primary"
-                    />
-                    <span className="whitespace-nowrap text-sm font-semibold text-muted">
-                      / {recPageCount}페이지
-                    </span>
-                    <button
-                      type="button"
-                      onClick={goToRecommendationPage}
-                      className="h-9 rounded-lg bg-black/[0.05] px-2.5 text-xs font-bold text-ink"
-                    >
-                      이동
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!recMeta.hasNext || recPage + 1 >= recPageCount}
-                    onClick={() => setRecPage((page) => page + 1)}
-                    aria-label="추천 다음 페이지"
-                    className="h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
-                  >
-                    다음
-                  </button>
-                </div>
+                <Pagination
+                  page={recPage}
+                  pageCount={recPageCount}
+                  inputValue={recPageInput}
+                  onInputChange={setRecPageInput}
+                  onSubmit={goToRecommendationPage}
+                  onPrevious={() => setRecPage((page) => page - 1)}
+                  onNext={() => setRecPage((page) => page + 1)}
+                  previousDisabled={recPage === 0}
+                  nextDisabled={!recMeta.hasNext || recPage + 1 >= recPageCount}
+                  label="추천 페이지"
+                />
               )}
             </div>
           </>
         )}
 
         {tab === 'saved' && (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-surface p-3 shadow-card">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-ink">저장한 정책 {savedCards.length}개</p>
-                <span className="text-xs text-subtle">마감된 정책은 기본으로 숨겨요</span>
-              </div>
-              <p className="mt-3 text-xs font-semibold text-muted">지원 분야</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="space-y-3">
+            <div className="surface-panel p-3">
+              <p className="text-sm font-semibold text-ink">저장한 정책 {savedCards.length}개</p>
+              <p className="mt-2.5 text-xs font-semibold text-muted">지원 분야</p>
+              <div className="mt-1.5 grid grid-cols-4 gap-1.5">
                 <CategoryChip
+                  compact
                   active={!savedCategory}
                   label="전체 분야"
                   onClick={() => setSavedCategory('')}
@@ -412,6 +438,7 @@ export default function PolicySearchScreen() {
                 {NEED_OPTIONS.map((option) => (
                   <CategoryChip
                     key={option.tag}
+                    compact
                     active={savedCategory === option.tag}
                     label={option.label}
                     onClick={() => setSavedCategory(option.tag)}
@@ -428,7 +455,7 @@ export default function PolicySearchScreen() {
                       const value = event.target.value
                       setSavedSido(value === '전체' ? '' : value)
                     }}
-                    className="mt-1.5 w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm font-medium text-ink outline-none"
+                    className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink outline-none transition-colors hover:border-subtle focus:border-primary focus:ring-2 focus:ring-primary/10"
                   >
                     {ALL_SIDO_OPTIONS.map((sido) => (
                       <option key={sido} value={sido}>
@@ -442,7 +469,7 @@ export default function PolicySearchScreen() {
                   <select
                     value={savedSort}
                     onChange={(event) => setSavedSort(event.target.value as AllSort)}
-                    className="mt-1.5 w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm font-medium text-ink outline-none"
+                    className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink outline-none transition-colors hover:border-subtle focus:border-primary focus:ring-2 focus:ring-primary/10"
                   >
                     <option value="deadline">마감 임박순</option>
                     <option value="latest">최근 저장순</option>
@@ -450,12 +477,12 @@ export default function PolicySearchScreen() {
                 </label>
               </div>
 
-              <label className="mt-3 flex items-center gap-2 text-sm font-medium text-ink/65">
+              <label className="mt-2.5 flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-medium text-muted transition-colors hover:border-subtle">
                 <input
                   type="checkbox"
                   checked={savedStatus === 'all'}
                   onChange={(event) => setSavedStatus(event.target.checked ? 'all' : 'available')}
-                  className="h-4 w-4 accent-brand"
+                  className="h-4 w-4 accent-primary"
                 />
                 마감된 정책도 보기
               </label>
@@ -490,18 +517,27 @@ export default function PolicySearchScreen() {
         )}
 
         {tab === 'all' && (
-          <div className="space-y-4">
-            <div className="rounded-2xl bg-surface p-3 shadow-card">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-ink">
-                  {allMeta ? `${allMeta.total}개 정책` : '전체 정책'}
+          <div className="space-y-3">
+            <div className="surface-panel p-3">
+              <p className="text-sm font-semibold text-ink">
+                {allQuery
+                  ? allMeta
+                    ? `검색 결과 ${allMeta.total}개`
+                    : '검색 결과를 확인하고 있어요'
+                  : allMeta
+                    ? `${allMeta.total}개 정책`
+                    : '전체 정책'}
+              </p>
+              {allQuery && (
+                <p className="mt-1 line-clamp-1 text-xs font-medium text-muted">
+                  검색어 ‘{allQuery}’
                 </p>
-                <span className="text-xs text-subtle">마감된 정책은 기본으로 숨겨요</span>
-              </div>
+              )}
 
-              <p className="mt-3 text-xs font-semibold text-muted">지원 분야</p>
-              <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <p className="mt-2.5 text-xs font-semibold text-muted">지원 분야</p>
+              <div className="mt-1.5 grid grid-cols-4 gap-1.5">
                 <CategoryChip
+                  compact
                   active={!allCategory}
                   label="전체 분야"
                   onClick={() => {
@@ -512,6 +548,7 @@ export default function PolicySearchScreen() {
                 {NEED_OPTIONS.map((option) => (
                   <CategoryChip
                     key={option.tag}
+                    compact
                     active={allCategory === option.tag}
                     label={option.label}
                     onClick={() => {
@@ -532,7 +569,7 @@ export default function PolicySearchScreen() {
                       setAllSido(value === '전체' ? '' : value)
                       setAllPage(0)
                     }}
-                    className="mt-1.5 w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm font-medium text-ink outline-none"
+                    className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink outline-none transition-colors hover:border-subtle focus:border-primary focus:ring-2 focus:ring-primary/10"
                   >
                     {ALL_SIDO_OPTIONS.map((sido) => (
                       <option key={sido} value={sido}>
@@ -549,7 +586,7 @@ export default function PolicySearchScreen() {
                       setAllSort(event.target.value as AllSort)
                       setAllPage(0)
                     }}
-                    className="mt-1.5 w-full rounded-xl border border-line bg-white px-3 py-2.5 text-sm font-medium text-ink outline-none"
+                    className="mt-1.5 h-11 w-full rounded-xl border border-line bg-surface px-3 text-sm font-semibold text-ink outline-none transition-colors hover:border-subtle focus:border-primary focus:ring-2 focus:ring-primary/10"
                   >
                     <option value="deadline">마감 임박순</option>
                     <option value="latest">최신 등록순</option>
@@ -557,7 +594,7 @@ export default function PolicySearchScreen() {
                 </label>
               </div>
 
-              <label className="mt-3 flex items-center gap-2 text-sm font-medium text-ink/65">
+              <label className="mt-2.5 flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3 text-sm font-medium text-muted transition-colors hover:border-subtle">
                 <input
                   type="checkbox"
                   checked={allStatus === 'all'}
@@ -565,7 +602,7 @@ export default function PolicySearchScreen() {
                     setAllStatus(event.target.checked ? 'all' : 'available')
                     setAllPage(0)
                   }}
-                  className="h-4 w-4 accent-brand"
+                  className="h-4 w-4 accent-primary"
                 />
                 마감된 정책도 보기
               </label>
@@ -587,57 +624,27 @@ export default function PolicySearchScreen() {
               </div>
             )}
             {!allLoading && !allError && all.length === 0 && (
-              <InfoBox message="조건에 맞는 정책이 없어요. 다른 분야나 지역을 선택해보세요." />
+              <InfoBox
+                message={
+                  allQuery
+                    ? '검색 결과가 없어요. 검색어를 줄이거나 다른 표현으로 찾아보세요.'
+                    : '조건에 맞는 정책이 없어요. 다른 분야나 지역을 선택해보세요.'
+                }
+              />
             )}
             {!allLoading && !allError && allMeta && allMeta.total > 0 && (
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <button
-                  type="button"
-                  disabled={allPage === 0}
-                  onClick={() => setAllPage((page) => page - 1)}
-                  aria-label="이전 페이지"
-                  className="h-11 shrink-0 rounded-lg border border-line bg-white px-3 text-sm font-bold text-ink transition-colors active:bg-line/40 disabled:bg-line/40 disabled:text-subtle disabled:border-transparent"
-                >
-                  이전
-                </button>
-                <div className="flex min-w-0 items-center justify-center gap-1.5">
-                  <label htmlFor="all-page-input" className="sr-only">
-                    이동할 페이지
-                  </label>
-                  <input
-                    id="all-page-input"
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    max={allPageCount}
-                    value={allPageInput}
-                    onChange={(event) => setAllPageInput(event.target.value.replace(/[^0-9]/g, ''))}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') goToAllPage()
-                    }}
-                    className="h-9 w-14 rounded-lg border border-line bg-white px-2 text-center text-sm font-bold text-ink outline-none focus:border-primary"
-                  />
-                  <span className="whitespace-nowrap text-sm font-semibold text-muted">
-                    / {allPageCount}페이지
-                  </span>
-                  <button
-                    type="button"
-                    onClick={goToAllPage}
-                    className="h-9 rounded-lg bg-black/[0.05] px-2.5 text-xs font-bold text-ink"
-                  >
-                    이동
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  disabled={!allMeta.has_next || allPage + 1 >= allPageCount}
-                  onClick={() => setAllPage((page) => page + 1)}
-                  aria-label="다음 페이지"
-                  className="h-11 shrink-0 rounded-lg bg-primary px-3 text-sm font-bold text-white transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle"
-                >
-                  다음
-                </button>
-              </div>
+              <Pagination
+                page={allPage}
+                pageCount={allPageCount}
+                inputValue={allPageInput}
+                onInputChange={setAllPageInput}
+                onSubmit={goToAllPage}
+                onPrevious={() => setAllPage((page) => page - 1)}
+                onNext={() => setAllPage((page) => page + 1)}
+                previousDisabled={allPage === 0}
+                nextDisabled={!allMeta.has_next || allPage + 1 >= allPageCount}
+                label="전체 정책 페이지"
+              />
             )}
           </div>
         )}
@@ -658,33 +665,29 @@ function RefetchOnTab({ tab, onSavedTab }: { tab: Tab; onSavedTab: () => void })
 }
 
 function InfoBox({ message }: { message: string }) {
-  return (
-    <div className="rounded-2xl bg-surface p-4 text-sm font-medium text-muted shadow-card">
-      {message}
-    </div>
-  )
+  return <Notice>{message}</Notice>
 }
 
 function CategoryChip({
   active,
   label,
   onClick,
+  compact = false,
 }: {
   active: boolean
   label: string
   onClick: () => void
+  compact?: boolean
 }) {
   return (
-    <button
-      type="button"
+    <ChoiceChip
+      selected={active}
       onClick={onClick}
-      aria-pressed={active}
-      className={`flex min-h-10 w-full items-center justify-center rounded-xl px-2 py-2 text-center text-xs font-bold transition-colors ${
-        active ? 'bg-primary text-white' : 'bg-line/60 text-muted'
-      }`}
+      variant={compact ? 'compact' : 'pill'}
+      className={compact ? 'w-full' : 'w-full px-2'}
     >
       {label}
-    </button>
+    </ChoiceChip>
   )
 }
 
@@ -718,11 +721,7 @@ function toTimestamp(value: string | null | undefined) {
 }
 
 function ErrorBox({ message }: { message: string }) {
-  return (
-    <div className="rounded-2xl bg-surface p-4 text-sm font-medium text-status-red shadow-card">
-      {message}
-    </div>
-  )
+  return <Notice tone="error">{message}</Notice>
 }
 
 function EmptyBox({
@@ -737,18 +736,14 @@ function EmptyBox({
   onAction: () => void
 }) {
   return (
-    <div className="rounded-3xl bg-white p-6 text-center shadow-card">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
-        <Sparkles size={22} className="text-accent" />
-      </div>
-      <h3 className="mt-4 text-section text-ink">{title}</h3>
-      <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
-      <button
-        onClick={onAction}
-        className="mt-5 w-full rounded-2xl bg-primary py-3 text-sm font-bold text-white active:scale-[0.99]"
-      >
-        {actionLabel}
-      </button>
+    <div className="surface-panel">
+      <EmptyState
+        icon={Search}
+        title={title}
+        description={description}
+        actionLabel={actionLabel}
+        onAction={onAction}
+      />
     </div>
   )
 }

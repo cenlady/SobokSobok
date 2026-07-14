@@ -57,8 +57,8 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
   // 공용 Button과 같은 치수를 쓴다. 나란히 놓이는 버튼끼리 높이가 다르면 그것만으로도
   // 화면이 어수선해진다.
   const base = full
-    ? 'inline-flex w-full items-center justify-center gap-1.5 h-12 px-5 rounded-xl text-[15px] font-bold'
-    : 'inline-flex items-center justify-center gap-1 h-9 px-3 rounded-lg text-[13px] font-semibold'
+    ? 'inline-flex h-11 w-full items-center justify-center gap-1 rounded-lg px-3.5 text-[13px] font-semibold'
+    : 'inline-flex items-center justify-center gap-1 h-11 px-3 rounded-lg text-[13px] font-semibold'
   const iconSize = full ? 16 : 14
 
   if (state === 'done') {
@@ -84,7 +84,9 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         className={`${base} transition-colors active:scale-[0.99] ${
           noDeadline
             ? 'cursor-not-allowed bg-line/60 text-subtle'
-            : 'bg-accent-soft text-brand active:bg-accent-soft/70'
+            : full
+              ? 'bg-accent-soft text-brand active:bg-accent-soft/70'
+              : 'border border-line bg-surface text-muted active:bg-line/40'
         }`}
       >
         {state === 'loading' ? (
