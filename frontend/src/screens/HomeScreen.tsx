@@ -424,14 +424,33 @@ export default function HomeScreen() {
               )}
             </div>
             
-            <button
-              type="button"
-              disabled={loadingCoach}
-              onClick={() => setIsOpenCoachModal(false)}
-              className="mt-5 w-full rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98] disabled:bg-line disabled:text-subtle disabled:cursor-not-allowed"
-            >
-              {loadingCoach ? '분석 중...' : '확인했습니다'}
-            </button>
+            {loadingCoach ? (
+              <button
+                type="button"
+                disabled
+                className="mt-5 w-full rounded-xl bg-line py-3 text-sm font-bold text-subtle cursor-not-allowed"
+              >
+                분석 중...
+              </button>
+            ) : (
+              <div className="mt-5 flex gap-3">
+                <a
+                  href="https://calendar.google.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-line bg-white py-3 text-sm font-bold text-ink hover:bg-line/20 active:scale-[0.98] transition-transform"
+                >
+                  📅 구글 캘린더 열기
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setIsOpenCoachModal(false)}
+                  className="flex-1 rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98] transition-transform"
+                >
+                  확인했습니다
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
