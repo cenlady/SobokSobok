@@ -336,7 +336,7 @@ export default function HomeScreen() {
                   </div>
                 )}
                 {hasNoEvents ? (
-                  <p className="rounded-2xl bg-white px-4 py-5 text-center text-sm text-subtle shadow-card">
+                  <p className="rounded-2xl bg-surface px-4 py-5 text-center text-sm text-subtle shadow-card">
                     이 날 등록된 일정이 없어요
                   </p>
                 ) : (
