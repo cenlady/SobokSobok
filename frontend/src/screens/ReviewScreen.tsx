@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
+  ChevronDown,
+  ExternalLink,
   FileText,
   Info,
   Loader2,
@@ -511,16 +513,25 @@ function RequirementSection({ review }: { review: ReviewResponse }) {
 
       {missing.length > 0 && (
         <p className="mt-2.5 text-xs leading-relaxed text-muted">
-          확인되지 않은 서류는 기관에서 발급받아 함께 제출해야 해요.
+          아직 없는 서류를 누르면 어디서 어떻게 발급받는지 알려드려요.
         </p>
       )}
     </div>
   )
 }
 
+/**
+ * 요건 한 줄. 아직 없는 서류는 눌러서 '어디서 어떻게 떼는지' 펼쳐 볼 수 있다.
+ *
+ * 이미 낸 서류에는 가이드를 붙이지 않는다. 이미 가진 것을 어떻게 발급받는지는
+ * 알려줄 필요가 없다.
+ */
 function RequirementRow({ match }: { match: RequirementMatch }) {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3">
+  const [open, setOpen] = useState(false)
+  const guide = !match.likely_covered ? match.guide : null
+
+  const body = (
+    <div className="flex items-center gap-3">
       <span
         className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
           match.likely_covered ? 'bg-status-green/10 text-status-green' : 'bg-line text-subtle'
@@ -532,7 +543,8 @@ function RequirementRow({ match }: { match: RequirementMatch }) {
           <X size={13} strokeWidth={2.5} />
         )}
       </span>
-      <span className="min-w-0 flex-1">
+
+      <span className="min-w-0 flex-1 text-left">
         <span
           className={`block truncate text-sm ${
             match.likely_covered ? 'font-medium text-ink' : 'text-muted'
@@ -540,10 +552,79 @@ function RequirementRow({ match }: { match: RequirementMatch }) {
         >
           {match.document_name}
         </span>
-        {match.matched_file && (
+        {match.matched_file ? (
           <span className="mt-0.5 block truncate text-xs text-subtle">{match.matched_file}</span>
-        )}
+        ) : guide ? (
+          <span className="mt-0.5 block truncate text-xs text-primary">
+            {guide.issuer} · {guide.fee}
+          </span>
+        ) : null}
       </span>
+
+      {guide && (
+        <ChevronDown
+          size={16}
+          className={`shrink-0 text-subtle transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      )}
+    </div>
+  )
+
+  if (!guide) {
+    return <div className="px-4 py-3">{body}</div>
+  }
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="w-full px-4 py-3 transition-colors hover:bg-cream/60"
+      >
+        {body}
+      </button>
+
+      {open && (
+        <div className="border-t border-line bg-cream/50 px-4 py-3 pl-13">
+          <dl className="space-y-1.5 text-xs">
+            {guide.online && (
+              <div className="flex gap-2">
+                <dt className="w-12 shrink-0 text-subtle">온라인</dt>
+                <dd className="min-w-0 flex-1 text-ink">{guide.online}</dd>
+              </div>
+            )}
+            {guide.offline && (
+              <div className="flex gap-2">
+                <dt className="w-12 shrink-0 text-subtle">방문</dt>
+                <dd className="min-w-0 flex-1 text-ink">{guide.offline}</dd>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <dt className="w-12 shrink-0 text-subtle">소요</dt>
+              <dd className="min-w-0 flex-1 text-ink">
+                {guide.duration} · {guide.fee}
+              </dd>
+            </div>
+          </dl>
+
+          {guide.tip && (
+            <p className="mt-2.5 border-l-2 border-primary/30 pl-2.5 text-xs leading-relaxed text-muted">
+              {guide.tip}
+            </p>
+          )}
+
+          {guide.online_url && (
+            <a
+              href={guide.online_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex h-9 items-center gap-1 rounded-lg bg-primary px-3 text-xs font-bold text-white transition-colors hover:bg-primary-hover"
+            >
+              발급하러 가기 <ExternalLink size={12} />
+            </a>
+          )}
+        </div>
+      )}
     </div>
   )
 }

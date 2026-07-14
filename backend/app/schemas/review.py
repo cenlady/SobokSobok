@@ -14,16 +14,35 @@ RequirementStatus = Literal[
 ]
 
 
+class DocumentGuideOut(BaseModel):
+    """이 서류를 어디서 어떻게 발급받는가.
+
+    소상공인이 지원금을 못 받는 이유는 '무슨 서류가 필요한지 몰라서'만이 아니다.
+    이름을 알아도 '어디서 어떻게 떼는지' 몰라서 못 낸다.
+    """
+
+    issuer: str = Field(..., description="발급 기관")
+    online: str | None = Field(None, description="온라인 발급 경로")
+    online_url: str | None = None
+    offline: str | None = Field(None, description="방문 발급처")
+    duration: str = Field(..., description="소요 시간")
+    fee: str = Field(..., description="수수료")
+    tip: str | None = Field(None, description="실무 팁")
+
+
 class RequirementMatch(BaseModel):
     """정책 요건 하나에 대한 커버 여부 (올린 서류 전체 기준)."""
 
-    document_name: str = Field(..., description="정책이 요구하는 서류명")
+    document_name: str = Field(..., description="정책이 요구하는 서류명 (정규화됨)")
     best_similarity: float = Field(..., description="올린 서류들 중 최고 유사도")
     likely_covered: bool = Field(
         ..., description="후보 임계값 이상이면 True. 확정이 아니라 후보다"
     )
     matched_file: str | None = Field(
         None, description="이 요건을 커버하는 것으로 보이는 파일명 (covered일 때만)"
+    )
+    guide: DocumentGuideOut | None = Field(
+        None, description="발급 가이드. 아직 없는 서류면 null"
     )
 
 

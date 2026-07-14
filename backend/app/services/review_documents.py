@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.rag_utils import EmbeddingModel, OllamaEmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.review import ReviewSession, ReviewUpload, ReviewVector
+from app.services.document_guides import get_guide
 from app.services.extract_attachments import _run_kordoc, _is_unsupported_name
 
 
@@ -279,6 +280,8 @@ def _match_requirements(
                 # '확정'이 아니라 '후보'다. 이름을 likely_covered로 둔 이유.
                 "likely_covered": hit is not None,
                 "matched_file": hit[0] if hit else None,
+                # 아직 없는 서류라면 "어디서 떼는지"를 알려준다. 목록만 던지는 건 절반이다.
+                "guide": _guide_dict(req.document_name),
             }
         )
 
@@ -294,9 +297,26 @@ def _uncovered(requirements: list[ReviewVector]) -> list[dict]:
             "best_similarity": 0.0,
             "likely_covered": False,
             "matched_file": None,
+            "guide": _guide_dict(req.document_name),
         }
         for req in requirements
     ]
+
+
+def _guide_dict(document_name: str) -> dict | None:
+    """서류 발급 가이드. 아직 정리되지 않은 서류면 None."""
+    guide = get_guide(document_name)
+    if guide is None:
+        return None
+    return {
+        "issuer": guide.issuer,
+        "online": guide.online,
+        "online_url": guide.online_url,
+        "offline": guide.offline,
+        "duration": guide.duration,
+        "fee": guide.fee,
+        "tip": guide.tip,
+    }
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
