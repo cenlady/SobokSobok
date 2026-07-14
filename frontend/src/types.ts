@@ -71,6 +71,7 @@ export interface RecommendationResult {
 }
 
 export interface RecommendationPreviewResponse {
+  chat_session_id?: string | null
   total_candidates: number
   filtered_candidates: number
   returned: number
@@ -271,12 +272,32 @@ export interface ChatChunkSource {
   source_ref?: string | null
 }
 
+export interface ChatPolicyCandidate {
+  policy_id: string
+  title: string
+  summary?: string | null
+  support_type?: string | null
+  apply_end?: string | null
+  score: number
+  source_count: number
+}
+
 export interface ChatAnswerResponse {
   query: string
   expanded_query: string
   intent_tags: string[]
+  response_mode: 'answer' | 'policy_selection' | 'out_of_scope' | 'no_result'
+  candidates: ChatPolicyCandidate[]
   sources: ChatChunkSource[]
   answer: string
+  session_id: string
+  context_policy_id?: string | null
+  active_policy_id?: string | null
   langsmith_enabled: boolean
   langsmith_project?: string | null
+}
+
+export interface ChatSessionResponse {
+  session_id: string
+  active_policy_id?: string | null
 }
