@@ -128,14 +128,17 @@ export default function ChatScreen() {
         support_type: item.support_type,
         apply_end: item.apply_end,
         rank_score: item.rank_score,
+        eligibility_status: item.eligibility_status,
+        preference_match: item.preference_match,
         match_status: item.match_status,
         reasons: item.reasons,
         warnings: item.warnings,
+        unmet_conditions: item.unmet_conditions,
       }))
       replace(pendingId, {
         role: 'bot',
         text: policies.length > 0
-          ? `사장님 조건과 가까운 정책 ${policies.length}건을 찾았어요. 각 정책을 눌러 상세 화면에서 지원 대상이나 서류를 이어서 물어볼 수 있어요.`
+          ? `사장님 조건과 가까운 정책 ${policies.length}건을 찾았어요. 각 정책을 눌러 상세 화면에서 지원 대상이나 서류를 이어서 물어볼 수 있어요.${data.profile_warnings?.[0] ? `\n\n입력 정보 확인: ${data.profile_warnings[0]}` : ''}`
           : '지금 프로필 기준으로 바로 추천할 정책을 찾지 못했어요. 업종, 지역, 매출 정보를 조금 더 채워보면 추천 정확도가 올라가요.',
         policies,
       })
@@ -193,6 +196,7 @@ export default function ChatScreen() {
               has={has}
               onToggleSave={handleToggleSave}
               pendingSave={pendingSave}
+              detailMode={Boolean(policyId)}
             />
           ) : (
             <div key={m.id} className="flex justify-end">
@@ -255,13 +259,19 @@ function BotBubble({
   has,
   onToggleSave,
   pendingSave,
+  detailMode,
 }: {
   m: Message
   navigate: ReturnType<typeof useNavigate>
   has: (id: string) => boolean
   onToggleSave: (policyId: string) => void
   pendingSave: string | null
+  detailMode: boolean
 }) {
+  const visibleSources = m.sources
+    ? (detailMode ? uniqueSourcesByDocument(m.sources) : uniqueSourcesByPolicy(m.sources)).slice(0, 3)
+    : []
+
   return (
     <div className="flex items-start gap-2">
       <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-ink">
@@ -276,14 +286,18 @@ function BotBubble({
             </span>
           </p>
         )}
-        {m.sources && m.sources.length > 0 && (
+        {visibleSources.length > 0 && (
           <div className="rounded-2xl border border-brand-light/30 bg-white p-3 shadow-card">
             <p className="text-xs font-bold text-muted">답변 근거</p>
             <div className="mt-2 space-y-2">
-              {uniqueSourcesByPolicy(m.sources).slice(0, 3).map((source) => (
+              {visibleSources.map((source) => (
                 <div key={source.chunk_id} className="rounded-xl bg-cream px-3 py-2.5">
                   <p className="text-xs font-semibold text-muted">
                     {source.policy_title || source.document_title || '공고문'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] font-medium text-subtle">
+                    {documentTypeLabel(source.document_type)}
+                    {source.source_ref ? ` · ${source.source_ref}` : ''}
                   </p>
                   <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
                     {source.chunk_text}
@@ -358,4 +372,31 @@ function uniqueSourcesByPolicy(sources: ChatChunkSource[]) {
     seen.add(source.policy_id)
     return true
   })
+}
+
+function uniqueSourcesByDocument(sources: ChatChunkSource[]) {
+  const seen = new Set<string>()
+  return sources.filter((source) => {
+    const key = source.document_id || source.chunk_id
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function documentTypeLabel(value?: string | null) {
+  const labels: Record<string, string> = {
+    summary: '정책 요약',
+    support_content: '지원 내용',
+    eligibility: '지원 대상·자격',
+    application: '신청 방법',
+    deadline: '신청 기간',
+    requirements: '필요 서류',
+    contact: '문의처',
+    procedure: '선정 절차',
+    reference: '참고 자료',
+    body: '공고문 본문',
+    section: '공고문 세부 내용',
+  }
+  return value ? labels[value] || value : '공고문 근거'
 }

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from app.models.gov24 import Gov24SupportCondition
+from app.core.time import korea_now_naive
 from app.services.normalization.common import (
     _as_int_text,
     _as_text,
@@ -52,13 +53,29 @@ INDUSTRY_KEYWORDS = {
 }
 
 BUSINESS_STATUS_KEYWORDS = {
-    "small_business": ("소상공인", "소기업", "영세"),
+    # `small_business`는 화면과 추천 엔진에서 "소상공인"을 뜻한다.
+    # "중소기업" 안에도 "소기업" 문자열이 들어 있고 "영세"도 대상 규모를
+    # 확정하지 못하므로, 두 표현을 여기서 매칭하면 일반 중소기업 정책이
+    # 소상공인 정책으로 승격된다. 실제 소상공인 명시만 보수적으로 사용한다.
+    "small_business": ("소상공인",),
     "small_manufacturer": ("소공인", "도시형소공인"),
     "pre_founder": ("예비창업", "예비 창업", "창업예정", "창업 예정", "예비창업자"),
     "operating_business": ("기존사업자", "사업자", "영업중", "정상영업", "운영 중", "운영중"),
     "closing_business": ("폐업", "폐업예정", "폐업 예정", "재기", "희망리턴"),
     "traditional_market": ("전통시장", "상인회", "상점가"),
 }
+
+GOV24_INDUSTRY_TAGS = {
+    "restaurant",
+    "manufacturing",
+    "other_business",
+    "agriculture_fishery_forestry",
+    "information_communication",
+    "company_other_business",
+}
+GOV24_LIFECYCLE_TAGS = {"pre_founder", "operating_business", "closing_business"}
+
+
 def _source_metadata(
     *,
     source: str,
@@ -196,6 +213,28 @@ def _merge_industry_condition_with_codes(
 ) -> dict[str, Any]:
     if not coded_tags:
         return text_condition
+
+    coded_set = set(coded_tags)
+    if GOV24_INDUSTRY_TAGS.issubset(coded_set):
+        # Gov24가 업종 선택지를 전부 Y로 내려주는 서비스는 특정 업종 제한이
+        # 아니라 모든 업종에 열려 있다는 뜻이다. 다만 지원대상 원문에서 별도
+        # 업종 제한을 찾았다면 그 텍스트 근거를 우선한다.
+        if text_condition.get("mode") in {"restricted", "unrestricted"}:
+            return text_condition
+        return {
+            "mode": "unrestricted",
+            "include_tags": [],
+            "exclude_tags": [],
+            "confidence": 0.98,
+            "extraction_method": "gov24_all_industry_codes_unrestricted",
+            "evidence": [
+                {
+                    "disposition": "unrestricted",
+                    "source_text": "gov24_all_industry_codes",
+                }
+            ],
+        }
+
     include_tags = _merge_unique_lists(coded_tags, text_condition.get("include_tags") or [])
     evidence = [
         {
@@ -214,6 +253,41 @@ def _merge_industry_condition_with_codes(
         "extraction_method": "gov24_condition_code_and_context_rule",
         "evidence": evidence,
     }
+
+
+def _merge_gov24_business_status_tags(
+    coded_tags: list[str],
+    text_tags: list[str],
+    user_type: str | None,
+) -> list[str]:
+    coded = set(coded_tags)
+    tokens = {token.strip() for token in (user_type or "").split("||") if token.strip()}
+    broad_user_type = len(tokens) >= 3 and "소상공인" in tokens
+
+    if GOV24_LIFECYCLE_TAGS.issubset(coded):
+        coded -= GOV24_LIFECYCLE_TAGS
+    if broad_user_type:
+        coded.discard("small_medium_business")
+
+    merged = _merge_unique_lists(sorted(coded), text_tags)
+    if not broad_user_type and "소상공인" in tokens and "small_business" not in merged:
+        merged.append("small_business")
+    return merged
+
+
+def _gov24_audience_specificity(user_type: str | None, target_text: str | None) -> str:
+    target = _clean_text(target_text) or ""
+    tokens = {token.strip() for token in (user_type or "").split("||") if token.strip()}
+
+    if "소상공인" in target:
+        return "direct_small_business"
+    if tokens == {"소상공인"}:
+        return "direct_small_business"
+    if len(tokens) >= 3 and "소상공인" in tokens:
+        return "broad_public"
+    if "소상공인" in tokens or any(term in target for term in ("자영업자", "사업자", "중소기업")):
+        return "related_business"
+    return "broad_public"
 
 
 def _safe_int(val: Any, max_limit: int = 2147483647) -> int | None:
@@ -391,7 +465,7 @@ def _status_from_deadline(
     text_value = _clean_text(deadline)
     if not text_value:
         return None
-    now = datetime.now()
+    now = korea_now_naive()
     if apply_end is not None and now > apply_end:
         return "closed"
     if apply_start is not None and now < apply_start:
