@@ -15,7 +15,7 @@ from app.core.rag_utils import (
     create_embedding_model,
     search_policy_chunks,
 )
-from app.models.chat import PolicyChunk
+from app.models.chat import ChatMessage, ChatSession, PolicyChunk
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
 
 
@@ -31,6 +31,20 @@ DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
     "reference": ["reference"],
     "body": ["general"],
     "section": ["general"],
+}
+
+DOCUMENT_TYPE_SECTION_LABELS: Dict[str, str] = {
+    "summary": "정책 요약",
+    "support_content": "지원 내용",
+    "eligibility": "지원 대상",
+    "application": "신청 방법",
+    "deadline": "신청 기한",
+    "requirements": "구비 서류",
+    "contact": "문의처",
+    "procedure": "신청 절차",
+    "reference": "참고 사항",
+    "body": "공고 본문",
+    "section": "공고 본문",
 }
 
 KEYWORD_INTENTS: List[Tuple[str, Tuple[str, ...]]] = [
@@ -177,6 +191,10 @@ def build_policy_document_metadata(
         "document_id": str(document.id),
         "document_type": document.document_type,
         "document_title": document.title,
+        "section_title": document.title or DOCUMENT_TYPE_SECTION_LABELS.get(
+            document.document_type,
+            document.document_type,
+        ),
         "source_ref": document.source_ref,
         "policy_title": policy.title,
         "policy_summary": policy.summary,
@@ -214,6 +232,7 @@ def build_embedding_context(metadata: Dict[str, Any]) -> str:
         f"정책명: {metadata.get('policy_title')}",
         f"문서유형: {metadata.get('document_type')}",
         f"문서제목: {metadata.get('document_title')}",
+        f"섹션: {metadata.get('section_title')}",
         f"기관: {metadata.get('organization')}",
         f"지역: {metadata.get('region_scope')} {metadata.get('sido') or ''} {metadata.get('sigungu') or ''}".strip(),
         f"상태: {metadata.get('status')}",
@@ -224,6 +243,11 @@ def build_embedding_context(metadata: Dict[str, Any]) -> str:
         f"예상 질문: {question_hints}" if question_hints else "",
     ]
     return "\n".join(part for part in parts if part and "None" not in part)
+
+
+def build_chunk_embedding_input(embedding_context: str, chunk_text: str) -> str:
+    """문서 메타데이터와 청크 본문을 구분해 임베딩 입력을 만듭니다."""
+    return f"{embedding_context}\n청크 본문:\n{chunk_text}".strip()
 
 
 def build_query_embedding_text(query: str, *, policy_id: Optional[uuid.UUID] = None) -> str:
@@ -374,9 +398,9 @@ def build_policy_chunks(
                             "chunk_size": actual_chunk_size,
                             "chunk_overlap": actual_chunk_overlap,
                             "length": len(chunk_text),
-                            "embedding_input_strategy": "document_context_plus_chunk",
+                            "embedding_input_strategy": "document_context_section_plus_chunk",
                         },
-                        "embedding_input": f"{embedding_context}\n본문: {chunk_text}",
+                        "embedding_input": build_chunk_embedding_input(embedding_context, chunk_text),
                     }
                 )
 
@@ -549,6 +573,238 @@ def small_business_domain_bonus(source: Dict[str, Any]) -> float:
     return -0.08
 
 
+GLOBAL_POLICY_SCORE_MARGIN = 0.08
+GENERIC_POLICY_ATTRIBUTE_KEYWORDS: Tuple[str, ...] = (
+    "지원 대상",
+    "대상이 누구",
+    "누가 신청",
+    "신청 자격",
+    "지원 내용",
+    "얼마 지원",
+    "신청 서류",
+    "구비 서류",
+    "필요 서류",
+    "신청 방법",
+    "어떻게 신청",
+    "접수처",
+    "신청 기간",
+    "마감",
+    "문의처",
+)
+
+
+def build_policy_candidates(
+    sources: List[Dict[str, Any]],
+    *,
+    max_candidates: int = 3,
+) -> List[Dict[str, Any]]:
+    """검색 청크를 공고 단위 후보로 묶는다.
+
+    메인 채팅은 서로 다른 공고의 문장을 한 답변에 섞으면 안 되므로,
+    같은 공고의 최고 점수와 근거 개수를 이용해 사용자가 고를 후보를 만든다.
+    """
+    candidates_by_policy: Dict[str, Dict[str, Any]] = {}
+    for source in sources:
+        policy_id = str(source.get("policy_id") or "")
+        if not policy_id:
+            continue
+
+        score = float(source.get("rerank_score", source.get("similarity", 0.0)) or 0.0)
+        existing = candidates_by_policy.get(policy_id)
+        if existing is None:
+            metadata = source.get("metadata") or {}
+            candidates_by_policy[policy_id] = {
+                "policy_id": policy_id,
+                "title": source.get("policy_title") or "정책 공고",
+                "summary": metadata.get("policy_summary"),
+                "support_type": metadata.get("support_type"),
+                "apply_end": source.get("apply_end") or metadata.get("apply_end"),
+                "score": score,
+                "source_count": 1,
+            }
+            continue
+
+        existing["source_count"] += 1
+        if score > existing["score"]:
+            existing["score"] = score
+
+    return sorted(
+        candidates_by_policy.values(),
+        key=lambda candidate: candidate["score"],
+        reverse=True,
+    )[:max_candidates]
+
+
+def should_request_policy_selection(
+    query: str,
+    intent_tags: List[str],
+    candidates: List[Dict[str, Any]],
+    *,
+    policy_id: Optional[uuid.UUID],
+) -> bool:
+    """공고가 특정되지 않은 메인 채팅에서만 후보 선택을 요청한다."""
+    if policy_id is not None or len(candidates) < 2:
+        return False
+
+    normalized_query = _normalize_space(query).lower()
+    normalized_titles = [
+        _normalize_space(str(candidate.get("title") or "")).lower()
+        for candidate in candidates
+    ]
+    if any(title and title in normalized_query for title in normalized_titles):
+        return False
+
+    # "지원 대상이 누구야?", "서류가 뭐야?"처럼 공고명을 전혀 주지 않은 질문은
+    # 유사도가 높더라도 임의의 한 공고를 골라 답하지 않는다.
+    has_generic_attribute_question = any(
+        keyword in normalized_query for keyword in GENERIC_POLICY_ATTRIBUTE_KEYWORDS
+    ) or any(
+        tag in intent_tags
+        for tag in ("eligibility", "target", "requirements", "documents", "deadline", "contact")
+    )
+    if has_generic_attribute_question and len(normalized_query) <= 20:
+        return True
+
+    return (candidates[0]["score"] - candidates[1]["score"]) < GLOBAL_POLICY_SCORE_MARGIN
+
+
+def build_policy_selection_answer(candidates: List[Dict[str, Any]]) -> str:
+    if not candidates:
+        return "질문과 가장 가까운 공고를 고르지 못했어요. 공고명이나 지원 분야를 조금 더 알려주세요."
+
+    return (
+        "여러 정책 공고가 비슷하게 검색됐어요.\n\n"
+        "아래에서 궁금한 공고를 하나 고르면, 그 공고문만 기준으로 지원 대상·서류·신청 기간을 정확히 안내할게요."
+    )
+
+
+FOLLOW_UP_CONTEXT_KEYWORDS: Tuple[str, ...] = (
+    "그거",
+    "그 공고",
+    "그 정책",
+    "이 공고",
+    "이 정책",
+    "해당 공고",
+    "그럼",
+    "아까",
+    "방금",
+    "위에",
+    "요약해",
+)
+NEW_TOPIC_KEYWORDS: Tuple[str, ...] = (
+    "다른",
+    "말고",
+    "새로운",
+    "새 공고",
+    "다시 찾아",
+)
+
+
+def get_or_create_chat_session(
+    db: Session,
+    *,
+    user_id: int,
+    session_id: Optional[uuid.UUID],
+) -> ChatSession:
+    if session_id is not None:
+        session = (
+            db.query(ChatSession)
+            .filter(ChatSession.id == session_id, ChatSession.user_id == user_id)
+            .one_or_none()
+        )
+        if session is None:
+            raise ValueError("대화 세션을 찾을 수 없거나 접근 권한이 없습니다.")
+        return session
+
+    session = ChatSession(user_id=user_id)
+    db.add(session)
+    db.flush()
+    return session
+
+
+def get_recent_chat_messages(
+    db: Session,
+    session_id: uuid.UUID,
+    *,
+    limit: int = 6,
+) -> List[ChatMessage]:
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return list(reversed(messages))
+
+
+def resolve_session_policy_context(
+    query: str,
+    *,
+    session: ChatSession,
+    recent_messages: List[ChatMessage],
+) -> Optional[uuid.UUID]:
+    """후속 질문일 때만 세션의 선택 공고를 상세 RAG 범위로 쓴다.
+
+    새 정책을 찾는 질문까지 이전 공고로 고정하지 않도록 '다른/말고/새로운'은
+    전역 검색으로 되돌린다. 대화 이력이 없으면 오래된 세션의 선택값도 사용하지 않는다.
+    """
+    if session.active_policy_id is None:
+        return None
+    if not any(message.role == "user" for message in recent_messages):
+        return None
+
+    normalized_query = _normalize_space(query).lower()
+    if any(keyword in normalized_query for keyword in NEW_TOPIC_KEYWORDS):
+        return None
+    if any(keyword in normalized_query for keyword in FOLLOW_UP_CONTEXT_KEYWORDS):
+        return session.active_policy_id
+
+    intent_tags = infer_intent_tags(None, None, query)
+    has_generic_attribute_question = any(
+        keyword in normalized_query for keyword in GENERIC_POLICY_ATTRIBUTE_KEYWORDS
+    ) or any(
+        tag in intent_tags
+        for tag in ("eligibility", "target", "requirements", "documents", "deadline", "contact")
+    )
+    if has_generic_attribute_question and len(normalized_query) <= 24:
+        return session.active_policy_id
+
+    return None
+
+
+def record_chat_turn(
+    db: Session,
+    *,
+    session: ChatSession,
+    query: str,
+    answer: str,
+    response_mode: str,
+    context_policy_id: Optional[uuid.UUID],
+    candidates: List[Dict[str, Any]],
+) -> None:
+    db.add(
+        ChatMessage(
+            session_id=session.id,
+            role="user",
+            content=query,
+            policy_id=context_policy_id,
+        )
+    )
+    db.add(
+        ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=answer,
+            policy_id=context_policy_id,
+            response_mode=response_mode,
+            candidates=candidates or None,
+        )
+    )
+    session.updated_at = func.now()
+    db.commit()
+
+
 @traceable_if_enabled("chat-rag-retrieve")
 def retrieve_policy_chunk_sources(
     db: Session,
@@ -563,6 +819,8 @@ def retrieve_policy_chunk_sources(
             "query": query,
             "expanded_query": query,
             "intent_tags": ["out_of_scope"],
+            "response_mode": "out_of_scope",
+            "candidates": [],
             "sources": [],
         }
 
@@ -583,12 +841,90 @@ def retrieve_policy_chunk_sources(
         intent_tags,
         prefer_small_business_domain=policy_id is None,
     )[:requested_limit]
+    if not sources:
+        return {
+            "query": query,
+            "expanded_query": expanded_query,
+            "intent_tags": intent_tags,
+            "response_mode": "no_result",
+            "candidates": [],
+            "sources": [],
+        }
+
+    candidates = build_policy_candidates(sources) if policy_id is None else []
+    response_mode = "answer"
+    if should_request_policy_selection(
+        query,
+        intent_tags,
+        candidates,
+        policy_id=policy_id,
+    ):
+        response_mode = "policy_selection"
+
+    sources = attach_neighbor_context(
+        db,
+        sources,
+        window=settings.CHAT_NEIGHBOR_CHUNK_WINDOW,
+    )
     return {
         "query": query,
         "expanded_query": expanded_query,
         "intent_tags": intent_tags,
+        "response_mode": response_mode,
+        "candidates": candidates if response_mode == "policy_selection" else [],
         "sources": sources,
     }
+
+
+def attach_neighbor_context(
+    db: Session,
+    sources: List[Dict[str, Any]],
+    *,
+    window: int = 1,
+) -> List[Dict[str, Any]]:
+    """검색 청크의 앞뒤 청크를 답변용 문맥에만 덧붙입니다.
+
+    사용자에게 보여주는 source/chunk_text는 검색된 원문 그대로 유지하고,
+    답변 프롬프트를 만들 때만 같은 문서의 인접 청크를 함께 사용합니다.
+    """
+    if not sources or window <= 0:
+        return sources
+
+    document_ids = {source.get("document_id") for source in sources if source.get("document_id")}
+    if not document_ids:
+        return sources
+
+    try:
+        parsed_document_ids = [uuid.UUID(str(value)) for value in document_ids]
+        chunk_rows = (
+            db.query(PolicyChunk)
+            .filter(PolicyChunk.document_id.in_(parsed_document_ids))
+            .all()
+        )
+    except (ValueError, TypeError):
+        return sources
+
+    by_document: Dict[uuid.UUID, Dict[int, str]] = {}
+    for row in chunk_rows:
+        by_document.setdefault(row.document_id, {})[row.chunk_index] = row.chunk_text
+
+    for source in sources:
+        try:
+            document_id = uuid.UUID(str(source["document_id"]))
+            chunk_index = int(source["chunk_index"])
+        except (KeyError, ValueError, TypeError):
+            continue
+
+        chunks = by_document.get(document_id, {})
+        context = [
+            chunks[index]
+            for index in range(chunk_index - window, chunk_index + window + 1)
+            if index in chunks
+        ]
+        if context:
+            source["retrieval_context"] = "\n".join(context)
+
+    return sources
 
 
 def build_context_text(sources: List[Dict[str, Any]]) -> str:
@@ -596,6 +932,7 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
     total_chars = 0
     for index, source in enumerate(sources, start=1):
         metadata = source.get("metadata") or {}
+        context_body = source.get("retrieval_context") or source.get("chunk_text")
         block = (
             f"[근거 {index}]\n"
             f"정책명: {source.get('policy_title')}\n"
@@ -604,7 +941,7 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
             f"신청기간: {source.get('apply_start')} ~ {source.get('apply_end')}\n"
             f"문의처: {', '.join(source.get('contact_points') or [])}\n"
             f"예상질문태그: {', '.join(metadata.get('intent_tags') or [])}\n"
-            f"내용: {source.get('chunk_text')}\n"
+            f"내용(검색 청크 및 인접 문맥): {context_body}\n"
         )
         if total_chars + len(block) > settings.CHAT_MAX_CONTEXT_CHARS:
             break
@@ -1042,8 +1379,11 @@ def answer_policy_question(
         limit=limit,
         policy_id=policy_id,
     )
-    if "out_of_scope" in retrieval["intent_tags"]:
+    response_mode = retrieval.get("response_mode", "answer")
+    if response_mode == "out_of_scope":
         answer = build_out_of_scope_answer(query)
+    elif response_mode == "policy_selection":
+        answer = build_policy_selection_answer(retrieval.get("candidates") or [])
     else:
         answer = generate_chat_answer(query, retrieval["sources"])
     return {

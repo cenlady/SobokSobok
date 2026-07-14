@@ -38,3 +38,71 @@ class PolicyChunk(Base):
     # Relationships
     policy = relationship("NormalizedPolicy", back_populates="chunks")
     document = relationship("PolicyDocument", back_populates="chunks")
+
+
+class ChatSession(Base):
+    """로그인 사용자 단위의 대화 문맥.
+
+    active_policy_id는 메인 채팅에서 사용자가 여러 검색 후보 중 선택한 공고를 뜻한다.
+    따라서 "그 공고 서류는?" 같은 후속 질문을 공고 상세 RAG로 안전하게 제한할 수 있다.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    active_policy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("normalized_policies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    user = relationship("User", back_populates="chat_sessions")
+    active_policy = relationship("NormalizedPolicy", foreign_keys=[active_policy_id])
+    messages = relationship(
+        "ChatMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+
+class ChatMessage(Base):
+    """대화 이력. 원문과 응답 모드만 보관하고 RAG 임베딩은 보관하지 않는다."""
+
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role = Column(String(20), nullable=False)  # user | assistant | system
+    content = Column(Text, nullable=False)
+    policy_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("normalized_policies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    response_mode = Column(String(30), nullable=True)
+    candidates = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    session = relationship("ChatSession", back_populates="messages")
+    policy = relationship("NormalizedPolicy", foreign_keys=[policy_id])
