@@ -416,17 +416,26 @@ export default function ChatScreen() {
         )}
 
         {showQuickQuestions && (
-          <section className="flex flex-wrap gap-2 pt-1" aria-label="추천 질문">
-            {(isPolicyContextActive ? DETAIL_QUICK : QUICK).map((question) => (
-              <button
-                key={question}
-                type="button"
-                onClick={() => send(question)}
-                className="min-h-11 rounded-full border border-line bg-surface px-4 py-2 text-left text-[13px] font-semibold leading-snug text-ink outline-none transition-colors active:bg-line/40 focus-visible:ring-2 focus-visible:ring-primary/20"
-              >
-                {question}
-              </button>
-            ))}
+          <section
+            className="surface-panel ml-[60px] overflow-hidden shadow-card"
+            aria-label="추천 질문"
+          >
+            <div className="border-b border-line bg-primary-soft/60 px-4 py-2.5">
+              <p className="text-xs font-bold text-primary">이어서 물어보세요</p>
+            </div>
+            <div className="divide-y divide-line">
+              {(isPolicyContextActive ? DETAIL_QUICK : QUICK).map((question) => (
+                <button
+                  key={question}
+                  type="button"
+                  onClick={() => send(question)}
+                  className="flex min-h-12 w-full items-center justify-between gap-3 px-4 py-3 text-left text-[13px] font-semibold leading-snug text-ink outline-none transition-colors active:bg-line/40 focus-visible:bg-primary-soft/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+                >
+                  <span>{question}</span>
+                  <ArrowRight size={16} strokeWidth={1.8} className="shrink-0 text-brand-light" />
+                </button>
+              ))}
+            </div>
           </section>
         )}
       </div>

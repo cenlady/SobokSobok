@@ -3,9 +3,11 @@ import {
   ArrowRight,
   Bookmark,
   BookmarkCheck,
+  Check,
   MessageCircle,
   CalendarDays,
   ChevronDown,
+  Info,
   MapPin,
   Tag,
   Paperclip,
@@ -490,6 +492,11 @@ function ResultGroup({
     success: 'bg-status-green/10 text-status-green',
     action: 'bg-primary-soft text-primary',
   }[tone]
+  const MarkerIcon = {
+    neutral: Info,
+    success: Check,
+    action: ArrowRight,
+  }[tone]
 
   return (
     <div className="p-4">
@@ -499,9 +506,9 @@ function ResultGroup({
           <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-muted">
             <span
               aria-hidden="true"
-              className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${marker}`}
+              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${marker}`}
             >
-              •
+              <MarkerIcon size={11} strokeWidth={2.75} />
             </span>
             <span>{item.replace(/^-\s*/, '')}</span>
           </li>

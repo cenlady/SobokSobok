@@ -259,8 +259,11 @@ function IdleForm({
   return (
     <>
       <section className="mt-6 px-5">
-        <h3 className="text-sm font-bold text-ink">
-          <span className="mr-1.5 text-primary">①</span> 어떤 정책에 낼 서류인가요?
+        <h3 className="flex items-center gap-2 text-base font-bold text-ink">
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-extrabold leading-none text-white">
+            1
+          </span>
+          <span>어떤 정책에 낼 서류인가요?</span>
         </h3>
 
         {noSaved ? (
@@ -290,8 +293,11 @@ function IdleForm({
       </section>
 
       <section className="mt-6 px-5">
-        <h3 className="text-sm font-bold text-ink">
-          <span className="mr-1.5 text-primary">②</span> 준비한 서류를 모두 올려주세요
+        <h3 className="flex items-center gap-2 text-base font-bold text-ink">
+          <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-extrabold leading-none text-white">
+            2
+          </span>
+          <span>준비한 서류를 모두 올려주세요</span>
         </h3>
         {/* 파일을 하나만 받으면 "사업자등록증 하나 올렸더니 24개가 누락됐다"는,
             맞지만 쓸모없는 결과가 나온다. 준비한 것을 다 올려야 무엇이 빠졌는지가 정보가 된다. */}
