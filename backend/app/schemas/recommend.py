@@ -40,6 +40,9 @@ class RecommendationResult(BaseModel):
     apply_url: str | None = None
     apply_start: datetime | None = None
     apply_end: datetime | None = None
+    # 프론트가 '상시 접수'(open + 마감일 없음)와 '기간 확인 필요'(notice)를 가르는 데 쓴다.
+    # 이게 없으면 마감일 없는 정책이 전부 '기간 미상'으로 보인다.
+    status: str | None = None
     match_status: Literal["eligible", "needs_review", "near_match"]
     confidence: Literal["high", "medium", "low"]
     rank_score: float

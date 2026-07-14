@@ -31,7 +31,7 @@ export default function LoginScreen() {
         </div>
 
         <h1 className="mt-6 text-3xl font-extrabold tracking-tight text-brand">소복소복</h1>
-        <p className="mt-3 text-[15px] leading-relaxed text-brand-dark/60">
+        <p className="mt-3 text-[15px] leading-relaxed text-muted">
           사장님께 딱 맞는 지원 정책을
           <br />
           AI가 찾아 알려드려요.
@@ -42,7 +42,7 @@ export default function LoginScreen() {
         <button
           onClick={startGoogleLogin}
           disabled={loading}
-          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-black/10 bg-white py-3.5 text-base font-semibold text-brand-dark shadow-card active:scale-[0.99] disabled:opacity-60"
+          className="flex w-full items-center justify-center gap-3 rounded-2xl border border-line bg-white py-3.5 text-base font-semibold text-ink shadow-card active:scale-[0.99] disabled:opacity-60"
         >
           <GoogleMark />
           {loading ? '이동 중…' : 'Google로 시작하기'}
@@ -52,7 +52,7 @@ export default function LoginScreen() {
           <p className="mt-4 text-center text-sm font-medium text-status-red">{error}</p>
         )}
 
-        <p className="mt-6 text-center text-xs leading-relaxed text-brand-dark/40">
+        <p className="mt-6 text-center text-xs leading-relaxed text-subtle">
           로그인하면 저장한 정책이 계정에 보관되고,
           <br />
           마감일을 구글 캘린더에 등록할 수 있어요.

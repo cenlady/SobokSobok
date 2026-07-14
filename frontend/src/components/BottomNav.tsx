@@ -12,23 +12,21 @@ const tabs = [
 
 export default function BottomNav() {
   return (
-    <nav className="sticky bottom-0 z-10 border-t border-black/5 bg-cream/95 backdrop-blur">
-      <ul className="mx-auto flex max-w-[430px] items-stretch justify-around px-1 py-2">
+    <nav className="sticky bottom-0 z-10 border-t border-line bg-cream/95 backdrop-blur">
+      <ul className="mx-auto flex max-w-[430px] items-stretch justify-around px-1 py-1.5">
         {tabs.map(({ to, label, icon: Icon, end }) => (
           <li key={to} className="flex-1">
-            <NavLink to={to} end={end} className="flex flex-col items-center gap-1 py-1">
+            <NavLink to={to} end={end} className="flex flex-col items-center gap-0.5 py-1.5">
               {({ isActive }) => (
                 <>
+                  <Icon
+                    size={21}
+                    strokeWidth={isActive ? 2.3 : 1.8}
+                    className={isActive ? 'text-primary' : 'text-subtle'}
+                  />
                   <span
-                    className={`flex h-8 w-14 items-center justify-center rounded-full transition-colors ${
-                      isActive ? 'bg-accent-soft text-accent' : 'text-brand-dark/50'
-                    }`}
-                  >
-                    <Icon size={21} strokeWidth={isActive ? 2.4 : 2} />
-                  </span>
-                  <span
-                    className={`text-[10.5px] font-medium ${
-                      isActive ? 'text-accent' : 'text-brand-dark/50'
+                    className={`text-[10px] ${
+                      isActive ? 'font-bold text-primary' : 'font-medium text-subtle'
                     }`}
                   >
                     {label}

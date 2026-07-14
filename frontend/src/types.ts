@@ -55,7 +55,9 @@ export interface RecommendationResult {
   support_content?: string | null
   apply_url?: string | null
   apply_end?: string | null
-  match_status: 'eligible' | 'needs_review'
+  /** 상시 접수(open)와 기간 확인 필요(notice)를 가른다 */
+  status?: string | null
+  match_status: 'eligible' | 'needs_review' | 'near_match'
   confidence: 'high' | 'medium' | 'low'
   rank_score: number
   vector_similarity?: number | null

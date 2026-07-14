@@ -11,38 +11,6 @@ import type { Profile, SavedPolicy, ServerProfile } from '../types'
 
 export { EMPTY_PROFILE } from './profile'
 
-// 목업 혜택 카드(data/benefits.ts) 북마크. 챗봇 화면이 아직 목업이라 남겨둔다.
-// 서버 즐겨찾기(useSavedPolicies)와는 다른 개념이다 — 저쪽은 실제 정책 UUID를 다룬다.
-// 챗봇 담당자가 RAG로 교체하면 이것도 함께 정리한다.
-const BOOKMARKS_KEY = 'sobok.bookmarks'
-
-export function useBookmarks() {
-  const [ids, setIds] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(BOOKMARKS_KEY)
-      return raw ? (JSON.parse(raw) as string[]) : []
-    } catch {
-      return []
-    }
-  })
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(ids))
-    } catch {
-      // 저장 실패는 무시 (프라이빗 모드 등)
-    }
-  }, [ids])
-
-  const toggle = useCallback((id: string) => {
-    setIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-  }, [])
-
-  const has = useCallback((id: string) => ids.includes(id), [ids])
-
-  return { ids, toggle, has }
-}
-
 export function useProfile() {
   const [profile, setProfileState] = useState<Profile>(EMPTY_PROFILE)
   const [loading, setLoading] = useState(true)

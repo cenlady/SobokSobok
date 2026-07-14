@@ -175,8 +175,8 @@ export default function ReviewScreen() {
       <TopBar />
 
       <section className="px-5">
-        <h2 className="text-2xl font-bold text-brand-dark">서류 검토</h2>
-        <p className="mt-1 text-sm leading-relaxed text-brand-dark/55">
+        <h2 className="text-title text-ink">서류 검토</h2>
+        <p className="mt-1 text-sm leading-relaxed text-muted">
           제출 전에 오타·빈칸을 점검하고,
           <br />
           정책이 요구하는 서류가 빠지지 않았는지 확인해요.
@@ -230,19 +230,19 @@ function IdleForm({
   return (
     <>
       <section className="mt-6 px-5">
-        <h3 className="text-sm font-bold text-brand-dark">
+        <h3 className="text-sm font-bold text-ink">
           <span className="mr-1.5 text-brand">①</span> 어떤 정책에 낼 서류인가요?
         </h3>
 
         {noSaved ? (
           <div className="mt-3 rounded-2xl bg-white p-4 shadow-card">
-            <p className="text-sm leading-relaxed text-brand-dark/60">
+            <p className="text-sm leading-relaxed text-muted">
               저장한 정책이 없어요. 정책을 저장하면 그 정책이 요구하는 서류가
               빠지지 않았는지도 함께 확인해드려요.
             </p>
             <button
               onClick={onGoFind}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-brand-dark py-2.5 text-sm font-bold text-white"
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-primary py-2.5 text-sm font-bold text-white"
             >
               정책 찾으러 가기 <ArrowRight size={15} />
             </button>
@@ -251,7 +251,7 @@ function IdleForm({
           <select
             value={policyId}
             onChange={(e) => onPolicyChange(e.target.value)}
-            className="mt-3 w-full rounded-2xl border border-black/10 bg-white px-4 py-3.5 text-sm font-semibold text-brand-dark shadow-card"
+            className="mt-3 w-full rounded-2xl border border-line bg-white px-4 py-3.5 text-sm font-semibold text-ink shadow-card"
           >
             {policiesLoading && <option>불러오는 중…</option>}
             {policies.map((p) => (
@@ -264,18 +264,18 @@ function IdleForm({
         )}
 
         {policyId === NO_POLICY && (
-          <p className="mt-2 text-xs font-medium text-status-blue">
+          <p className="mt-2 text-xs font-medium text-muted">
             정책 요건 대조는 건너뛰고 오타·빈칸·형식만 확인해요.
           </p>
         )}
       </section>
 
       <section className="mt-6 px-5">
-        <h3 className="text-sm font-bold text-brand-dark">
+        <h3 className="text-sm font-bold text-ink">
           <span className="mr-1.5 text-brand">②</span> 서류를 올려주세요
         </h3>
 
-        <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-black/10 bg-white py-10 shadow-card active:bg-black/[0.02]">
+        <label className="mt-3 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-line bg-white py-10 shadow-card active:bg-line/30">
           <input
             type="file"
             accept=".pdf,.hwp,.hwpx,.docx,.doc,.xlsx,.xls"
@@ -285,16 +285,16 @@ function IdleForm({
           {file ? (
             <>
               <FileText size={30} className="text-brand" />
-              <p className="mt-3 max-w-[240px] truncate px-4 text-sm font-bold text-brand-dark">
+              <p className="mt-3 max-w-[240px] truncate px-4 text-sm font-bold text-ink">
                 {file.name}
               </p>
-              <p className="mt-1 text-xs text-brand-dark/45">다른 파일을 고르려면 눌러주세요</p>
+              <p className="mt-1 text-xs text-subtle">다른 파일을 고르려면 눌러주세요</p>
             </>
           ) : (
             <>
-              <Upload size={30} className="text-brand-dark/30" />
-              <p className="mt-3 text-sm font-bold text-brand-dark/70">파일 선택</p>
-              <p className="mt-1 text-xs text-brand-dark/40">PDF · HWP · DOCX · XLSX</p>
+              <Upload size={30} className="text-subtle" />
+              <p className="mt-3 text-sm font-bold text-muted">파일 선택</p>
+              <p className="mt-1 text-xs text-subtle">PDF · HWP · DOCX · XLSX</p>
             </>
           )}
         </label>
@@ -304,7 +304,7 @@ function IdleForm({
         <button
           onClick={onSubmit}
           disabled={!file}
-          className="mt-5 w-full rounded-2xl bg-brand-dark py-3.5 text-base font-semibold text-white shadow-lg shadow-brand-dark/20 active:scale-[0.99] disabled:bg-brand-dark/30 disabled:shadow-none"
+          className="mt-5 w-full rounded-2xl bg-primary py-3.5 text-base font-semibold text-white shadow-lg shadow-primary/20 active:scale-[0.99] disabled:bg-primary/30 disabled:shadow-none"
         >
           검토 시작하기
         </button>
@@ -334,10 +334,10 @@ function Progress({
                 <span
                   className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full ${
                     done
-                      ? 'bg-green-50 text-status-green'
+                      ? 'bg-status-green/10 text-status-green'
                       : active
                         ? 'bg-accent-soft text-accent'
-                        : 'bg-black/[0.04] text-brand-dark/25'
+                        : 'bg-line/60 text-subtle'
                   }`}
                 >
                   {done ? (
@@ -351,10 +351,10 @@ function Progress({
                 <span
                   className={`text-sm font-bold ${
                     done
-                      ? 'text-brand-dark/40'
+                      ? 'text-subtle'
                       : active
-                        ? 'text-brand-dark'
-                        : 'text-brand-dark/30'
+                        ? 'text-ink'
+                        : 'text-subtle'
                   }`}
                 >
                   {stage.label}
@@ -364,7 +364,7 @@ function Progress({
           })}
         </div>
 
-        <p className="mt-6 border-t border-black/5 pt-4 text-xs leading-relaxed text-brand-dark/45">
+        <p className="mt-6 border-t border-line pt-4 text-xs leading-relaxed text-subtle">
           AI 진단은 1분 정도 걸릴 수 있어요.
           <br />
           이 화면을 벗어나도 검토는 계속 진행돼요.
@@ -385,13 +385,13 @@ function Result({ review, onReset }: { review: ReviewResponse; onReset: () => vo
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50">
             <AlertTriangle size={22} className="text-status-red" />
           </div>
-          <h3 className="mt-4 text-lg font-bold text-brand-dark">검토하지 못했어요</h3>
-          <p className="mt-2 text-sm leading-relaxed text-brand-dark/60">
+          <h3 className="mt-4 text-section text-ink">검토하지 못했어요</h3>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
             {result?.overall || '서류를 읽는 데 실패했습니다.'}
           </p>
           <button
             onClick={onReset}
-            className="mt-5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-brand-dark py-3 text-sm font-bold text-white"
+            className="mt-5 flex w-full items-center justify-center gap-1.5 rounded-2xl bg-primary py-3 text-sm font-bold text-white"
           >
             <RotateCcw size={15} /> 다시 검토하기
           </button>
@@ -406,8 +406,8 @@ function Result({ review, onReset }: { review: ReviewResponse; onReset: () => vo
     <section className="mt-6 space-y-4 px-5">
       {/* 종합 진단 */}
       <div className="rounded-3xl bg-gradient-to-br from-accent-soft to-[#FBD9A8] p-5">
-        <p className="text-xs font-bold text-brand-dark/60">{result.document_type}</p>
-        <p className="mt-2 text-[15px] font-semibold leading-relaxed text-brand-dark">
+        <p className="text-xs font-bold text-muted">{result.document_type}</p>
+        <p className="mt-2 text-[15px] font-semibold leading-relaxed text-ink">
           {result.overall}
         </p>
       </div>
@@ -450,7 +450,7 @@ function Result({ review, onReset }: { review: ReviewResponse; onReset: () => vo
 
       <button
         onClick={onReset}
-        className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-black/10 bg-white py-3 text-sm font-bold text-brand-dark shadow-card"
+        className="flex w-full items-center justify-center gap-1.5 rounded-2xl border border-line bg-white py-3 text-sm font-bold text-ink shadow-card"
       >
         <RotateCcw size={15} /> 다른 서류 검토하기
       </button>
@@ -474,13 +474,13 @@ function FindingList({
     tone === 'warn'
       ? 'bg-red-50 text-status-red'
       : tone === 'doc'
-        ? 'bg-blue-50 text-status-blue'
+        ? 'bg-line text-muted'
         : 'bg-brand-light/20 text-brand'
 
   return (
     <div className="rounded-2xl bg-white p-4 shadow-card">
       <div className="flex items-center gap-2">
-        <h4 className="text-sm font-bold text-brand-dark">{title}</h4>
+        <h4 className="text-sm font-bold text-ink">{title}</h4>
         {empty ? (
           <span className="rounded-lg bg-green-50 px-2 py-0.5 text-xs font-bold text-status-green">
             문제 없음
@@ -493,15 +493,15 @@ function FindingList({
       </div>
 
       {empty ? (
-        <p className="mt-2 text-sm text-brand-dark/45">{emptyLabel}</p>
+        <p className="mt-2 text-sm text-subtle">{emptyLabel}</p>
       ) : (
         <ul className="mt-3 space-y-2">
           {items.map((item, i) => (
             <li
               key={`${item}-${i}`}
-              className="flex gap-2 text-sm leading-relaxed text-brand-dark/75"
+              className="flex gap-2 text-sm leading-relaxed text-muted"
             >
-              <span className="mt-[7px] h-1 w-1 flex-shrink-0 rounded-full bg-brand-dark/30" />
+              <span className="mt-[7px] h-1 w-1 flex-shrink-0 rounded-full bg-primary/30" />
               <span className="min-w-0 break-words">{item}</span>
             </li>
           ))}
