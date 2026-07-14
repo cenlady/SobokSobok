@@ -1430,8 +1430,6 @@ def _fallback_points(value: str, limit: int = 5) -> List[str]:
 
 
 def _friendly_heading(intent_tags: List[str]) -> str:
-    if any(tag in intent_tags for tag in ("eligibility", "target")):
-        return "지원 대상은 다음과 같아요."
     if any(tag in intent_tags for tag in ("requirements", "documents")):
         return "필요한 서류는 다음과 같아요."
     if any(tag in intent_tags for tag in ("application", "apply_method")):
@@ -1440,9 +1438,152 @@ def _friendly_heading(intent_tags: List[str]) -> str:
         return "신청 기간은 다음과 같아요."
     if "contact" in intent_tags:
         return "문의처는 다음과 같아요."
+    if any(tag in intent_tags for tag in ("eligibility", "target")):
+        return "지원 대상은 다음과 같아요."
     if any(tag in intent_tags for tag in ("benefit", "support_content")):
         return "지원 내용은 다음과 같아요."
     return "공고문에서 확인한 내용이에요."
+
+
+DIRECT_DOCUMENT_TYPE_BY_INTENT: Dict[str, Tuple[str, ...]] = {
+    "eligibility": ("eligibility",),
+    "target": ("eligibility",),
+    "requirements": ("requirements",),
+    "documents": ("requirements",),
+    "application": ("application", "procedure"),
+    "apply_method": ("application", "procedure"),
+    "deadline": ("deadline",),
+    "schedule": ("deadline",),
+    "contact": ("contact",),
+    "benefit": ("support_content", "summary"),
+    "support_content": ("support_content", "summary"),
+}
+
+DIRECT_INTENT_PRIORITY: Tuple[Tuple[str, ...], ...] = (
+    ("requirements", "documents"),
+    ("deadline", "schedule"),
+    ("contact",),
+    ("application", "apply_method"),
+    ("eligibility", "target"),
+    ("benefit", "support_content"),
+)
+
+ATTRIBUTE_ANSWER_INTENTS: Tuple[str, ...] = (
+    "eligibility",
+    "target",
+    "requirements",
+    "documents",
+    "application",
+    "apply_method",
+    "deadline",
+    "schedule",
+    "contact",
+)
+
+REQUIREMENT_PATTERNS: Tuple[Tuple[str, str], ...] = (
+    (r"사업자등록증\s*사본", "사업자등록증 사본"),
+    (r"사업자등록증", "사업자등록증"),
+    (r"금융거래사실확인서", "금융거래사실확인서"),
+    (r"최근\s*3년간\s*재무제표", "최근 3년간 재무제표"),
+    (r"부동산등기부등본", "부동산등기부등본"),
+    (r"사업장\s*및\s*거주주택\s*임차계약서", "사업장 및 거주주택 임차계약서"),
+    (r"사업장\s*임차계약서", "사업장 임차계약서"),
+    (r"거주주택\s*임차계약서", "거주주택 임차계약서"),
+    (r"임대차\s*계약서", "임대차 계약서"),
+    (r"임차계약서", "임차계약서"),
+    (r"소상공인\s*확인서", "소상공인 확인서"),
+    (r"매출\s*증빙(?:서류)?", "매출 증빙서류"),
+    (r"납세증명서", "납세증명서"),
+    (r"지방세\s*납세증명서", "지방세 납세증명서"),
+    (r"통장\s*사본", "통장 사본"),
+    (r"신분증", "신분증"),
+    (r"신청서", "신청서"),
+)
+
+
+def _strip_requirement_prefix(text: str) -> str:
+    return re.sub(
+        r"^\s*(?:구비\s*서류|구비서류|필요\s*서류|필요서류|제출\s*서류|제출서류)\s*[:：]\s*",
+        "",
+        _normalize_space(text),
+    )
+
+
+def _requirement_points(text: str) -> List[str]:
+    cleaned = _strip_requirement_prefix(text)
+    if not cleaned:
+        return []
+
+    if re.search(r"\|\||ㆍ|•|,|;| 또는 | 혹은 ", cleaned):
+        return _fallback_points(cleaned)
+
+    matches: List[Tuple[int, int, str]] = []
+    for pattern, label in REQUIREMENT_PATTERNS:
+        for match in re.finditer(pattern, cleaned):
+            matches.append((match.start(), match.end(), label))
+
+    if matches:
+        selected: List[Tuple[int, int, str]] = []
+        for start, end, label in sorted(matches, key=lambda item: (item[0], -(item[1] - item[0]))):
+            if any(start < selected_end and end > selected_start for selected_start, selected_end, _ in selected):
+                continue
+            selected.append((start, end, label))
+        return _dedupe_preserve_order(label for _, _, label in selected)
+
+    return _fallback_points(cleaned)
+
+
+def _document_types_for_intents(intent_tags: Iterable[str]) -> Tuple[str, ...]:
+    tag_set = set(intent_tags)
+    document_types: List[str] = []
+    for priority_group in DIRECT_INTENT_PRIORITY:
+        if not tag_set.intersection(priority_group):
+            continue
+        for intent in priority_group:
+            document_types.extend(DIRECT_DOCUMENT_TYPE_BY_INTENT.get(intent, ()))
+        break
+    return tuple(_dedupe_preserve_order(document_types))
+
+
+def build_direct_document_type_answer(
+    policy_title: str,
+    intent_tags: List[str],
+    sources: List[Dict[str, Any]],
+) -> Optional[str]:
+    target_document_types = _document_types_for_intents(intent_tags)
+    if not target_document_types:
+        return None
+
+    matched_sources = [
+        source
+        for source in sources
+        if source.get("document_type") in target_document_types and _normalize_space(str(source.get("chunk_text") or ""))
+    ]
+    if not matched_sources:
+        return None
+
+    points: List[str] = []
+    for source in matched_sources:
+        chunk_text = str(source.get("chunk_text") or "")
+        if source.get("document_type") == "requirements":
+            points.extend(_requirement_points(chunk_text))
+        else:
+            points.extend(_fallback_points(chunk_text, limit=3))
+
+    points = _dedupe_preserve_order(points)[:8]
+    if not points:
+        return None
+
+    heading = _friendly_heading(intent_tags)
+    if len(points) == 1:
+        return f"{policy_title} 기준으로 보면, {heading}\n\n{points[0]}"
+    return "\n".join(
+        [
+            f"{policy_title} 기준으로 보면, {heading}",
+            "",
+            *[f"- {point}" for point in points],
+        ]
+    )
 
 
 def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> str:
@@ -1452,6 +1593,10 @@ def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> st
     intent_tags = infer_intent_tags(None, None, query)
     best_source = sources[0]
     policy_title = best_source.get("policy_title") or "이 공고"
+
+    direct_answer = build_direct_document_type_answer(policy_title, intent_tags, sources)
+    if direct_answer:
+        return direct_answer
 
     focused_value = None
     for source in sources:
@@ -1498,6 +1643,8 @@ def build_policy_candidate_fallback(
     intent_tags: List[str],
 ) -> Optional[str]:
     del query
+    if any(tag in intent_tags for tag in ATTRIBUTE_ANSWER_INTENTS):
+        return None
     if not any(tag in intent_tags for tag in ("benefit", "eligibility", "target", "general")):
         return None
 
