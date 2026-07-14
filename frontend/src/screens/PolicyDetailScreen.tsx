@@ -20,6 +20,8 @@ import AddToCalendarButton from '../components/AddToCalendarButton'
 import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
 import { formatDate } from '../lib/calendar'
+import { formatPeriod, getDeadlineInfo } from '../lib/deadline'
+import { StatusBadge } from '../components/ui'
 import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
 import type {
@@ -159,59 +161,51 @@ export default function PolicyDetailScreen() {
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
       <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-4 py-4 backdrop-blur">
-        <button onClick={() => navigate(-1)} className="p-1 text-brand-dark active:opacity-60">
+        <button onClick={() => navigate(-1)} className="p-1 text-ink active:opacity-60">
           <ChevronLeft size={26} />
         </button>
-        <h1 className="text-lg font-semibold text-brand-dark">정책 상세</h1>
+        <h1 className="text-lg font-semibold text-ink">정책 상세</h1>
         <button onClick={toggleSave} className="p-1" aria-label="정책 저장">
           <Bookmark
             size={24}
-            className={isSaved ? 'fill-brand text-brand' : 'text-brand-dark/40'}
+            className={isSaved ? 'fill-brand text-brand' : 'text-subtle'}
           />
         </button>
       </header>
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-lg bg-brand-light/20 px-2.5 py-1 text-sm font-bold text-brand">
-            {policy.support_type || '지원정책'}
-          </span>
-          {recommendation && (
-            <span className="rounded-lg bg-accent-soft px-2.5 py-1 text-sm font-bold text-accent">
-              {Math.round(recommendation.rank_score)}점
-            </span>
-          )}
-          <span className="rounded-lg bg-white px-2.5 py-1 text-sm font-semibold text-brand-dark/60">
-            {policy.status || '상태 확인'}
-          </span>
-        </div>
+        {/* 상태 배지는 하나. 예전에는 유형·점수·status 원시값(open/notice)이 나란히
+            붙어 있었고, 특히 status는 DB 값이 그대로 화면에 노출되고 있었다. */}
+        <StatusBadge info={getDeadlineInfo(policy)} />
 
-        <h2 className="mt-4 text-2xl font-bold leading-snug text-brand-dark">
-          {policy.title}
-        </h2>
+        <h2 className="mt-3 text-title leading-snug text-ink">{policy.title}</h2>
         {policy.organization && (
-          <p className="mt-2 text-sm font-semibold text-brand-dark/50">{policy.organization}</p>
+          <p className="mt-2 text-sm font-semibold text-muted">{policy.organization}</p>
         )}
         {policy.summary && (
-          <p className="mt-4 rounded-2xl bg-white p-4 text-[15px] leading-relaxed text-brand-dark/70 shadow-card">
+          <p className="mt-4 rounded-2xl bg-white p-4 text-[15px] leading-relaxed text-muted shadow-card">
             {policy.summary}
           </p>
         )}
 
         <div className="mt-5 space-y-3 rounded-2xl bg-white p-5 shadow-card">
           <InfoLine icon={MapPin} label="지역" value={regionText} />
+          {/* 날짜가 없으면 "미정 ~ 미정" 대신, 상시 접수인지 우리가 모르는지를 말한다.
+              둘은 전혀 다른 얘기다. */}
           <InfoLine
             icon={CalendarDays}
             label="기간"
-            value={`${formatDate(policy.apply_start)} ~ ${formatDate(policy.apply_end)}`}
+            value={formatPeriod(policy) ?? getDeadlineInfo(policy).label}
           />
-          <InfoLine icon={Tag} label="유형" value={policy.support_type || '확인 필요'} />
+          {policy.support_type && (
+            <InfoLine icon={Tag} label="유형" value={policy.support_type} />
+          )}
         </div>
 
         {/* AI 추천 이유 및 설명 로딩 상태 */}
         {explaining && (
           <section className="mt-6">
-            <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
+            <h3 className="flex items-center gap-1.5 text-section text-ink">
               <Sparkles size={19} className="text-brand animate-pulse" /> AI 추천 이유
             </h3>
             <div className="mt-3 rounded-2xl bg-white p-5 shadow-card border border-brand/5 flex flex-col items-center justify-center text-center gap-3 py-7 animate-pulse">
@@ -220,8 +214,8 @@ export default function PolicyDetailScreen() {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand/10 opacity-75"></span>
               </div>
               <div className="space-y-1">
-                <p className="text-[14px] font-bold text-brand-dark">AI가 추천 이유를 분석 중이에요</p>
-                <p className="text-[12px] font-medium text-brand-dark/50">소복이가 사장님의 조건과 공고 내용을 대조해보고 있어요.</p>
+                <p className="text-[14px] font-bold text-ink">AI가 추천 이유를 분석 중이에요</p>
+                <p className="text-[12px] font-medium text-muted">소복이가 사장님의 조건과 공고 내용을 대조해보고 있어요.</p>
               </div>
             </div>
           </section>
@@ -231,11 +225,11 @@ export default function PolicyDetailScreen() {
           <div className="space-y-6">
             {/* AI 추천 이유 (한 줄 요약) */}
             <section className="mt-6">
-              <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
+              <h3 className="flex items-center gap-1.5 text-section text-ink">
                 <Sparkles size={19} className="text-brand fill-brand/10" /> AI 추천 이유
               </h3>
               <div className="mt-3 rounded-2xl bg-white p-4 shadow-card border-l-4 border-brand">
-                <p className="text-[15px] font-bold leading-relaxed text-brand-dark">
+                <p className="text-[15px] font-bold leading-relaxed text-ink">
                   {explanation.summary}
                 </p>
               </div>
@@ -244,14 +238,14 @@ export default function PolicyDetailScreen() {
             {/* 잘 맞는 부분 */}
             {explanation.strengths.length > 0 && (
               <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
+                <h3 className="flex items-center gap-1.5 text-section text-ink">
                   <CheckCircle2 size={19} className="text-brand" /> 잘 맞는 부분
                 </h3>
                 <div className="mt-3 space-y-2">
                   {explanation.strengths.map((strength) => (
                     <div key={strength} className="flex items-start gap-2 rounded-2xl bg-white p-3.5 shadow-card">
                       <span className="text-brand font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-brand-dark/80">
+                      <p className="text-sm font-semibold text-ink">
                         {strength.replace(/^-\s*/, '')}
                       </p>
                     </div>
@@ -263,14 +257,14 @@ export default function PolicyDetailScreen() {
             {/* 확인할 부분 */}
             {explanation.aspects_to_check.length > 0 && (
               <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
-                  <AlertCircle size={19} className="text-status-blue" /> 확인할 부분
+                <h3 className="flex items-center gap-1.5 text-section text-ink">
+                  <AlertCircle size={19} className="text-muted" /> 확인할 부분
                 </h3>
                 <div className="mt-3 space-y-2">
                   {explanation.aspects_to_check.map((warning) => (
                     <div key={warning} className="flex items-start gap-2 rounded-2xl bg-blue-50/60 p-3.5 shadow-card">
-                      <span className="text-status-blue font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-status-blue">
+                      <span className="text-muted font-bold mt-0.5">•</span>
+                      <p className="text-sm font-semibold text-muted">
                         {warning.replace(/^-\s*/, '')}
                       </p>
                     </div>
@@ -282,14 +276,14 @@ export default function PolicyDetailScreen() {
             {/* 다음 행동 */}
             {explanation.next_actions.length > 0 && (
               <section className="mt-6">
-                <h3 className="flex items-center gap-1.5 text-lg font-bold text-brand-dark">
+                <h3 className="flex items-center gap-1.5 text-section text-ink">
                   <Zap size={19} className="text-accent" /> 다음 행동
                 </h3>
                 <div className="mt-3 space-y-2">
                   {explanation.next_actions.map((action) => (
                     <div key={action} className="flex items-start gap-2 rounded-2xl bg-accent-soft/45 p-3.5 shadow-card">
                       <span className="text-accent font-bold mt-0.5">•</span>
-                      <p className="text-sm font-semibold text-brand-dark">
+                      <p className="text-sm font-semibold text-ink">
                         {action.replace(/^-\s*/, '')}
                       </p>
                     </div>
@@ -306,7 +300,7 @@ export default function PolicyDetailScreen() {
 
         {policy.attachments && policy.attachments.length > 0 && (
           <section className="mt-6">
-            <h3 className="text-lg font-bold text-brand-dark flex items-center gap-1.5">
+            <h3 className="text-section text-ink flex items-center gap-1.5">
               <Paperclip size={18} className="text-brand" /> 첨부 파일
             </h3>
             <div className="mt-3 space-y-2">
@@ -320,10 +314,10 @@ export default function PolicyDetailScreen() {
                   className="flex items-center gap-2 rounded-2xl bg-white p-3.5 shadow-card hover:bg-black/[0.01] active:scale-[0.99] transition-transform duration-100"
                 >
                   <FileText size={18} className="text-brand flex-shrink-0" />
-                  <span className="text-[14px] font-semibold truncate flex-1 text-brand-dark/80">
+                  <span className="text-[14px] font-semibold truncate flex-1 text-ink">
                     {file.original_file_name || '첨부파일'}
                   </span>
-                  <Download size={16} className="text-brand-dark/30 flex-shrink-0" />
+                  <Download size={16} className="text-subtle flex-shrink-0" />
                 </a>
               ))}
             </div>
@@ -331,11 +325,11 @@ export default function PolicyDetailScreen() {
         )}
       </div>
 
-      <div className="space-y-2 border-t border-black/5 bg-cream px-5 py-3">
+      <div className="space-y-2 border-t border-line bg-cream px-5 py-3">
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => navigate(`/chat?policyId=${policy.id}`)}
-            className="flex items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-brand-dark shadow-card active:scale-[0.99]"
+            className="flex items-center justify-center gap-1.5 rounded-2xl bg-white py-3 text-sm font-bold text-ink shadow-card active:scale-[0.99]"
           >
             <Bot size={17} /> AI 상담
           </button>
@@ -344,7 +338,7 @@ export default function PolicyDetailScreen() {
         <button
           disabled={!policy.apply_url}
           onClick={() => policy.apply_url && window.open(policy.apply_url, '_blank', 'noopener,noreferrer')}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-white disabled:bg-brand-dark/20 active:scale-[0.99]"
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-accent py-3.5 text-base font-bold text-white disabled:bg-subtle active:scale-[0.99]"
         >
           신청 페이지 보기 <ArrowRight size={17} />
         </button>
@@ -358,8 +352,8 @@ function StateScreen({ label }: { label: string }) {
   const navigate = useNavigate()
   return (
     <div className="app-frame flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-cream px-6 text-center">
-      <p className="text-brand-dark/60">{label}</p>
-      <button onClick={() => navigate('/')} className="rounded-xl bg-brand-dark px-5 py-2.5 text-white">
+      <p className="text-muted">{label}</p>
+      <button onClick={() => navigate('/')} className="rounded-xl bg-primary px-5 py-2.5 text-white">
         홈으로
       </button>
     </div>
@@ -378,8 +372,8 @@ function InfoLine({
   return (
     <div className="flex items-start gap-3">
       <Icon size={18} className="mt-0.5 flex-shrink-0 text-brand" />
-      <span className="w-12 flex-shrink-0 text-sm text-brand-dark/50">{label}</span>
-      <span className="min-w-0 text-[15px] font-semibold text-brand-dark">{value}</span>
+      <span className="w-12 flex-shrink-0 text-sm text-muted">{label}</span>
+      <span className="min-w-0 text-[15px] font-semibold text-ink">{value}</span>
     </div>
   )
 }
@@ -388,8 +382,8 @@ function Section({ title, content }: { title: string; content?: string | null })
   if (!content) return null
   return (
     <section className="mt-6">
-      <h3 className="text-lg font-bold text-brand-dark">{title}</h3>
-      <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-brand-dark/70">
+      <h3 className="text-section text-ink">{title}</h3>
+      <p className="mt-2 whitespace-pre-line text-[15px] leading-relaxed text-muted">
         {content}
       </p>
     </section>

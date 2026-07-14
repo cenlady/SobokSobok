@@ -117,6 +117,7 @@ def recommend_policies(
             apply_url=policy.apply_url,
             apply_start=policy.apply_start,
             apply_end=policy.apply_end,
+            status=policy.status,
             match_status=evaluation.status,
             confidence=_confidence(evaluation),
             rank_score=round(rank_score, 3),

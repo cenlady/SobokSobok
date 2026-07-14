@@ -18,7 +18,7 @@ export default function RequireAuth() {
   if (loading) {
     return (
       <div className="app-frame flex items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-black/10 border-t-brand" />
+        <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-line border-t-brand" />
       </div>
     )
   }

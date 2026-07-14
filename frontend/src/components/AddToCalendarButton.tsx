@@ -54,9 +54,12 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
   }
 
   const full = variant === 'full'
+  // 공용 Button과 같은 치수를 쓴다. 나란히 놓이는 버튼끼리 높이가 다르면 그것만으로도
+  // 화면이 어수선해진다.
   const base = full
-    ? 'flex w-full items-center justify-center gap-1.5 rounded-2xl py-3 text-sm font-bold'
-    : 'flex items-center justify-center gap-1 rounded-xl px-3 py-2 text-xs font-bold'
+    ? 'inline-flex w-full items-center justify-center gap-1.5 h-12 px-5 rounded-xl text-[15px] font-bold'
+    : 'inline-flex items-center justify-center gap-1 h-9 px-3 rounded-lg text-[13px] font-semibold'
+  const iconSize = full ? 16 : 14
 
   if (state === 'done') {
     return (
@@ -64,33 +67,33 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         href={link ?? '#'}
         target="_blank"
         rel="noopener noreferrer"
-        className={`${base} bg-green-50 text-status-green`}
+        className={`${base} shrink-0 bg-status-green/10 text-status-green`}
       >
-        <CalendarCheck size={full ? 16 : 13} /> 등록됨
+        <CalendarCheck size={iconSize} /> 등록됨
       </a>
     )
   }
 
   return (
-    <div className={full ? 'w-full' : ''}>
+    <div className={full ? 'w-full' : 'shrink-0'}>
       <button
         type="button"
         onClick={add}
         disabled={noDeadline || state === 'loading'}
         title={noDeadline ? '마감일이 정해지지 않아 캘린더에 등록할 수 없어요' : undefined}
-        className={`${base} ${
+        className={`${base} transition-colors active:scale-[0.99] ${
           noDeadline
-            ? 'cursor-not-allowed bg-black/[0.04] text-brand-dark/30'
-            : 'bg-accent-soft text-accent active:scale-[0.98]'
+            ? 'cursor-not-allowed bg-line/60 text-subtle'
+            : 'bg-accent-soft text-brand active:bg-accent-soft/70'
         }`}
       >
         {state === 'loading' ? (
           <>
-            <Loader2 size={full ? 16 : 13} className="animate-spin" /> 등록 중…
+            <Loader2 size={iconSize} className="animate-spin" /> 등록 중…
           </>
         ) : (
           <>
-            <CalendarPlus size={full ? 16 : 13} /> 캘린더 추가
+            <CalendarPlus size={iconSize} /> 캘린더
           </>
         )}
       </button>

@@ -1,30 +1,26 @@
-import { CalendarCheck, Menu } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { Bell } from 'lucide-react'
 
 interface TopBarProps {
-  onMenu?: () => void
+  onNotifications?: () => void
 }
 
-// 홈/달력/AI상담 상단 공통 헤더 (로고 + 메뉴 + 알림)
-export default function TopBar({ onMenu }: TopBarProps) {
-  const navigate = useNavigate()
-
+/**
+ * 상단 공통 헤더.
+ *
+ * 로고를 작게 뒀다. 매 화면에 있는 요소는 조용해야 한다. 예전에는 로고가 페이지
+ * 타이틀과 같은 크기(text-2xl)라 서로 싸웠고, 그래서 화면마다 "여기가 어디인지"가
+ * 흐릿했다. 이제 위계는 [페이지 타이틀 26px] > [로고 17px] 순이다.
+ */
+export default function TopBar({ onNotifications }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/95 px-5 py-4 backdrop-blur">
+    <header className="sticky top-0 z-10 flex items-center justify-between bg-cream/90 px-5 py-3.5 backdrop-blur">
+      <span className="text-[17px] font-extrabold tracking-tight text-brand">소복소복</span>
       <button
-        onClick={onMenu}
-        className="p-1 text-brand-dark/80 active:opacity-60"
-        aria-label="메뉴"
+        onClick={onNotifications}
+        className="-mr-1 p-1 text-muted active:text-ink"
+        aria-label="알림"
       >
-        <Menu size={26} strokeWidth={2.2} />
-      </button>
-      <h1 className="text-2xl font-extrabold tracking-tight text-brand">소복소복</h1>
-      <button
-        onClick={() => navigate('/calendar')}
-        className="p-1 text-brand/90 active:opacity-60"
-        aria-label="저장 일정 보기"
-      >
-        <CalendarCheck size={24} strokeWidth={2} />
+        <Bell size={20} strokeWidth={2} />
       </button>
     </header>
   )

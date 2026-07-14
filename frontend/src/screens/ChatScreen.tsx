@@ -172,12 +172,12 @@ export default function ChatScreen() {
 
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
         {policyId && (
-          <div className="rounded-2xl bg-brand-dark p-4 text-white shadow-card">
+          <div className="rounded-2xl bg-primary p-4 text-white shadow-card">
             <p className="text-sm font-semibold">선택한 정책 상담을 이어갈 수 있어요.</p>
             <p className="mt-1 break-all text-xs text-white/70">policyId: {policyId}</p>
             <button
               onClick={() => navigate(`/policy/${policyId}`)}
-              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-brand-dark"
+              className="mt-3 rounded-xl bg-white px-3 py-2 text-xs font-bold text-ink"
             >
               정책 상세 다시 보기
             </button>
@@ -196,7 +196,7 @@ export default function ChatScreen() {
             />
           ) : (
             <div key={m.id} className="flex justify-end">
-              <p className="max-w-[78%] whitespace-pre-line rounded-2xl rounded-tr-md bg-brand-dark px-4 py-3 text-[15px] leading-relaxed text-white">
+              <p className="max-w-[78%] whitespace-pre-line rounded-2xl rounded-tr-md bg-primary px-4 py-3 text-[15px] leading-relaxed text-white">
                 {m.text}
               </p>
             </div>
@@ -210,7 +210,7 @@ export default function ChatScreen() {
               key={q}
               onClick={() => send(q)}
               disabled={sending}
-              className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-brand-dark/80 active:bg-black/5"
+              className="rounded-full border border-brand-light/40 bg-white px-4 py-2 text-sm font-medium text-ink active:bg-line/50"
             >
               {q}
             </button>
@@ -219,7 +219,7 @@ export default function ChatScreen() {
       </div>
 
       {/* 입력창 */}
-      <div className="border-t border-black/5 bg-cream px-4 py-3">
+      <div className="border-t border-line bg-cream px-4 py-3">
         <form
           onSubmit={(e) => {
             e.preventDefault()
@@ -227,14 +227,14 @@ export default function ChatScreen() {
           }}
           className="flex items-center gap-2 rounded-full border border-brand-light/40 bg-white py-1.5 pl-2 pr-1.5"
         >
-          <button type="button" className="p-2 text-brand-dark/40">
+          <button type="button" className="p-2 text-subtle">
             <Plus size={22} />
           </button>
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="메시지를 입력하세요..."
-            className="flex-1 bg-transparent text-[15px] text-brand-dark outline-none placeholder:text-brand-dark/35"
+            className="flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-subtle"
           />
           <button
             type="submit"
@@ -264,12 +264,12 @@ function BotBubble({
 }) {
   return (
     <div className="flex items-start gap-2">
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-brand-dark">
-        <Bot size={20} className="text-status-blue" />
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-ink">
+        <Bot size={20} className="text-muted" />
       </span>
       <div className="max-w-[82%] space-y-2">
         {m.text && (
-          <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-brand-dark shadow-card">
+          <p className="whitespace-pre-line rounded-2xl rounded-tl-md bg-white px-4 py-3 text-[15px] leading-relaxed text-ink shadow-card">
             <span className="flex items-start gap-2">
               {m.pending && <LoaderCircle size={17} className="mt-0.5 flex-shrink-0 animate-spin" />}
               <span>{m.text}</span>
@@ -278,14 +278,14 @@ function BotBubble({
         )}
         {m.sources && m.sources.length > 0 && (
           <div className="rounded-2xl border border-brand-light/30 bg-white p-3 shadow-card">
-            <p className="text-xs font-bold text-brand-dark/70">답변 근거</p>
+            <p className="text-xs font-bold text-muted">답변 근거</p>
             <div className="mt-2 space-y-2">
               {uniqueSourcesByPolicy(m.sources).slice(0, 3).map((source) => (
                 <div key={source.chunk_id} className="rounded-xl bg-cream px-3 py-2.5">
-                  <p className="text-xs font-semibold text-brand-dark/70">
+                  <p className="text-xs font-semibold text-muted">
                     {source.policy_title || source.document_title || '공고문'}
                   </p>
-                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-brand-dark/55">
+                  <p className="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
                     {source.chunk_text}
                   </p>
                   <button
@@ -313,7 +313,7 @@ function BotBubble({
             ))}
           </div>
         )}
-        {m.time && <p className="pl-1 text-xs text-brand-dark/40">{m.time}</p>}
+        {m.time && <p className="pl-1 text-xs text-subtle">{m.time}</p>}
       </div>
     </div>
   )
