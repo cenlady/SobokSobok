@@ -77,11 +77,6 @@ class Settings(BaseSettings):
         "신청 대상, 신청 방법, 제출 서류, 접수 기간, 문의처를 사용자가 이해하기 쉽게 정리한다."
     )
 
-    # LangSmith는 키가 있을 때만 추적한다. 키가 없으면 코드 경로는 no-op으로 동작한다.
-    LANGSMITH_TRACING: bool = False
-    LANGSMITH_API_KEY: str | None = None
-    LANGSMITH_PROJECT: str = "soboksobok-chatbot-rag"
-
     # 추천 설명 LLM + 추천 검색 임베딩.
     RECOMMEND_LLM_PROVIDER: str = "openai"
     RECOMMEND_LLM_MODEL: str = "gpt-4o-mini"

@@ -107,17 +107,6 @@ class OpenAIEmbeddingModel(EmbeddingModel):
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
             timeout=timeout_seconds or settings.LLM_EMBEDDING_TIMEOUT_SECONDS,
         )
-        if settings.LANGSMITH_TRACING and settings.LANGSMITH_API_KEY:
-            try:
-                from langsmith import wrappers
-
-                os.environ.setdefault("LANGSMITH_TRACING", "true")
-                os.environ.setdefault("LANGSMITH_API_KEY", settings.LANGSMITH_API_KEY)
-                os.environ.setdefault("LANGSMITH_PROJECT", settings.LANGSMITH_PROJECT)
-                self.client = wrappers.wrap_openai(self.client)
-            except ImportError:
-                pass
-
     def embed_text(self, text: str) -> List[float]:
         return self.embed_documents([text])[0]
 

@@ -89,8 +89,6 @@ class ChatAnswerResponse(ChatSearchResponse):
     session_id: UUID
     context_policy_id: Optional[str] = None
     active_policy_id: Optional[str] = None
-    langsmith_enabled: bool
-    langsmith_project: Optional[str] = None
 
 
 class SelectChatPolicyRequest(BaseModel):

@@ -1,8 +1,6 @@
-import os
 import uuid
 import hashlib
 import re
-from functools import wraps
 from collections.abc import Iterator
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -110,36 +108,6 @@ QUESTION_HINTS: Dict[str, List[str]] = {
     "reference": ["원문 기준이 어디야?", "참고할 자료가 있어?"],
     "general": ["이 정책에 대해 알려줘.", "내 상황에 맞는지 설명해줘."],
 }
-
-
-def is_langsmith_enabled() -> bool:
-    return bool(settings.LANGSMITH_TRACING and settings.LANGSMITH_API_KEY)
-
-
-def configure_langsmith_env() -> None:
-    if not is_langsmith_enabled():
-        return
-    os.environ.setdefault("LANGSMITH_TRACING", "true")
-    os.environ.setdefault("LANGSMITH_API_KEY", settings.LANGSMITH_API_KEY or "")
-    os.environ.setdefault("LANGSMITH_PROJECT", settings.LANGSMITH_PROJECT)
-
-
-def traceable_if_enabled(name: str):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            if not is_langsmith_enabled():
-                return func(*args, **kwargs)
-            try:
-                from langsmith import traceable
-            except ImportError:
-                return func(*args, **kwargs)
-            configure_langsmith_env()
-            return traceable(name=name)(func)(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
 
 
 def _compact_list(values: Any, limit: int = 6) -> List[str]:
@@ -1221,7 +1189,6 @@ def record_chat_turn(
     db.commit()
 
 
-@traceable_if_enabled("chat-parent-document-retrieve")
 def retrieve_policy_document_sources(
     db: Session,
     query: str,
@@ -1301,7 +1268,6 @@ def retrieve_policy_document_sources(
     }
 
 
-@traceable_if_enabled("chat-rag-retrieve")
 def retrieve_policy_chunk_sources(
     db: Session,
     query: str,
@@ -2249,7 +2215,6 @@ def build_chat_user_prompt(
     )
 
 
-@traceable_if_enabled("chat-rag-answer")
 def generate_chat_answer(
     query: str,
     sources: List[Dict[str, Any]],
@@ -2347,9 +2312,4 @@ def answer_policy_question(
             conversation_context=build_conversation_context(recent_messages or []),
             model_mode=model_mode,
         )
-    return {
-        **retrieval,
-        "answer": answer,
-        "langsmith_enabled": is_langsmith_enabled(),
-        "langsmith_project": settings.LANGSMITH_PROJECT if is_langsmith_enabled() else None,
-    }
+    return {**retrieval, "answer": answer}

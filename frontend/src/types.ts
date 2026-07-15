@@ -313,8 +313,6 @@ export interface ChatAnswerResponse {
   session_id: string
   context_policy_id?: string | null
   active_policy_id?: string | null
-  langsmith_enabled: boolean
-  langsmith_project?: string | null
 }
 
 export interface ChatSessionResponse {
