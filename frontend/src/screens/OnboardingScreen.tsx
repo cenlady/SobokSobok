@@ -33,7 +33,7 @@ export default function OnboardingScreen() {
 
   const [industry, setIndustry] = useState('')
   const [sido, setSido] = useState('서울특별시')
-  const [sigungu, setSigungu] = useState('마포구')
+  const [sigungu, setSigungu] = useState('전체')
   const [revenue, setRevenue] = useState('')
   const [employees, setEmployees] = useState('')
   const [businessStatus, setBusinessStatus] = useState('')
