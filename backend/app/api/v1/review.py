@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal, get_db
 from app.core.deps import get_current_user
+from app.core.model_errors import public_model_error
+from app.core.model_provider import get_user_model_mode
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.review import ReviewSession
 from app.models.user import User
@@ -77,7 +79,13 @@ async def start_review(
             )
         )
 
-    session = create_review_session(db, files=uploaded, policy=policy, user_id=current_user.id)
+    session = create_review_session(
+        db,
+        files=uploaded,
+        policy=policy,
+        user_id=current_user.id,
+        model_mode=get_user_model_mode(current_user, "document_review"),
+    )
 
     # 요건 대조 단계를 실제로 거치는지. 정책을 골랐어도 그 정책에 필수서류 정보가
     # 없으면(전체의 63%) 대조 단계가 없다. 프론트가 진행 단계 수를 여기에 맞춘다.
@@ -91,6 +99,7 @@ async def start_review(
         session_id=str(session.id),
         policy_id=str(policy.id) if policy else None,
         review_status=session.review_status,
+        model_mode=session.model_mode,
         file_count=len(uploaded),
         has_requirement_matching=will_match,
     )
@@ -120,7 +129,12 @@ def _run_review_job(session_id: uuid.UUID) -> None:
         policy = db.get(NormalizedPolicy, session.policy_id) if session.policy_id else None
         run_review_pipeline(db, session, policy=policy)
     except Exception as exc:  # noqa: BLE001 - 잡이 조용히 죽으면 사용자는 영원히 대기한다
-        print(f"[review] 검토 잡 실패 session_id={session_id}: {exc}", flush=True)
+        error_code, _ = public_model_error(exc)
+        print(
+            f"pipeline_event feature=document_review stage=review_job "
+            f"status=error error_code={error_code} error_type={type(exc).__name__}",
+            flush=True,
+        )
         db.rollback()
         _mark_failed(db, session_id, exc)
     finally:
@@ -133,11 +147,17 @@ def _mark_failed(db: Session, session_id: uuid.UUID, exc: Exception) -> None:
         session = db.get(ReviewSession, session_id)
         if session is None:
             return
+        error_code, public_message = public_model_error(exc)
         session.review_status = "failed"
-        session.summary = session.summary or f"검토 중 오류가 발생했습니다: {exc}"
+        session.error_code = error_code
+        session.summary = public_message
         db.commit()
     except Exception as inner:  # noqa: BLE001
-        print(f"[review] failed 마킹조차 실패 session_id={session_id}: {inner}", flush=True)
+        print(
+            f"pipeline_event feature=document_review stage=mark_failed "
+            f"status=error error_type={type(inner).__name__}",
+            flush=True,
+        )
         db.rollback()
 
 
@@ -159,6 +179,7 @@ def _to_response(session: ReviewSession) -> ReviewResponse:
         session_id=str(session.id),
         policy_id=str(session.policy_id) if session.policy_id else None,
         review_status=session.review_status,
+        model_mode=session.model_mode,
         requirement_status=session.requirement_status,
         requirement_matches=[
             RequirementMatch(**m) for m in (session.requirement_matches or [])
@@ -173,5 +194,6 @@ def _to_response(session: ReviewSession) -> ReviewResponse:
             for upload in session.uploads
         ],
         summary=session.summary,
+        error_code=session.error_code,
         created_at=session.created_at,
     )

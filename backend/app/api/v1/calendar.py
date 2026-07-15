@@ -4,10 +4,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, UUID4
+import asyncio
 import httpx
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
-import os
 import re
 
 from app.core.database import get_db
@@ -19,6 +19,9 @@ from app.models.user import User
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.chat import PolicyChunk
 from app.core.config import settings
+from app.core.model_errors import ModelResponseError
+from app.core.model_provider import get_chat_model, get_user_model_mode
+from app.services.prep_rag import search_prep_guides
 
 router = APIRouter()
 
@@ -269,15 +272,6 @@ async def get_calendar_coach_timeline(
     - RAG 지식(공고 필수 서류 및 우대조건)과 사용자의 실제 구글 일정(MCP 연동)을 융합하여,
       바쁜 개인 일정을 피해 접수를 완수하도록 돕는 D-Day별 초개인화 AI 코칭 타임라인을 제공합니다.
     """
-    # -------------------------------------------------------------
-    # [이재혁 사장님 전용 - AI 코치 LLM 제공자 스위치 설정]
-    # - "gemini": Google Gemini 모델을 사용해 코칭 텍스트를 생성합니다.
-    # - "openai": 유료 상용 모델(gpt-4o-mini)을 사용하여 고품질 완성형 비서 텍스트를 기동합니다.
-    # - "ollama": 로컬 본체에 켜진 무료 한국어 모델(exaone3.5)을 사용해 100% 무료로 기동합니다.
-    # ➔ CHAT_COMPLETION_PROVIDER 설정을 따라갑니다.
-    # -------------------------------------------------------------
-    COACH_LLM_PROVIDER = settings.CHAT_COMPLETION_PROVIDER.lower()
-
     # 1) 지원사업 조회 및 기본 검사
     policy = db.query(NormalizedPolicy).filter(NormalizedPolicy.id == policy_id).first()
     if not policy:
@@ -291,6 +285,8 @@ async def get_calendar_coach_timeline(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This policy does not have a deadline (apply_end) date, so coaching cannot be generated."
         )
+
+    model_mode = get_user_model_mode(current_user, "calendar_coach")
 
     # 2) 사용자의 실제 구글 달력 스케줄 연동 조회 (MCP Tool)
     google_access_token = await get_valid_google_token(current_user, db)
@@ -329,9 +325,9 @@ async def get_calendar_coach_timeline(
         schedules_list.append(f"{item['date']}{time_part}: {item['summary']}")
     schedules_text = "\n".join(schedules_list) if schedules_list else "등록된 개인 일정이 없어 매우 한가한 상태입니다."
     required_docs_text = "공고 참조"
+    doc_names: list[str] = []
     if policy.required_documents:
         if isinstance(policy.required_documents, list):
-            doc_names = []
             for doc in policy.required_documents:
                 if isinstance(doc, dict) and "name" in doc:
                     doc_names.append(doc["name"])
@@ -343,6 +339,20 @@ async def get_calendar_coach_timeline(
                 required_docs_text = str(policy.required_documents)
         else:
             required_docs_text = str(policy.required_documents)
+
+    prep_results = search_prep_guides(
+        db,
+        ", ".join(doc_names),
+        model_mode=model_mode,
+        limit=min(max(len(doc_names), 1), 8),
+    )
+    prep_guides_text = "등록된 서류 발급 가이드가 없습니다."
+    if prep_results:
+        prep_guides_text = "\n\n".join(
+            f"[{row.document_name}]\n{row.guide_text}"
+            for row, _similarity in prep_results
+            if row.guide_text
+        )
 
     system_prompt = (
         "당신은 소상공인 사장님들의 지원금 신청 일정을 밀착 코칭해 주는 친절하고 전문적인 AI 비서 '소복이'입니다. "
@@ -358,6 +368,7 @@ async def get_calendar_coach_timeline(
         f"- 신청 마감일: {deadline_str}\n"
         f"- 필수 구비 서류: {required_docs_text}\n"
         f"- RAG 상세 서류 요건:\n{rag_context}\n\n"
+        f"- 서류 발급 가이드:\n{prep_guides_text}\n\n"
         f"=== [사장님의 구글 캘린더 스케줄] ===\n"
         f"{schedules_text}\n\n"
         f"위 두 가지 데이터를 치밀하게 대조 및 분석하여, "
@@ -367,120 +378,27 @@ async def get_calendar_coach_timeline(
         f"[필수]: 절대로 # 이나 * 같은 마크다운 특수 기호를 내용에 포함하지 말고, 순수 한글 텍스트와 이모지로만 읽기 쉽게 줄바꿈해 출력하세요."
     )
 
-    # 5-A) Ollama 로컬 무료 모드 실행 분기
-    if COACH_LLM_PROVIDER == "ollama":
-        try:
-            async with httpx.AsyncClient() as client:
-                ollama_payload = {
-                    "model": settings.REVIEW_LLM_MODEL,  # exaone3.5
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    "stream": False
-                }
-                response = await client.post(
-                    f"{settings.OLLAMA_BASE_URL}/api/chat",
-                    json=ollama_payload,
-                    timeout=180.0
-                )
-                if response.status_code == 200:
-                    ai_coach_timeline = response.json().get("message", {}).get("content", "")
-                    if ai_coach_timeline:
-                        return {
-                            "policy_title": policy.title,
-                            "deadline": deadline_str,
-                            "provider": "ollama",
-                            "coach_guide": ai_coach_timeline,
-                            "utilized_user_events": len(user_schedules)
-                        }
-        except Exception:
-            pass  # 올라마 서버 에러 시 static fallback으로 우회
-
-    # 5-B) Gemini 모드 실행 분기
-    elif COACH_LLM_PROVIDER == "gemini":
-        if settings.GEMINI_API_KEY:
-            try:
-                from google import genai
-                from google.genai import types
-
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
-                response = client.models.generate_content(
-                    model=settings.CHAT_COMPLETION_MODEL or settings.GEMINI_TEXT_MODEL,
-                    contents=f"{system_prompt}\n\n{user_prompt}",
-                    config=types.GenerateContentConfig(
-                        temperature=0.3,
-                    ),
-                )
-
-                ai_coach_timeline = response.text or ""
-                if ai_coach_timeline:
-                    return {
-                        "policy_title": policy.title,
-                        "deadline": deadline_str,
-                        "provider": "gemini",
-                        "coach_guide": ai_coach_timeline,
-                        "utilized_user_events": len(user_schedules)
-                    }
-            except Exception:
-                pass  # Gemini 에러 시 static fallback으로 우회
-
-    # 5-C) OpenAI 상용 유료 모드 실행 분기
-    elif COACH_LLM_PROVIDER == "openai":
-        openai_api_key = os.environ.get("OPENAI_API_KEY") or getattr(settings, "OPENAI_API_KEY", None)
-        if openai_api_key:
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=openai_api_key)
-                openai_model = settings.CHAT_COMPLETION_MODEL
-                if openai_model.startswith("gemini"):
-                    openai_model = "gpt-4o-mini"
-
-                response = client.chat.completions.create(
-                    model=openai_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.3,
-                )
-                
-                ai_coach_timeline = response.choices[0].message.content or ""
-                return {
-                    "policy_title": policy.title,
-                    "deadline": deadline_str,
-                    "provider": "openai",
-                    "coach_guide": ai_coach_timeline,
-                    "utilized_user_events": len(user_schedules)
-                }
-            except Exception:
-                pass  # OpenAI 에러 시 static fallback으로 우회
-
-    # 5-D) 이중 안전망: LLM 통신 장애 및 설정 오류 시 작동하는 정적 Fallback 알고리즘
-    fallback_guide = (
-        f"### 🤖 소복이 AI 일정 코칭 타임라인 (Fallback 모드)\n\n"
-        f"사장님, **[{policy.title}]** 지원사업 마감일인 **{deadline_str}**에 늦지 않도록 준비 스케줄을 짜드릴게요!\n\n"
-        f"📋 **필수 구비 서류**:\n`{required_docs_text}`\n\n"
-        f"📅 **사장님의 실제 구글 일정 연동 분석**:\n"
+    # 5) 캘린더 CRUD와 분리된 AI 코치 전용 모델 설정을 사용한다.
+    model = get_chat_model("calendar_coach", model_mode=model_mode)
+    model_spec = model.spec
+    ai_coach_timeline = await asyncio.to_thread(
+        model.generate,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        stage="calendar_timeline_generation",
+        source_module=__name__,
+        source_function="get_calendar_coach_timeline",
+        temperature=0.3,
+        timeout_seconds=settings.LLM_REQUEST_TIMEOUT_SECONDS,
     )
-    
-    if user_schedules:
-        fallback_guide += f"- 향후 2주간 {len(user_schedules)}개의 일정이 감지되었습니다. 마감일 직전에 잡혀있는 사장님의 개인 일정들(예: `{user_schedules[0]}`)과 충돌하지 않도록 조율을 도와드릴게요.\n\n"
-    else:
-        fallback_guide += "- 향후 2주간 특별한 구글 개인 일정이 확인되지 않았습니다. 한층 넉넉하고 여유롭게 서류를 준비하실 수 있습니다!\n\n"
-
-    fallback_guide += (
-        f"🎯 **추천 마감 준비 타임라인**:\n"
-        f"1. **D-14 (서류 준비 개시)**: 주민등록등본, 부가가치세과세표준증명원 등 온라인(정부24) 또는 세무서 방문 발급을 시작하세요.\n"
-        f"2. **D-7 (우대서류 및 캘린더 대조)**: 감지된 구글 일정을 피해, 마감 1주일 전인 이번 주중에 필수 서류 누락 여부를 확인해 세팅해 둡니다.\n"
-        f"3. **D-3 (모의 최종 검수)**: 시스템 접속 폭주 및 서버 지연을 원천 예방하기 위해 오늘 파일 업로드 사전 테스트를 마쳐두세요.\n"
-        f"4. **D-Day (접수 마감 완료)**: 늦어도 마감 당일 오전 중에는 접수 완료 버튼을 클릭해 영수증을 챙기셔야 안전합니다!"
-    )
-
+    if not ai_coach_timeline:
+        raise ModelResponseError("캘린더 코치 모델이 빈 응답을 반환했습니다.")
     return {
         "policy_title": policy.title,
         "deadline": deadline_str,
-        "provider": "static_fallback",
-        "coach_guide": fallback_guide,
-        "utilized_user_events": len(user_schedules)
+        "provider": model_spec.provider,
+        "prep_embedding_provider": "openai" if model_mode == "cloud" else "ollama",
+        "prep_guides_used": len(prep_results),
+        "coach_guide": ai_coach_timeline,
+        "utilized_user_events": len(user_schedules),
     }

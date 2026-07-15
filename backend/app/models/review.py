@@ -10,6 +10,7 @@ from sqlalchemy import (
     JSON,
     Index,
     UniqueConstraint,
+    CheckConstraint,
     func,
     text,
 )
@@ -27,7 +28,7 @@ class ReviewVector(Base):
     - 역할: 정책의 필수 제출 서류 요건(`required_documents`) 및 지원대상 요건 텍스트의
       임베딩을 보관하여, 사용자가 업로드한 서류 내용과 대조하는 데 사용합니다.
     - 소유자: 서류 검토 서비스 (공유 계약 #1: 벡터는 각자 소유)
-    - 임베딩: Ollama bge-m3 (1024차원). 차원은 settings.REVIEW_EMBEDDING_DIM으로 관리.
+    - 기본 임베딩: Ollama bge-m3 (1024차원). 기능별 환경변수로 변경 가능.
     """
     __tablename__ = "review_vectors"
 
@@ -37,8 +38,10 @@ class ReviewVector(Base):
     document_type = Column(String(30), nullable=False, default="required_document", comment="요건 유형 (required_document, eligibility 등)")
     source_text = Column(Text, nullable=True, comment="임베딩 원문. 검색 후 LLM 진단에 근거로 넘긴다")
 
-    # pgvector 임베딩 벡터 (차원은 settings.REVIEW_EMBEDDING_DIM으로 관리)
-    embedding = Column(Vector(settings.REVIEW_EMBEDDING_DIM), nullable=False, comment="[pgvector] 요건 대조 임베딩 벡터값")
+    embedding_openai = Column(Vector(settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS), nullable=True)
+    embedding_ollama = Column(Vector(settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS), nullable=True)
+    embedding_openai_model = Column(String(100), nullable=True)
+    embedding_ollama_model = Column(String(100), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -75,6 +78,13 @@ class ReviewSession(Base):
         String(20), nullable=False, default="queued",
         comment="검토 진행 단계 (queued, extracting, matching, diagnosing, done, failed)",
     )
+    model_mode = Column(
+        String(10),
+        nullable=False,
+        default="local",
+        server_default="local",
+        comment="접수 시 확정한 서류검토 AI 방식 (cloud/local)",
+    )
 
     # 요건 대조를 '할 수 있었는가'. 빈 requirement_matches를 '요건을 다 충족했다'로
     # 읽으면 안 되기 때문에 별도로 기록한다.
@@ -92,6 +102,11 @@ class ReviewSession(Base):
 
     # 세션 전체 종합 진단 (파일별 진단은 ReviewUpload.diagnosis에 있다)
     summary = Column(Text, nullable=True, comment="올린 서류 전체에 대한 종합 진단 한두 문장")
+    error_code = Column(
+        String(40),
+        nullable=True,
+        comment="실패 시 사용자에게 노출 가능한 안전한 오류 코드",
+    )
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -103,6 +118,13 @@ class ReviewSession(Base):
         order_by="ReviewUpload.created_at",
     )
     policy = relationship("NormalizedPolicy")
+
+    __table_args__ = (
+        CheckConstraint(
+            "model_mode IN ('cloud', 'local')",
+            name="ck_review_sessions_model_mode",
+        ),
+    )
 
 
 class ReviewUpload(Base):
@@ -172,20 +194,42 @@ REVIEW_LEGACY_CLEANUP_SQL = [
 REVIEW_SCHEMA_SQL = [
     "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS document_type VARCHAR(30) NOT NULL DEFAULT 'required_document'",
     "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS source_text TEXT",
-    # 차원이 이미 맞으면 건너뛴다. 무조건 ALTER하면 기동마다 테이블을 재작성한다.
-    # (기존 벡터는 차원이 달라 무의미하므로 변경 전에 비운다.)
+    f"ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS embedding_openai vector({settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS})",
+    f"ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS embedding_ollama vector({settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS})",
+    "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS embedding_openai_model VARCHAR(100)",
+    "ALTER TABLE review_vectors ADD COLUMN IF NOT EXISTS embedding_ollama_model VARCHAR(100)",
+    # 차원이 이미 맞으면 건너뛴다. 모델 차원이 바뀌면 기존 두 벡터는 같이 재생성한다.
     f"""
     DO $$
     BEGIN
         IF EXISTS (
             SELECT 1 FROM pg_attribute
             WHERE attrelid = 'review_vectors'::regclass
-              AND attname = 'embedding'
-              AND atttypmod <> {settings.REVIEW_EMBEDDING_DIM}
+              AND (
+                    (attname = 'embedding_openai' AND atttypmod <> {settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS})
+                 OR (attname = 'embedding_ollama' AND atttypmod <> {settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS})
+              )
         ) THEN
             DELETE FROM review_vectors;
             ALTER TABLE review_vectors
-                ALTER COLUMN embedding TYPE vector({settings.REVIEW_EMBEDDING_DIM});
+                ALTER COLUMN embedding_openai TYPE vector({settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS});
+            ALTER TABLE review_vectors
+                ALTER COLUMN embedding_ollama TYPE vector({settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS});
+        END IF;
+    END $$;
+    """,
+    "ALTER TABLE review_vectors DROP COLUMN IF EXISTS embedding",
+    "ALTER TABLE review_sessions ADD COLUMN IF NOT EXISTS model_mode VARCHAR(10) NOT NULL DEFAULT 'local'",
+    "ALTER TABLE review_sessions ADD COLUMN IF NOT EXISTS error_code VARCHAR(40)",
+    """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_review_sessions_model_mode'
+        ) THEN
+            ALTER TABLE review_sessions
+                ADD CONSTRAINT ck_review_sessions_model_mode
+                CHECK (model_mode IN ('cloud', 'local'));
         END IF;
     END $$;
     """,
@@ -197,7 +241,8 @@ REVIEW_SCHEMA_SQL = [
     """
     UPDATE review_sessions
        SET review_status = 'failed',
-           summary = COALESCE(summary, '서버가 재시작되어 검토가 중단되었습니다. 다시 시도해주세요.')
+           summary = COALESCE(summary, '서버가 재시작되어 검토가 중단되었습니다. 다시 시도해주세요.'),
+           error_code = COALESCE(error_code, 'REVIEW_INTERRUPTED')
      WHERE review_status IN ('queued', 'extracting', 'matching', 'diagnosing')
     """,
 ]

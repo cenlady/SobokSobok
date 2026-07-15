@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import httpx
-
 from app.core.config import settings
+from app.core.model_errors import ModelServiceError
+from app.core.model_provider import get_chat_model, parse_json_response
 from app.models.normalized_policy import NormalizedPolicy
 from app.services.normalization.common import _as_text, _clean_text, _make_hash
 from app.services.normalization.limit_rules import (
@@ -50,6 +49,8 @@ def _read_llm_cache_entry(
         return False, None, None
     if entry.get("context_hash") != _make_hash(context):
         return False, None, None
+    if entry.get("provider") != settings.NORMALIZATION_LLM_PROVIDER:
+        return False, None, None
     if entry.get("model") != settings.NORMALIZE_LLM_MODEL:
         return False, None, None
     if entry.get("prompt_version") != NORMALIZE_LLM_PROMPT_VERSION:
@@ -69,6 +70,7 @@ def _make_llm_cache_entry(
     return {
         "source_hash": source_hash,
         "context_hash": _make_hash(context),
+        "provider": settings.NORMALIZATION_LLM_PROVIDER,
         "model": settings.NORMALIZE_LLM_MODEL,
         "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
         "result": result,
@@ -141,10 +143,10 @@ def _resolve_limits_with_llm_cache(
     if cache_hits:
         print(f"  [LLM Cache] {log_label} 결과 재사용: {cache_hits}", flush=True)
 
-    if pending_fields and settings.REC_OLLAMA_BASE_URL:
-        print(f"  [Ollama] {log_label} 규칙 판정 보완: {pending_fields}", flush=True)
+    if pending_fields:
+        print(f"  [LLM] {log_label} 규칙 판정 보완: {pending_fields}", flush=True)
         cacheable_fields: set[str] = set()
-        llm_limits = _extract_limits_via_ollama(
+        llm_limits = _extract_limits_via_llm(
             text_value,
             pending_fields,
             cacheable_fields=cacheable_fields,
@@ -164,7 +166,7 @@ def _resolve_limits_with_llm_cache(
                     result=result,
                 )
         filled = [field for field in pending_fields if limits[field] is not None]
-        print(f"  [Ollama] {log_label} 결과 적용: {filled if filled else '추출 없음'}", flush=True)
+        print(f"  [LLM] {log_label} 결과 적용: {filled if filled else '추출 없음'}", flush=True)
 
     return limits, llm_cache
 
@@ -195,7 +197,7 @@ def _convert_llm_limit(
         result: dict[str, Any] = {
             "constraints": evidence_bounds["constraints"],
             "source_text": evidence,
-            "extraction_method": "ollama_structure",
+            "extraction_method": "llm_structure",
             "model": model_name,
             "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
             "requires_manual_review": True,
@@ -240,7 +242,7 @@ def _convert_llm_limit(
         "max_value": max_value,
         "max_operator": max_operator,
         "source_text": evidence,
-        "extraction_method": "ollama_llm",
+        "extraction_method": "llm",
         "model": model_name,
         "prompt_version": NORMALIZE_LLM_PROMPT_VERSION,
     }
@@ -272,7 +274,7 @@ def _is_explicit_llm_no_match(field: str, raw_value: Any, context: str) -> bool:
     )
 
 
-def _extract_limits_via_ollama(
+def _extract_limits_via_llm(
     text_value: str | None,
     requested_fields: list[str] | None = None,
     *,
@@ -290,9 +292,6 @@ def _extract_limits_via_ollama(
         return fallback_res
 
     model_name = settings.NORMALIZE_LLM_MODEL
-    base_url = settings.REC_OLLAMA_BASE_URL
-    if not base_url:
-        return fallback_res
 
     field_prompts = {
         "employee_limit": (
@@ -334,26 +333,44 @@ def _extract_limits_via_ollama(
             "임차료·지원금·대표자 나이·신용점수 등 다른 숫자는 포함하지 마세요. "
             f"출력 예시: {example}. JSON 이외의 문장은 출력하지 마세요."
         )
-        print(f"  [Ollama Structure] {model_name} 호출: field={field}, chars={len(context)}", flush=True)
         try:
-            response = httpx.post(
-                f"{base_url.rstrip('/')}/api/chat",
-                json={
-                    "model": model_name,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": context},
+            response_text = get_chat_model("normalization").generate(
+                system_prompt=system_prompt,
+                user_prompt=context,
+                stage=f"limit_extraction_{field}",
+                source_module=__name__,
+                source_function="_extract_limits_via_llm",
+                response_schema={
+                    "type": "object",
+                    "properties": {
+                        "classification": {
+                            "type": "string",
+                            "enum": ["direct", "alternative", "relational", "unrelated"],
+                        },
+                        "logic": {"type": "string", "enum": ["all_of", "any_of"]},
+                        "scope": {"type": "string", "enum": ["global", "branch"]},
+                        "min": {"type": ["integer", "null"]},
+                        "min_operator": {"type": ["string", "null"]},
+                        "max": {"type": ["integer", "null"]},
+                        "max_operator": {"type": ["string", "null"]},
+                        "evidence": {"type": "string"},
+                    },
+                    "required": [
+                        "classification",
+                        "logic",
+                        "scope",
+                        "min",
+                        "min_operator",
+                        "max",
+                        "max_operator",
+                        "evidence",
                     ],
-                    "format": "json",
-                    "stream": False,
-                    "options": {"temperature": 0.0},
+                    "additionalProperties": False,
                 },
-                timeout=settings.NORMALIZE_LLM_TIMEOUT_SECONDS,
+                temperature=0.0,
+                timeout_seconds=settings.NORMALIZE_LLM_TIMEOUT_SECONDS,
             )
-            response.raise_for_status()
-            payload = response.json()
-            response_text = payload.get("message", {}).get("content", "").strip()
-            data = json.loads(response_text)
+            data = parse_json_response(response_text)
             if isinstance(data, dict) and isinstance(data.get(field), dict):
                 data = data[field]
             explicit_no_match = _is_explicit_llm_no_match(field, data, context)
@@ -374,8 +391,14 @@ def _extract_limits_via_ollama(
             if cacheable_fields is not None:
                 cacheable_fields.add(field)
             if fallback_res[field] is None and not explicit_no_match:
-                print(f"  [Ollama Structure] 검증에서 거절된 응답: {response_text[:500]}", flush=True)
-        except Exception as exc:
+                print(f"  [LLM Structure] {field} 응답이 검증에서 거절되었습니다.", flush=True)
+        except ModelServiceError:
+            raise
+        except Exception:
             fallback_res[field] = complex_payload
-            print(f"  [Ollama Structure] {field} 추출 실패: {exc}", flush=True)
+            print(f"  [LLM Structure] {field} 추출에 실패했습니다.", flush=True)
     return fallback_res
+
+
+# 기존 테스트/내부 import 호환. 실제 provider는 중앙 factory가 선택한다.
+_extract_limits_via_ollama = _extract_limits_via_llm

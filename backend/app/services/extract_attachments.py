@@ -97,7 +97,11 @@ def _process_row(db: Session, row: AttachmentFile, stats: dict[str, int | bool])
         row.extraction_status = "failed"
         db.commit()
         stats["failed"] = int(stats["failed"]) + 1
-        print(f"[extractor] failed id={row.id} path={resolved}: {exc}", flush=True)
+        print(
+            f"pipeline_event feature=attachment_parsing parser=kordoc "
+            f"stage=text_extraction status=error error_type={type(exc).__name__}",
+            flush=True,
+        )
         return
 
     # 5) 결과 정리 + 저장
@@ -116,6 +120,11 @@ def _process_row(db: Session, row: AttachmentFile, stats: dict[str, int | bool])
     row.extraction_status = "success"
     db.commit()
     stats["success"] = int(stats["success"]) + 1
+    print(
+        f"pipeline_event feature=attachment_parsing parser=kordoc "
+        f"stage=text_extraction output_chars={len(cleaned)} status=success",
+        flush=True,
+    )
 
 
 def _run_kordoc(path: str) -> str:

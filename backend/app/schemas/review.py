@@ -74,6 +74,7 @@ class ReviewStartResponse(BaseModel):
     session_id: str
     policy_id: str | None = None
     review_status: ReviewStatus
+    model_mode: Literal["cloud", "local"]
     file_count: int
     has_requirement_matching: bool = Field(
         ...,
@@ -86,6 +87,7 @@ class ReviewResponse(BaseModel):
     session_id: str
     policy_id: str | None = None
     review_status: ReviewStatus
+    model_mode: Literal["cloud", "local"]
 
     requirement_status: RequirementStatus = Field(
         ...,
@@ -96,5 +98,6 @@ class ReviewResponse(BaseModel):
 
     files: list[ReviewFile] = Field(default_factory=list)
     summary: str | None = Field(None, description="세션 종합 진단. 진행 중이면 null")
+    error_code: str | None = Field(None, description="실패 시 안전한 오류 코드")
 
     created_at: datetime | None = None

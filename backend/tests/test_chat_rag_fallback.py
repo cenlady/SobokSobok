@@ -1,8 +1,13 @@
 import uuid
+from unittest.mock import patch
 
+import pytest
+
+from app.core.model_errors import ModelTimeoutError
 from app.services.chat_rag import (
     answer_policy_question,
     build_retrieval_only_answer,
+    generate_chat_answer,
     is_out_of_policy_scope,
 )
 
@@ -124,3 +129,11 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
+
+
+@patch("app.services.chat_rag.get_chat_model")
+def test_chat_model_timeout_is_not_replaced_with_retrieval_fallback(mock_get_chat_model):
+    mock_get_chat_model.return_value.generate.side_effect = ModelTimeoutError()
+
+    with pytest.raises(ModelTimeoutError):
+        generate_chat_answer("지원 대상이 누구야?", [_source("[지원 대상] 소상공인")])

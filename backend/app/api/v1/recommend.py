@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.model_provider import get_user_model_mode
 from app.models.user import User
 from app.schemas.recommend import (
     RecommendationPreviewResponse,
@@ -48,6 +49,7 @@ def preview_recommendations(
         # 상태별 필터와 페이지네이션은 동일한 전체 순위에서 적용해야
         # 페이지를 넘겨도 추천 순서가 흔들리지 않는다.
         limit=1000,
+        model_mode=get_user_model_mode(current_user, "recommendation"),
     )
     status_counts = {
         "eligible": sum(item.match_status == "eligible" for item in all_results),
@@ -111,6 +113,11 @@ def explain_recommendation(
     db: Session = Depends(get_db),
 ):
     try:
-        return explain_policy_recommendation(db=db, policy_id=policy_id, profile=profile)
+        return explain_policy_recommendation(
+            db=db,
+            policy_id=policy_id,
+            profile=profile,
+            model_mode=get_user_model_mode(current_user, "recommendation"),
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

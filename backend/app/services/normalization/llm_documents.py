@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
-import httpx
-
 from app.core.config import settings
+from app.core.model_errors import ModelServiceError
+from app.core.model_provider import get_chat_model, parse_json_response
 from app.services.normalization.common import _as_text, _clean_text, _make_hash
 from app.services.normalization.documents import _document_name_key
 
@@ -56,15 +55,15 @@ def _resolve_required_documents_with_llm_cache(
         )
 
     accepted_count = 0
-    if pending and settings.REC_OLLAMA_BASE_URL:
+    if pending:
         print(
-            f"  [Ollama Documents] {log_label} 문서 후보 판정: {len(pending)}",
+            f"  [LLM Documents] {log_label} 문서 후보 판정: {len(pending)}",
             flush=True,
         )
         for candidate_item in pending:
             candidate = candidate_item["name"]
             context = candidate_item["context"]
-            accepted, cacheable = _classify_document_candidate_via_ollama(candidate)
+            accepted, cacheable = _classify_document_candidate_via_llm(candidate)
             if not cacheable:
                 continue
             cache_entries[_make_hash(candidate)] = _make_document_cache_entry(
@@ -77,7 +76,7 @@ def _resolve_required_documents_with_llm_cache(
                 documents.append(_llm_document_item(candidate, source))
                 accepted_count += 1
         print(
-            f"  [Ollama Documents] {log_label} 추가 문서명: {accepted_count}",
+            f"  [LLM Documents] {log_label} 추가 문서명: {accepted_count}",
             flush=True,
         )
 
@@ -85,6 +84,7 @@ def _resolve_required_documents_with_llm_cache(
         return documents, {}
     return documents, {
         DOCUMENT_LLM_CACHE_KEY: {
+            "provider": settings.NORMALIZATION_LLM_PROVIDER,
             "model": settings.NORMALIZE_LLM_MODEL,
             "prompt_version": DOCUMENT_LLM_PROMPT_VERSION,
             "entries": cache_entries,
@@ -92,12 +92,7 @@ def _resolve_required_documents_with_llm_cache(
     }
 
 
-def _classify_document_candidate_via_ollama(candidate: str) -> tuple[bool | None, bool]:
-    model_name = settings.NORMALIZE_LLM_MODEL
-    base_url = settings.REC_OLLAMA_BASE_URL
-    if not base_url:
-        return None, False
-
+def _classify_document_candidate_via_llm(candidate: str) -> tuple[bool | None, bool]:
     system_prompt = (
         "당신은 소상공인 지원 공고의 명시적인 제출서류 구간에서 후보 한 줄만 판정합니다. "
         "후보가 신청자가 준비하거나 제출할 구체적인 문서·파일의 이름 또는 종류를 가리키는 "
@@ -114,44 +109,41 @@ def _classify_document_candidate_via_ollama(candidate: str) -> tuple[bool | None
         "{\"classification\":\"not_document\"}입니다."
     )
     try:
-        response = httpx.post(
-            f"{base_url.rstrip('/')}/api/chat",
-            json={
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": candidate},
-                ],
-                "format": {
-                    "type": "object",
-                    "properties": {
-                        "classification": {
-                            "type": "string",
-                            "enum": ["document", "not_document"],
-                        },
+        response_text = get_chat_model("normalization").generate(
+            system_prompt=system_prompt,
+            user_prompt=candidate,
+            stage="document_candidate_classification",
+            source_module=__name__,
+            source_function="_classify_document_candidate_via_llm",
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "classification": {
+                        "type": "string",
+                        "enum": ["document", "not_document"],
                     },
-                    "required": ["classification"],
-                    "additionalProperties": False,
                 },
-                "stream": False,
-                "options": {"temperature": 0.0},
+                "required": ["classification"],
+                "additionalProperties": False,
             },
-            timeout=settings.NORMALIZE_LLM_TIMEOUT_SECONDS,
+            temperature=0.0,
+            timeout_seconds=settings.NORMALIZE_LLM_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
-        response_text = response.json().get("message", {}).get("content", "").strip()
-        data = json.loads(response_text)
+        data = parse_json_response(response_text)
         classification = (_as_text(data.get("classification")) or "").lower()
         if classification not in {"document", "not_document"}:
-            print(
-                f"  [Ollama Documents] 검증에서 거절된 응답: {response_text[:300]}",
-                flush=True,
-            )
+            print("  [LLM Documents] 검증에서 응답이 거절되었습니다.", flush=True)
             return False, True
         return classification == "document", True
-    except Exception as exc:
-        print(f"  [Ollama Documents] 후보 판정 실패: {exc}", flush=True)
+    except ModelServiceError:
+        raise
+    except Exception:
+        print("  [LLM Documents] 후보 판정에 실패했습니다.", flush=True)
         return None, False
+
+
+# 기존 내부 import 호환. 새 코드는 provider 중립 이름을 사용한다.
+_classify_document_candidate_via_ollama = _classify_document_candidate_via_llm
 
 
 def _read_document_cache_entry(
@@ -176,6 +168,8 @@ def _read_document_cache_entry(
         return False, False, None
     if entry.get("context_hash") != _make_hash(context):
         return False, False, None
+    if entry.get("provider") != settings.NORMALIZATION_LLM_PROVIDER:
+        return False, False, None
     if entry.get("model") != settings.NORMALIZE_LLM_MODEL:
         return False, False, None
     if entry.get("prompt_version") != DOCUMENT_LLM_PROMPT_VERSION:
@@ -196,6 +190,7 @@ def _make_document_cache_entry(
     return {
         "source_hash": source_hash,
         "context_hash": _make_hash(context),
+        "provider": settings.NORMALIZATION_LLM_PROVIDER,
         "model": settings.NORMALIZE_LLM_MODEL,
         "prompt_version": DOCUMENT_LLM_PROMPT_VERSION,
         "result": {"accepted": accepted},
@@ -208,7 +203,7 @@ def _llm_document_item(candidate: str, source: str) -> dict[str, Any]:
         "description": "",
         "source": source,
         "confidence": 0.72,
-        "extraction_method": "ollama_document_candidate",
+        "extraction_method": "llm_document_candidate",
     }
 
 
