@@ -24,11 +24,11 @@ flowchart TD
         E -->|세부요건 분할| H[(policy_documents)]
     end
 
-    subgraph 개인_벡터_소유 [3단계: 각 도메인별 RAG 및 벡터 테이블 - 추후 각자 임베딩]
+    subgraph 개인_벡터_소유 [3단계: 각 도메인별 RAG 및 이중 임베딩]
         E -->|추천 매칭| I[(rec_vectors)]
         H -->|챗봇 RAG| J[(policy_chunks)]
         E & F -->|서류 대조| K[(review_vectors)]
-        H -->|준비 일정 KB| L[(prep_vectors)]
+        P[내장 서류 발급 가이드] -->|발급 방법 검색| L[(prep_vectors)]
     end
     
     subgraph 사용자_인증 [사용자 관리]
@@ -52,7 +52,7 @@ flowchart TD
 | **`policy_chunks`** | **챗봇 RAG** | 챗봇 대화 시 사용될 텍스트 조각(Chunk)과 **pgvector** 임베딩 값 보관 | `policy_documents.id` |
 | **`rec_vectors`** | **추천 서비스** | 사용자의 프로필 조건 임베딩과 매칭하기 위한 정책별 **pgvector** 추천 벡터 | `normalized_policies.id` |
 | **`review_vectors`** | **서류 검토** | 업로드 서류 OCR 결과와 대조할 필수 서류명 기반 **pgvector** 요건 벡터 | `normalized_policies.id` |
-| **`prep_vectors`** | **일정 관리** | 구비 서류명에 대응하는 발급 프로세스/소요기간 안내 지식베이스 **pgvector** 벡터 | - |
+| **`prep_vectors`** | **서류 준비 / 캘린더 코치** | 구비 서류명에 대응하는 발급 프로세스/소요기간 안내 지식베이스의 OpenAI·Ollama **pgvector** 벡터 | - |
 
 ---
 
@@ -127,7 +127,9 @@ flowchart TD
 * **`rec_vectors` (안주현 추천 서비스)**
   - `id` (UUID, PK)
   - `policy_id` (UUID, FK -> `normalized_policies.id`, UNIQUE): 1:1 관계
-  - `embedding` (VECTOR): pgvector 추천 벡터값
+  - `embedding_openai` (VECTOR(1536)): cloud 검색용 OpenAI 벡터
+  - `embedding_ollama` (VECTOR(1024)): local 검색용 Ollama 벡터
+  - `embedding_openai_model` / `embedding_ollama_model` (VARCHAR): 생성 모델명
 * **`policy_chunks` (김정연 챗봇 RAG)**
   - `id` (UUID, PK)
   - `policy_id` (UUID, FK -> `normalized_policies.id`)
@@ -137,17 +139,23 @@ flowchart TD
   - `chunk_hash` (VARCHAR(255)): 중복 방지용 해시
   - `metadata` (JSON): 메타데이터 (생성 모델 정보 등)
   - `embedding_status` / `embedding_model` (VARCHAR / TEXT)
-  - `embedding` (VECTOR): pgvector 챗봇 RAG 벡터값
+  - `embedding_openai` (VECTOR(1536)): cloud 검색용 OpenAI 벡터
+  - `embedding_ollama` (VECTOR(1024)): local 검색용 Ollama 벡터
+  - `embedding_openai_model` / `embedding_ollama_model` (VARCHAR): 생성 모델명
 * **`review_vectors` (이충헌 서류 검토)**
   - `id` (UUID, PK)
   - `policy_id` (UUID, FK -> `normalized_policies.id`)
   - `document_name` (VARCHAR(255)): 필수 구비 서류 명칭
-  - `embedding` (VECTOR): pgvector 대조 임베딩
-* **`prep_vectors` (이재혁 일정 관리)**
+  - `embedding_openai` (VECTOR(1536)): cloud 요건 대조용 OpenAI 벡터
+  - `embedding_ollama` (VECTOR(1024)): local 요건 대조용 Ollama 벡터
+  - `embedding_openai_model` / `embedding_ollama_model` (VARCHAR): 생성 모델명
+* **`prep_vectors` (서류 준비 / 캘린더 코치)**
   - `id` (UUID, PK)
   - `document_name` (VARCHAR(255), INDEX): 가이드 대상 서류명
   - `guide_text` (TEXT): 발급 팁 및 소요 기간 설명 텍스트
-  - `embedding` (VECTOR): pgvector 가이드 임베딩
+  - `embedding_openai` (VECTOR(1536)): cloud 가이드 검색용 OpenAI 벡터
+  - `embedding_ollama` (VECTOR(1024)): local 가이드 검색용 Ollama 벡터
+  - `embedding_openai_model` / `embedding_ollama_model` (VARCHAR): 생성 모델명
 
 ---
 
@@ -188,7 +196,7 @@ api 컨테이너 시작
 - review_vectors 쓰기
 
 일정/준비 담당
-- normalized_policies.required_documents, policy_documents 읽기
+- document_guides.py의 내장 발급 가이드 읽기
 - prep_vectors 쓰기
 ```
 
@@ -304,22 +312,35 @@ section         (기타 일반 세부 섹션)
 
 ## 🧠 pgvector(벡터) 설정 및 변경 방법
 
-현재 코드의 벡터 컬럼은 임시로 **설정값 `settings.EMBEDDING_DIM` (기본 `1536`)** 하나를 공유합니다. 다만 팀 기획상 최종 구조는 각 도메인이 자기 임베딩 모델과 벡터 테이블을 소유하는 방식입니다.
-
-임베딩 모델을 확정하기 전까지는 `rec_vectors`, `policy_chunks`, `review_vectors`, `prep_vectors`를 자동 생성/적재하지 않습니다. 추후 각자 다른 모델을 사용한다면 도메인별 차원 설정으로 분리하는 것을 권장합니다.
-
-예시:
+네 벡터 테이블은 사용자 AI 설정 전환을 위해 두 임베딩을 별도 컬럼에 저장합니다.
 
 ```env
-REC_EMBEDDING_DIM=1536
-CHAT_EMBEDDING_DIM=768
-REVIEW_EMBEDDING_DIM=1536
-PREP_EMBEDDING_DIM=384
+*_CLOUD_EMBEDDING_MODEL=text-embedding-3-small
+*_CLOUD_EMBEDDING_DIMENSIONS=1536
+*_LOCAL_EMBEDDING_MODEL=bge-m3
+*_LOCAL_EMBEDDING_DIMENSIONS=1024
 ```
 
-현재 `EMBEDDING_DIM`을 변경해 벡터 차원을 바꿀 때는 기존 DB 볼륨을 유지하면 테이블 차원이 자동 변경되지 않습니다. 개발 DB를 새로 만들 수 있을 때만 아래처럼 재생성합니다.
+cloud 요청은 OpenAI로 질문을 임베딩해 `embedding_openai`를 검색하고, local 요청은
+Ollama로 질문을 임베딩해 `embedding_ollama`를 검색합니다. 서로 다른 모델의 벡터는
+같은 유사도 계산에 섞지 않습니다. 레거시 `embedding` 컬럼은 사용하지 않습니다.
+
+개발 DB를 새 스키마로 초기화할 수 있을 때는 다음 순서로 재생성합니다.
 
 ```powershell
 docker compose down -v
 docker compose up -d --build
 ```
+
+크롤러가 시작 직후 수집·정규화하고 네 벡터 테이블을 증분 생성하므로 보통 별도 명령은
+필요하지 않습니다. 자동 주기를 기다리지 않고 수동으로 점검할 때는 다음 명령을 사용합니다.
+
+```powershell
+docker compose exec api python -m app.jobs.embed_policy_chunks_once
+docker compose exec api python -m app.jobs.build_rec_vectors_once
+docker compose exec api python -m app.jobs.build_review_vectors_once
+docker compose exec api python -m app.jobs.build_prep_vectors_once
+```
+
+이 명령들의 기본 동작은 신규·변경·누락분만 처리하는 것입니다. 채팅 전체 재생성은 `--force`,
+검토 전체 재생성은 `--rebuild`를 명시해야 합니다.

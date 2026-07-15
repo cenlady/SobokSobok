@@ -1,6 +1,7 @@
 # SobokSobok Backend
 
-FastAPI 기반 백엔드입니다. 현재 백엔드는 정책 조회 API, 소상공인24/Gov24/SEMAS 크롤러, 크롤링 이후 실행되는 정책 정규화 파이프라인을 포함합니다. 임베딩 생성은 아직 자동화하지 않습니다.
+FastAPI 기반 백엔드입니다. 현재 백엔드는 정책 조회 API, 소상공인24/Gov24/SEMAS 크롤러,
+정책 정규화와 챗/추천/서류 요건/발급 가이드 이중 임베딩 파이프라인을 포함합니다.
 
 ## 주요 구성
 
@@ -60,6 +61,46 @@ Copy-Item .env.example .env
 ```
 
 Docker Compose로 실행할 때는 프로젝트 루트의 `.env`가 기준입니다. `backend/.env`는 `uvicorn app.main:app --reload`처럼 백엔드를 로컬 Python으로 직접 실행할 때 사용합니다.
+
+### 기능별 AI 설정과 사용자 선택
+
+모든 모델 생성은 `app/core/model_provider.py`의 중앙 factory를 통과합니다. `.env`의
+기능별 provider는 `openai`, `ollama`, `gemini` 중에서 고를 수 있고, 모델명과 임베딩
+차원을 함께 설정해야 합니다.
+
+사용자 프로필에는 챗봇·추천·정책 요약·캘린더 코치·서류검토의 `cloud`/`local`
+선택을 각각 저장합니다. 일반 기능 기본값은 `cloud`, 서류검토 기본값은 `local`입니다.
+정책 정규화처럼 사용자와 무관한 배치는 기능별 `.env` provider를 그대로 사용합니다.
+서류 파일 파싱은 선택과 관계없이 로컬에서 처리하며, 서류검토를 `cloud`로 선택하면
+파싱된 내용과 유형명이 OpenAI API로 전달됩니다.
+
+챗봇 `policy_chunks`, 추천 `rec_vectors`, 서류 요건 `review_vectors`, 발급 가이드
+`prep_vectors`는 사용자 전환을 위해 다음 벡터를 모두 가집니다.
+
+- `embedding_openai`: `text-embedding-3-small`, 기본 1536차원
+- `embedding_ollama`: `bge-m3`, 기본 1024차원
+
+두 벡터는 서로 다른 pgvector 컬럼이므로 차원이 섞이지 않습니다. 크롤러는 시작 직후와
+매 수집 주기마다 원문·모델·양쪽 벡터를 비교해 신규·변경·누락분만 갱신합니다. 같은 데이터는
+OpenAI/Ollama에 다시 보내지 않습니다. 수동 증분 실행:
+
+```powershell
+docker compose exec api python -m app.jobs.embed_policy_chunks_once
+docker compose exec api python -m app.jobs.build_rec_vectors_once
+docker compose exec api python -m app.jobs.build_review_vectors_once
+docker compose exec api python -m app.jobs.build_prep_vectors_once
+```
+
+전체 재생성은 채팅의 `--force` 또는 검토의 `--rebuild` 옵션을 명시한 경우에만 수행합니다.
+
+`prep_vectors`는 `build_prep_vectors_once`만 실제 적재를 담당합니다. 이전 명령인
+`ingest_prep_guide`도 호환을 위해 같은 작업으로 위임하며 정책 일정 단락으로 테이블을
+덮어쓰지 않습니다. 캘린더 코치는 프로필의 cloud/local 설정과 같은 Prep 벡터 컬럼을
+검색한 뒤 같은 모드의 LLM으로 일정을 생성합니다.
+
+모델 호출 로그에는 feature/provider/model/stage/source, 입력·출력 길이, 결과 수, 차원,
+지연시간, 상태와 오류 타입만 한 줄로 남습니다. 프롬프트·응답 원문·벡터·키·파일명은
+출력하지 않습니다.
 
 ## Docker 실행
 
@@ -232,7 +273,9 @@ gov24_support_conditions.service_id
 normalized_policies(source, source_pk)
 ```
 
-정규화 문서는 원천 내용이 바뀌었거나 아직 문서가 없을 때 다시 구성합니다. 현재 임베딩은 아직 생성하지 않으므로 `policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`는 별도 단계에서 채웁니다.
+정규화 문서는 원천 내용이 바뀌었거나 아직 문서가 없을 때 다시 구성합니다. 크롤러 주기에는
+`policy_chunks`, `rec_vectors`, `review_vectors`, `prep_vectors`가 모두 점검되며 신규·변경·누락분만
+임베딩합니다. 업로드한 사용자 서류 원문은 이 공유 벡터 작업에 포함되지 않습니다.
 
 ### 정규화 기준
 
@@ -295,7 +338,7 @@ body            (공고문 본문 전체 백업)
 section         (기타 일반 세부 섹션)
 ```
 
-`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. 첨부 전문을 훑지 않고 `제출서류`, `구비서류`, `신청서류`, `준비서류` 같은 명시적 제목 아래 구간만 읽으며, HTML 태그·발급 안내·일반 문장·`자료/서류` 같은 포괄어는 문서명에서 제외합니다. 규칙으로 확정하지 못했지만 문서형 명사로 끝나는 짧은 후보만 `qwen2.5:1.5b`가 `document / not_document`로 판정합니다. 후보가 해당 서류 구간에 실제 존재하는지는 코드가 재확인하고, 모델은 문서명을 생성하지 않으며 처음 추출한 원문 후보만 낮은 신뢰도의 보완 결과로 반영합니다. 결과는 원문·문맥 해시와 모델·프롬프트 버전별로 캐시합니다. 첨부 parser/OCR가 새 본문을 만들면 같은 수집 주기의 2차 정규화에서 보강됩니다.
+`required_documents`는 확실한 구비서류만 보수적으로 채웁니다. 첨부 전문을 훑지 않고 `제출서류`, `구비서류`, `신청서류`, `준비서류` 같은 명시적 제목 아래 구간만 읽으며, HTML 태그·발급 안내·일반 문장·`자료/서류` 같은 포괄어는 문서명에서 제외합니다. 규칙으로 확정하지 못했지만 문서형 명사로 끝나는 짧은 후보만 `NORMALIZATION_LLM_PROVIDER`/`NORMALIZATION_LLM_MODEL`이 `document / not_document`로 판정합니다. 기본값은 OpenAI `gpt-4o-mini`이며 Ollama 등으로 변경할 수 있습니다. 후보가 해당 서류 구간에 실제 존재하는지는 코드가 재확인하고, 모델은 문서명을 생성하지 않으며 처음 추출한 원문 후보만 낮은 신뢰도의 보완 결과로 반영합니다. 결과는 원문·문맥 해시와 provider·모델·프롬프트 버전별로 캐시합니다. 첨부 parser/OCR가 새 본문을 만들면 같은 수집 주기의 2차 정규화에서 보강됩니다.
 
 ## 저장 테이블
 
@@ -433,7 +476,9 @@ policy_documents
 ```text
 rec_vectors (추천 서비스 소유)
 - policy_id (UUID FK)
-- embedding (VECTOR)
+- embedding_openai (VECTOR(1536))
+- embedding_ollama (VECTOR(1024))
+- embedding_openai_model / embedding_ollama_model
 
 policy_chunks (챗봇 RAG 소유)
 - policy_id (UUID FK)
@@ -444,17 +489,24 @@ policy_chunks (챗봇 RAG 소유)
 - metadata (JSON)
 - embedding_status (VARCHAR)
 - embedding_model (TEXT)
-- embedding (VECTOR)
+- embedding_openai (VECTOR(1536))
+- embedding_ollama (VECTOR(1024))
+- embedding_openai_model / embedding_ollama_model
 
 review_vectors (서류 검토 소유)
 - policy_id (UUID FK)
 - document_name (VARCHAR)
-- embedding (VECTOR)
+- source_text (TEXT)
+- embedding_openai (VECTOR(1536))
+- embedding_ollama (VECTOR(1024))
+- embedding_openai_model / embedding_ollama_model
 
 prep_vectors (일정/준비 가이드 소유)
 - document_name (VARCHAR)
 - guide_text (TEXT)
-- embedding (VECTOR)
+- embedding_openai (VECTOR(1536))
+- embedding_ollama (VECTOR(1024))
+- embedding_openai_model / embedding_ollama_model
 
 users (인증 공통)
 - email (VARCHAR)
@@ -470,7 +522,9 @@ user_profiles (추천 필터 공통)
 - available_time_preference (JSON)
 ```
 
-벡터 테이블은 공유 정규화 데이터를 읽어서 각 도메인이 자기 임베딩 모델로 채우는 영역입니다. 현재 자동화 범위에는 포함하지 않습니다.
+벡터 테이블은 공유 정규화 데이터를 읽어서 각 도메인이 채우는 영역입니다. 네 테이블 모두
+크롤러 주기에 자동 점검되고 원문·모델·벡터 상태가 달라진 항목만 갱신합니다. 사용자가
+업로드한 서류 원문은 `review_vectors`에 저장하거나 공유 임베딩하지 않습니다.
 
 첨부파일 실제 저장 위치:
 
@@ -590,8 +644,8 @@ backend/
     │   │   ├── documents.py            # 섹션 유형·구비서류 추출
     │   │   ├── field_extractors.py      # 연락처·신청방법·기본 수치 추출
     │   │   ├── limit_rules.py           # 직원수·매출·업력 규칙 검증
-    │   │   ├── llm_documents.py         # Ollama 구비서류 후보 판정·검증·캐시
-    │   │   ├── llm_limits.py            # Ollama 보완 추출·검증·캐시
+    │   │   ├── llm_documents.py         # 기능별 LLM 구비서류 후보 판정·검증·캐시
+    │   │   ├── llm_limits.py            # 기능별 LLM 보완 추출·검증·캐시
     │   │   ├── metadata.py              # 공통 메타데이터·날짜·필터 컬럼
     │   │   ├── persistence.py           # 정책·문서·첨부파일 DB 반영
     │   │   ├── regions.py               # 시도·시군구·권역 정규화
@@ -653,4 +707,6 @@ docker compose run --rm crawler python -m app.jobs.crawl_semas_once
 docker compose run --rm crawler python -m app.jobs.crawl_policy_sources_loop
 ```
 
-현재 DB 이미지는 pgvector를 지원하고, `CREATE EXTENSION vector` 및 테이블 생성은 FastAPI startup에서 처리합니다. Compose 기준 실행 흐름은 `api 테이블 생성 -> crawler raw 수집 -> normalizer 정규화`입니다. 임베딩/벡터 검색용 데이터 생성은 추후 각 도메인별 job으로 연결합니다.
+현재 DB 이미지는 pgvector를 지원하고, `CREATE EXTENSION vector` 및 테이블 생성은 FastAPI
+startup에서 처리합니다. Compose 기준 실행 흐름은 `api 테이블/벡터 스키마 생성 -> crawler raw
+수집 -> normalizer 정규화 -> 네 벡터 테이블의 변경분 이중 임베딩 갱신`입니다.
