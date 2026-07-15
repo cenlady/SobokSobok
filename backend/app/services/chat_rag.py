@@ -635,18 +635,59 @@ def chunk_to_source(chunk: PolicyChunk, similarity: float) -> Dict[str, Any]:
         metadata.setdefault("support_type", policy.support_type)
         metadata.setdefault("industry_tags", _compact_list(policy.industry_tags))
         metadata.setdefault("business_status_tags", _compact_list(policy.business_status_tags))
+    display_text = clean_rag_evidence_text(chunk.chunk_text)
+    answer_text = clean_rag_answer_text(chunk.chunk_text)
     return {
         "chunk_id": str(chunk.id),
         "policy_id": str(chunk.policy_id),
         "document_id": str(chunk.document_id),
         "chunk_index": chunk.chunk_index,
         "similarity": similarity,
-        "chunk_text": chunk.chunk_text,
+        "chunk_text": display_text,
+        "answer_text": answer_text,
+        "raw_chunk_text": chunk.chunk_text,
         "metadata": metadata,
         "policy_title": metadata.get("policy_title"),
         "document_type": metadata.get("document_type"),
         "document_title": metadata.get("document_title"),
         "source_ref": metadata.get("source_ref"),
+        "apply_start": metadata.get("apply_start"),
+        "apply_end": metadata.get("apply_end"),
+        "contact_points": metadata.get("contact_points") or [],
+        "question_hints": metadata.get("question_hints") or [],
+    }
+
+
+def policy_document_to_source(
+    policy: NormalizedPolicy,
+    document: PolicyDocument,
+) -> Dict[str, Any]:
+    """상세 채팅에서 부모 문서 전체를 기존 근거 응답 형식으로 변환한다."""
+    intent_tags = infer_intent_tags(
+        document.document_type,
+        document.title,
+        document.text,
+    )
+    metadata = build_policy_document_metadata(policy, document, intent_tags)
+    metadata["retrieval_mode"] = "parent_document"
+    display_text = clean_rag_evidence_text(document.text)
+    answer_text = clean_rag_answer_text(document.text)
+    return {
+        # 프론트/응답 스키마 호환을 위해 부모 문서 ID를 근거 ID로 사용한다.
+        "chunk_id": str(document.id),
+        "policy_id": str(policy.id),
+        "document_id": str(document.id),
+        "chunk_index": 0,
+        "similarity": 1.0,
+        "rerank_score": 1.0,
+        "chunk_text": display_text,
+        "answer_text": answer_text,
+        "raw_chunk_text": document.text,
+        "metadata": metadata,
+        "policy_title": policy.title,
+        "document_type": document.document_type,
+        "document_title": document.title,
+        "source_ref": document.source_ref,
         "apply_start": metadata.get("apply_start"),
         "apply_end": metadata.get("apply_end"),
         "contact_points": metadata.get("contact_points") or [],
@@ -1178,6 +1219,86 @@ def record_chat_turn(
     db.commit()
 
 
+@traceable_if_enabled("chat-parent-document-retrieve")
+def retrieve_policy_document_sources(
+    db: Session,
+    query: str,
+    *,
+    policy_id: uuid.UUID,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """정책이 정해진 채팅은 임베딩 없이 부모 문서 전체에서 근거를 고른다."""
+    if is_out_of_policy_scope(query, policy_id=policy_id):
+        return {
+            "query": query,
+            "expanded_query": query,
+            "intent_tags": ["out_of_scope"],
+            "response_mode": "out_of_scope",
+            "candidates": [],
+            "sources": [],
+        }
+
+    policy = (
+        db.query(NormalizedPolicy)
+        .filter(NormalizedPolicy.id == policy_id)
+        .one_or_none()
+    )
+    if policy is None:
+        return {
+            "query": query,
+            "expanded_query": query,
+            "intent_tags": ["general"],
+            "response_mode": "no_result",
+            "candidates": [],
+            "sources": [],
+        }
+
+    documents = (
+        db.query(PolicyDocument)
+        .filter(PolicyDocument.policy_id == policy_id)
+        .order_by(PolicyDocument.created_at.asc(), PolicyDocument.id.asc())
+        .all()
+    )
+    intent_tags = infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(intent_tags)
+    target_document_types = (
+        _document_types_for_intents([primary_intent])
+        if primary_intent
+        else ()
+    )
+
+    selected_documents = [
+        document
+        for document in documents
+        if document.document_type in target_document_types
+    ]
+    if target_document_types and not selected_documents:
+        # 구비 서류처럼 별도 문서가 생성되지 않은 경우에는 전체 항목이 보존된
+        # body/section 부모 문서를 LLM 근거로 사용한다.
+        selected_documents = [
+            document
+            for document in documents
+            if document.document_type in ("body", "section")
+        ]
+    if not selected_documents:
+        selected_documents = documents
+
+    requested_limit = limit or settings.CHAT_RETRIEVAL_LIMIT
+    sources = [
+        policy_document_to_source(policy, document)
+        for document in selected_documents[:requested_limit]
+        if _normalize_space(document.text)
+    ]
+    return {
+        "query": query,
+        "expanded_query": query,
+        "intent_tags": intent_tags,
+        "response_mode": "answer" if sources else "no_result",
+        "candidates": [],
+        "sources": sources,
+    }
+
+
 @traceable_if_enabled("chat-rag-retrieve")
 def retrieve_policy_chunk_sources(
     db: Session,
@@ -1222,7 +1343,11 @@ def retrieve_policy_chunk_sources(
         policy_id=policy_id,
         embedding_column=vector_column,
     )
-    sources = [chunk_to_source(chunk, similarity) for chunk, similarity in results]
+    sources = [
+        source
+        for source in (chunk_to_source(chunk, similarity) for chunk, similarity in results)
+        if _normalize_space(str(source.get("chunk_text") or ""))
+    ]
     sources = rerank_sources_by_intent(
         sources,
         intent_tags,
@@ -1293,7 +1418,9 @@ def attach_neighbor_context(
 
     by_document: Dict[uuid.UUID, Dict[int, str]] = {}
     for row in chunk_rows:
-        by_document.setdefault(row.document_id, {})[row.chunk_index] = row.chunk_text
+        cleaned_text = clean_rag_answer_text(row.chunk_text)
+        if cleaned_text:
+            by_document.setdefault(row.document_id, {})[row.chunk_index] = cleaned_text
 
     for source in sources:
         try:
@@ -1319,13 +1446,20 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
     total_chars = 0
     for index, source in enumerate(sources, start=1):
         metadata = source.get("metadata") or {}
-        context_body = source.get("retrieval_context") or source.get("chunk_text")
+        context_body = clean_rag_answer_text(source.get("retrieval_context")) or source_answer_text(source)
+        if not context_body:
+            continue
         region = " ".join(
             str(value)
             for value in [metadata.get("sido"), metadata.get("sigungu")]
             if value
         ) or ("전국" if metadata.get("region_scope") == "national" else "확인 필요")
         application_methods = ", ".join(metadata.get("application_methods") or [])
+        content_label = (
+            "선택된 부모 문서 전체 원문"
+            if metadata.get("retrieval_mode") == "parent_document"
+            else "검색 청크 및 인접 문맥"
+        )
         block = (
             f"[근거 {index}]\n"
             f"정책명: {source.get('policy_title')}\n"
@@ -1339,7 +1473,7 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
             f"신청방법: {application_methods or '확인 필요'}\n"
             f"문의처: {', '.join(source.get('contact_points') or [])}\n"
             f"예상질문태그: {', '.join(metadata.get('intent_tags') or [])}\n"
-            f"내용(검색 청크 및 인접 문맥): {context_body}\n"
+            f"내용({content_label}): {context_body}\n"
         )
         if total_chars + len(block) > settings.CHAT_MAX_CONTEXT_CHARS:
             break
@@ -1368,6 +1502,136 @@ SECTION_LABEL_PATTERN = re.compile(r"\[([^\[\]]{1,30})\]")
 
 def _normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip(" \n\t:-")
+
+
+STRUCTURED_JSON_NOISE_KEYS: Tuple[str, ...] = (
+    "business_age_limit",
+    "employee_limit",
+    "sales_limit",
+    "constraints",
+    "operator",
+    "source_text",
+    "unit",
+    "value",
+    "logic",
+    "requires_manual_review",
+    "review_reason",
+    "extraction_method",
+)
+STRUCTURED_JSON_NOISE_PATTERN = re.compile(
+    r'"(?:business_age_limit|employee_limit|sales_limit|constraints|operator|source_text|unit|value|logic|requires_manual_review|review_reason|extraction_method)"\s*:'
+)
+
+
+def _source_text_values_from_json_noise(value: str) -> List[str]:
+    return _dedupe_preserve_order(
+        _normalize_space(match.group(1))
+        for match in re.finditer(r'"source_text"\s*:\s*"([^"]+)"', value)
+        if _normalize_space(match.group(1))
+    )
+
+
+def _is_structured_json_noise_line(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if STRUCTURED_JSON_NOISE_PATTERN.search(stripped):
+        return True
+    if not any(key in stripped for key in STRUCTURED_JSON_NOISE_KEYS):
+        return False
+    json_marks = sum(stripped.count(mark) for mark in ('"', "{", "}", "[", "]", ":"))
+    return stripped.startswith(("{", "}", "[", "]", '"', ",")) or json_marks >= 4
+
+
+def clean_rag_display_text(value: Any) -> str:
+    """사용자 답변/근거에 노출할 RAG 텍스트에서 정규화용 JSON 찌꺼기를 제거한다."""
+    if value is None:
+        return ""
+
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    source_text_values = _source_text_values_from_json_noise(text)
+    kept_lines: List[str] = []
+    for line in text.split("\n"):
+        if _is_structured_json_noise_line(line):
+            continue
+        kept_lines.append(line)
+
+    cleaned = _normalize_space("\n".join(kept_lines))
+    if cleaned and source_text_values:
+        existing = cleaned
+        missing_values = [item for item in source_text_values if item not in existing]
+        if missing_values:
+            cleaned = _normalize_space(f"{cleaned} {' '.join(missing_values)}")
+    elif not cleaned and source_text_values:
+        cleaned = " / ".join(source_text_values)
+
+    if _is_structured_json_noise_line(cleaned) and not source_text_values:
+        return ""
+    return cleaned
+
+
+INTERNAL_JUDGEMENT_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:[-•]\s*)?(?:여부\s*)?판단\s*\d{0,3}\s*"
+)
+
+
+def clean_rag_evidence_text(value: Any) -> str:
+    """답변 근거 카드에 표시할 텍스트를 사람이 읽기 쉬운 형태로 가공한다."""
+    display_text = clean_rag_display_text(value)
+    if not display_text:
+        return ""
+
+    if "판단" not in display_text:
+        return display_text
+
+    cleaned = INTERNAL_JUDGEMENT_PREFIX_PATTERN.sub("", display_text).strip()
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(
+        r"\(([^)]*?)-([^)]*?)\)",
+        lambda match: f"({match.group(1).strip()} {match.group(2).strip()})",
+        cleaned,
+    )
+    cleaned = re.sub(r"^([^:：]{2,40})\s+\(([^)]{2,60})\)\s+(.+)$", r"\1: \2, \3", cleaned)
+    return _normalize_space(cleaned)
+
+
+ANSWER_ONLY_ADMIN_LINE_PATTERN = re.compile(
+    r"^\s*(?:[-•]\s*)?(?:여부\s*)?판단\s*\d{0,3}\b.*$"
+)
+ANSWER_CONDITION_ANCHOR_PATTERN = re.compile(
+    r"(?:\d+\s*(?:인|명|억원|만원|원|년)\s*(?:미만|이하|이상|초과)|상시\s*근로자|소상공인기본법|제조업|건설업|운수업|업체|사업자|매출|업력)"
+)
+
+
+def clean_rag_answer_text(value: Any) -> str:
+    """채팅 답변 본문/LLM 프롬프트에서는 내부 판정 절차 문구를 빼고 조건만 남긴다."""
+    display_text = clean_rag_display_text(value)
+    if not display_text:
+        return ""
+
+    if "여부 판단" in display_text:
+        condition_start = ANSWER_CONDITION_ANCHOR_PATTERN.search(display_text)
+        if condition_start:
+            display_text = display_text[condition_start.start():]
+
+    kept_lines: List[str] = []
+    for line in display_text.split("\n"):
+        normalized_line = _normalize_space(line)
+        if not normalized_line:
+            continue
+        if ANSWER_ONLY_ADMIN_LINE_PATTERN.match(normalized_line):
+            continue
+        kept_lines.append(normalized_line)
+
+    return _normalize_space("\n".join(kept_lines))
+
+
+def source_answer_text(source: Dict[str, Any]) -> str:
+    if source.get("answer_text") is not None:
+        return clean_rag_answer_text(source.get("answer_text"))
+    return clean_rag_answer_text(source.get("raw_chunk_text") or source.get("chunk_text"))
 
 
 POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
@@ -1587,7 +1851,9 @@ def _fallback_points(value: str, limit: int = 5) -> List[str]:
     if cleaned in {"해당없음", "해당 없음", "없음", "없습니다"}:
         return [cleaned]
 
-    pieces = re.split(r"\s*(?:\|\||ㆍ|•|,|;| 또는 | 혹은 )\s*", cleaned)
+    # 일반 쉼표는 목록 구분자로 사용하되 4,500만원처럼 숫자 사이의 천 단위
+    # 쉼표는 보존한다.
+    pieces = re.split(r"\s*(?:\|\||ㆍ|•|(?<!\d),(?!\d)|;| 또는 | 혹은 )\s*", cleaned)
     points = [_normalize_space(piece) for piece in pieces if _normalize_space(piece)]
     return _dedupe_preserve_order(points)[:limit] or [cleaned]
 
@@ -1643,6 +1909,31 @@ ATTRIBUTE_ANSWER_INTENTS: Tuple[str, ...] = (
     "contact",
 )
 
+PLAIN_LANGUAGE_ANSWER_INSTRUCTION = (
+    "일반인이 한 번에 이해할 수 있도록 중학생도 이해할 수 있는 쉬운 한국어로 설명해라. "
+    "법률명·행정용어·전문용어만 그대로 반복하지 말고, 쉬운 뜻을 먼저 말한 뒤 "
+    "필요한 경우에만 원문 용어를 괄호 안에 덧붙여라. "
+    "예를 들어 '「소상공인기본법」에 따른 소상공인'은 "
+    "'직원 수와 매출 규모 등이 법에서 정한 소상공인 기준에 맞는 작은 사업체'처럼 풀어 설명해라. "
+    "'융자'는 '정책자금 대출', '융자제외업종'은 "
+    "'정책자금 대출을 받을 수 없도록 정해진 업종', '구비서류'는 '준비할 서류', "
+    "'업력'은 '사업을 운영한 기간', '영위'는 '운영', "
+    "'상시근로자'는 '평소 계속 고용한 직원', '선정기준'은 '지원 대상을 뽑는 기준', "
+    "'소관기관'은 '담당 기관'처럼 바꿔라. "
+    "다만 검색 근거에 구체적인 직원 수·매출 기준이 없으면 숫자를 만들지 말고, "
+    "업종에 따라 기준이 다를 수 있어 공고나 담당 기관 확인이 필요하다고 알려라."
+)
+
+
+def _primary_attribute_intent(intent_tags: Iterable[str]) -> Optional[str]:
+    """질문에 여러 키워드가 있어도 가장 구체적인 단일 답변 항목을 고른다."""
+    tag_set = set(intent_tags)
+    for priority_group in DIRECT_INTENT_PRIORITY:
+        for intent in priority_group:
+            if intent in tag_set:
+                return intent
+    return None
+
 REQUIREMENT_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"사업자등록증\s*사본", "사업자등록증 사본"),
     (r"사업자등록증", "사업자등록증"),
@@ -1677,7 +1968,7 @@ def _requirement_points(text: str) -> List[str]:
     if not cleaned:
         return []
 
-    if re.search(r"\|\||ㆍ|•|,|;| 또는 | 혹은 ", cleaned):
+    if re.search(r"\|\||ㆍ|•|(?<!\d),(?!\d)|;| 또는 | 혹은 ", cleaned):
         return _fallback_points(cleaned)
 
     matches: List[Tuple[int, int, str]] = []
@@ -1708,6 +1999,43 @@ def _document_types_for_intents(intent_tags: Iterable[str]) -> Tuple[str, ...]:
     return tuple(_dedupe_preserve_order(document_types))
 
 
+def _render_focused_attribute_answer(
+    policy_title: str,
+    intent_tags: List[str],
+    points: Iterable[str],
+) -> Optional[str]:
+    cleaned_points = _dedupe_preserve_order(
+        _normalize_space(point) for point in points if _normalize_space(point)
+    )[:8]
+    if not cleaned_points:
+        return None
+
+    primary_intent = _primary_attribute_intent(intent_tags)
+    compact_single = cleaned_points[0].replace(" ", "") if len(cleaned_points) == 1 else ""
+    if primary_intent in ("requirements", "documents") and compact_single in {
+        "해당없음",
+        "없음",
+        "없습니다",
+    }:
+        return f"{policy_title} 기준으로 보면, 별도로 준비해야 하는 서류는 명시되어 있지 않아요."
+    if primary_intent in ("deadline", "schedule") and compact_single in {
+        "상시신청",
+        "상시접수",
+    }:
+        return f"{policy_title}의 신청 기간은 상시 신청이에요."
+
+    heading = _friendly_heading(intent_tags)
+    if len(cleaned_points) == 1:
+        return f"{policy_title} 기준으로 보면, {heading}\n\n{cleaned_points[0]}"
+    return "\n".join(
+        [
+            f"{policy_title} 기준으로 보면, {heading}",
+            "",
+            *[f"- {point}" for point in cleaned_points],
+        ]
+    )
+
+
 def build_direct_document_type_answer(
     policy_title: str,
     intent_tags: List[str],
@@ -1727,7 +2055,7 @@ def build_direct_document_type_answer(
 
     points: List[str] = []
     for source in matched_sources:
-        chunk_text = str(source.get("chunk_text") or "")
+        chunk_text = source_answer_text(source)
         if source.get("document_type") == "requirements":
             points.extend(_requirement_points(chunk_text))
         else:
@@ -1737,16 +2065,59 @@ def build_direct_document_type_answer(
     if not points:
         return None
 
-    heading = _friendly_heading(intent_tags)
-    if len(points) == 1:
-        return f"{policy_title} 기준으로 보면, {heading}\n\n{points[0]}"
-    return "\n".join(
-        [
-            f"{policy_title} 기준으로 보면, {heading}",
-            "",
-            *[f"- {point}" for point in points],
-        ]
+    return _render_focused_attribute_answer(
+        policy_title,
+        intent_tags,
+        points,
     )
+
+
+def build_focused_attribute_answer(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    intent_tags: Optional[List[str]] = None,
+) -> Optional[str]:
+    """대상·서류·기간 등 단일 속성 질문에는 그 속성의 근거만 답한다."""
+    if not sources:
+        return None
+
+    resolved_intents = intent_tags or infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(resolved_intents)
+    if not primary_intent or primary_intent not in ATTRIBUTE_ANSWER_INTENTS:
+        return None
+    focused_intents = [primary_intent]
+
+    best_source = sources[0]
+    best_policy_id = best_source.get("policy_id")
+    scoped_sources = (
+        [source for source in sources if source.get("policy_id") == best_policy_id]
+        if best_policy_id
+        else sources
+    )
+    policy_title = best_source.get("policy_title") or "이 공고"
+
+    direct_answer = build_direct_document_type_answer(
+        policy_title,
+        focused_intents,
+        scoped_sources,
+    )
+    if direct_answer:
+        return direct_answer
+
+    for source in scoped_sources:
+        focused_value = _section_value_for_intents(
+            source_answer_text(source),
+            focused_intents,
+        )
+        if not focused_value:
+            continue
+        return _render_focused_attribute_answer(
+            policy_title,
+            focused_intents,
+            _fallback_points(focused_value),
+        )
+    return None
 
 
 def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> str:
@@ -1757,35 +2128,20 @@ def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> st
     best_source = sources[0]
     policy_title = best_source.get("policy_title") or "이 공고"
 
-    direct_answer = build_direct_document_type_answer(policy_title, intent_tags, sources)
-    if direct_answer:
-        return direct_answer
-
-    focused_value = None
-    for source in sources:
-        chunk_text = str(source.get("chunk_text") or "")
-        focused_value = _section_value_for_intents(chunk_text, intent_tags)
-        if focused_value:
-            break
-
-    if focused_value:
-        points = _fallback_points(focused_value)
-        if len(points) == 1:
-            return f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}\n\n{points[0]}"
-        return "\n".join(
-            [
-                f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}",
-                "",
-                *[f"- {point}" for point in points],
-            ]
-        )
+    focused_answer = build_focused_attribute_answer(
+        query,
+        sources,
+        intent_tags=intent_tags,
+    )
+    if focused_answer:
+        return focused_answer
 
     candidate_answer = build_policy_candidate_fallback(query, sources, intent_tags)
     if candidate_answer:
         return candidate_answer
 
     snippets = _dedupe_preserve_order(
-        _normalize_space(str(source.get("chunk_text") or "")) for source in sources[:3]
+        source_answer_text(source) for source in sources[:3]
     )
     if not snippets:
         return "공고문에서 관련 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요."
@@ -1833,7 +2189,7 @@ def build_policy_candidate_fallback(
         metadata = source.get("metadata") or {}
         title = source.get("policy_title") or "정책명 확인 필요"
         support_type = metadata.get("support_type") or source.get("document_title")
-        snippet = _normalize_space(str(source.get("chunk_text") or ""))
+        snippet = source_answer_text(source)
         if len(snippet) > 90:
             snippet = f"{snippet[:90].rstrip()}..."
         suffix = f" ({support_type})" if support_type else ""
@@ -1851,27 +2207,44 @@ def build_policy_candidate_fallback(
     return "\n".join(lines)
 
 
-def _build_chat_answer_prompt(
+def build_chat_user_prompt(
     query: str,
     sources: List[Dict[str, Any]],
     *,
     conversation_context: str = "",
 ) -> str:
+    intent_tags = infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(intent_tags)
+    if primary_intent:
+        focus_label = _friendly_heading([primary_intent]).rstrip(".")
+        answer_scope_instruction = (
+            f"사용자가 물은 항목은 '{focus_label}'이다. 이 항목에만 답하고, "
+            "신청 대상·방법·기간·서류·문의처 등 다른 항목을 함께 나열하지 마라."
+        )
+    else:
+        answer_scope_instruction = (
+            "질문에서 요구한 내용에만 직접 답하고, 사용자가 여러 항목을 요청하지 않았다면 "
+            "관련 없는 신청 대상·방법·기간·서류·문의처를 덧붙이지 마라."
+        )
+
     context_text = build_context_text(sources)
     conversation_block = (
         f"이전 대화 맥락:\n{conversation_context}\n\n"
         if conversation_context
         else ""
     )
-    user_prompt = (
+    return (
         f"{conversation_block}"
         f"사용자 질문:\n{query}\n\n"
         f"검색 근거:\n{context_text}\n\n"
-        "위 근거만 사용해서 답변해줘. "
-        "가능하면 신청 대상/방법/기간/서류/문의처를 항목별로 정리해줘. "
-        "근거에 없는 내용은 추측하지 말고 모른다고 말해줘."
+        "위 검색 근거만 사용해서 질문에 바로 답해줘. "
+        f"{answer_scope_instruction} "
+        f"{PLAIN_LANGUAGE_ANSWER_INSTRUCTION} "
+        "원문의 숫자·금액·날짜·AND/OR 조건·제외 조건은 의미를 바꾸거나 생략하지 마라. "
+        "원문에 슬래시(/)처럼 논리 관계가 명확하지 않은 기호가 있으면 임의로 '그리고'나 '또는'으로 해석하지 말고 원문 표현을 유지해라. "
+        "조건이 둘 이상이면 조건별로 짧은 글머리표를 사용하고, 제외 조건은 마지막에 별도 문장으로 분리해라. "
+        "근거에 없는 내용은 추측하거나 보완하지 말고, 원문이 모호하면 단정하지 말고 확인이 필요하다고 말해줘."
     )
-    return user_prompt
 
 
 @traceable_if_enabled("chat-rag-answer")
@@ -1887,7 +2260,7 @@ def generate_chat_answer(
 
     answer = get_chat_model("chat", model_mode=model_mode).generate(
         system_prompt=settings.CHAT_SYSTEM_PROMPT,
-        user_prompt=_build_chat_answer_prompt(
+        user_prompt=build_chat_user_prompt(
             query,
             sources,
             conversation_context=conversation_context,
@@ -1895,7 +2268,7 @@ def generate_chat_answer(
         stage="answer_generation",
         source_module=__name__,
         source_function="generate_chat_answer",
-        temperature=0.2,
+        temperature=0.0,
     )
     if not answer:
         raise ModelResponseError("챗봇 모델이 빈 응답을 반환했습니다.")
@@ -1915,7 +2288,7 @@ def generate_chat_answer_stream(
 
     yield from get_chat_model("chat", model_mode=model_mode).stream(
         system_prompt=settings.CHAT_SYSTEM_PROMPT,
-        user_prompt=_build_chat_answer_prompt(
+        user_prompt=build_chat_user_prompt(
             query,
             sources,
             conversation_context=conversation_context,
@@ -1923,7 +2296,7 @@ def generate_chat_answer_stream(
         stage="answer_generation_stream",
         source_module=__name__,
         source_function="generate_chat_answer_stream",
-        temperature=0.2,
+        temperature=0.0,
     )
 
 
@@ -1936,20 +2309,37 @@ def answer_policy_question(
     recent_messages: Optional[List[ChatMessage]] = None,
     model_mode: str | None = None,
 ) -> Dict[str, Any]:
-    retrieval = retrieve_policy_chunk_sources(
-        db=db,
-        query=query,
-        limit=limit,
-        policy_id=policy_id,
-        model_mode=model_mode,
-    )
+    if policy_id is not None:
+        retrieval = retrieve_policy_document_sources(
+            db=db,
+            query=query,
+            limit=limit,
+            policy_id=policy_id,
+        )
+    else:
+        retrieval = retrieve_policy_chunk_sources(
+            db=db,
+            query=query,
+            limit=limit,
+            policy_id=None,
+            model_mode=model_mode,
+        )
     response_mode = retrieval.get("response_mode", "answer")
     if response_mode == "out_of_scope":
         answer = build_out_of_scope_answer(query)
     elif response_mode == "policy_selection":
         answer = build_policy_selection_answer(retrieval.get("candidates") or [])
     else:
-        answer = generate_chat_answer(
+        # 정책이 특정된 상세/후속 채팅은 부모 문서 전체를 GPT가 읽기 쉽게
+        # 가공한다. 메인 검색만 짧은 속성 질문에 결정적 응답을 사용한다.
+        focused_answer = None
+        if policy_id is None:
+            focused_answer = build_focused_attribute_answer(
+                query,
+                retrieval["sources"],
+                intent_tags=retrieval.get("intent_tags") or None,
+            )
+        answer = focused_answer or generate_chat_answer(
             query,
             retrieval["sources"],
             conversation_context=build_conversation_context(recent_messages or []),

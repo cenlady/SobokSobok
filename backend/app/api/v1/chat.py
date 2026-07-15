@@ -28,6 +28,7 @@ from app.schemas.chat import (
 from app.services.chat_rag import (
     answer_policy_question,
     build_conversation_context,
+    build_focused_attribute_answer,
     build_out_of_scope_answer,
     build_policy_selection_answer,
     build_recommendation_follow_up_answer,
@@ -39,6 +40,7 @@ from app.services.chat_rag import (
     is_langsmith_enabled,
     record_chat_turn,
     retrieve_policy_chunk_sources,
+    retrieve_policy_document_sources,
     resolve_session_policy_context,
 )
 
@@ -215,24 +217,44 @@ def ask_policy_chatbot_stream(
             recent_messages=recent_messages,
             selected_policy_id=payload.selected_policy_id,
         )
-        response_data = retrieve_policy_chunk_sources(
-            db=db,
-            query=payload.query,
-            limit=payload.limit,
-            policy_id=context_policy_id,
-            model_mode=get_user_model_mode(current_user, "chat"),
-        )
+        model_mode = get_user_model_mode(current_user, "chat")
+        if context_policy_id is not None:
+            response_data = retrieve_policy_document_sources(
+                db=db,
+                query=payload.query,
+                limit=payload.limit,
+                policy_id=context_policy_id,
+            )
+        else:
+            response_data = retrieve_policy_chunk_sources(
+                db=db,
+                query=payload.query,
+                limit=payload.limit,
+                policy_id=None,
+                model_mode=model_mode,
+            )
         response_mode = response_data.get("response_mode", "answer")
         if response_mode == "out_of_scope":
             answer_chunks = iter((build_out_of_scope_answer(payload.query),))
         elif response_mode == "policy_selection":
             answer_chunks = iter((build_policy_selection_answer(response_data.get("candidates") or []),))
         else:
-            answer_chunks = generate_chat_answer_stream(
-                payload.query,
-                response_data["sources"],
-                conversation_context=build_conversation_context(recent_messages),
-                model_mode=get_user_model_mode(current_user, "chat"),
+            focused_answer = None
+            if context_policy_id is None:
+                focused_answer = build_focused_attribute_answer(
+                    payload.query,
+                    response_data["sources"],
+                    intent_tags=response_data.get("intent_tags") or None,
+                )
+            answer_chunks = (
+                iter((focused_answer,))
+                if focused_answer
+                else generate_chat_answer_stream(
+                    payload.query,
+                    response_data["sources"],
+                    conversation_context=build_conversation_context(recent_messages),
+                    model_mode=model_mode,
+                )
             )
 
     response_mode = response_data.get("response_mode", "answer")
