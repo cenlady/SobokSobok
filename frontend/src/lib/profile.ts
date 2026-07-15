@@ -17,6 +17,13 @@ import {
 export const EMPTY_PROFILE: Profile = {
   ownerName: '',
   storeName: '',
+  aiModelModes: {
+    chat: 'cloud',
+    recommend: 'cloud',
+    policySummary: 'cloud',
+    calendarCoach: 'cloud',
+    documentReview: 'local',
+  },
   industry: '',
   industryTags: [],
   region: '',
@@ -39,6 +46,13 @@ export function toProfile(server: ServerProfile): Profile {
   return {
     ownerName: server.owner_name || '',
     storeName: server.store_name || '',
+    aiModelModes: {
+      chat: server.chat_model_mode || 'cloud',
+      recommend: server.recommend_model_mode || 'cloud',
+      policySummary: server.policy_summary_model_mode || 'cloud',
+      calendarCoach: server.calendar_coach_model_mode || 'cloud',
+      documentReview: server.document_review_model_mode || 'local',
+    },
     industry: server.industry.label || '',
     industryTags: server.industry.tags || [],
     region: [sido, sigungu].filter(Boolean).join(' '),
@@ -60,6 +74,11 @@ export function toServerProfile(profile: Profile): ServerProfile {
   return {
     owner_name: profile.ownerName || null,
     store_name: profile.storeName || null,
+    chat_model_mode: profile.aiModelModes.chat,
+    recommend_model_mode: profile.aiModelModes.recommend,
+    policy_summary_model_mode: profile.aiModelModes.policySummary,
+    calendar_coach_model_mode: profile.aiModelModes.calendarCoach,
+    document_review_model_mode: profile.aiModelModes.documentReview,
     region: { sido: profile.regionSido || null, sigungu: profile.regionSigungu || null },
     industry: {
       label: profile.industry || null,

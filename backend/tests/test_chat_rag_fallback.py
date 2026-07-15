@@ -1,6 +1,10 @@
 import uuid
+from unittest.mock import patch
+
+import pytest
 
 import app.services.chat_rag as chat_rag
+from app.core.model_errors import ModelTimeoutError
 from app.services.chat_rag import (
     answer_policy_question,
     build_chat_user_prompt,
@@ -8,6 +12,7 @@ from app.services.chat_rag import (
     clean_rag_answer_text,
     clean_rag_display_text,
     clean_rag_evidence_text,
+    generate_chat_answer,
     is_out_of_policy_scope,
 )
 
@@ -290,10 +295,11 @@ def test_policy_scoped_question_uses_parent_documents_and_llm(monkeypatch):
     def fail_if_chunk_search_called(**_kwargs):
         raise AssertionError("정책이 지정된 채팅에서 벡터 청크 검색을 호출하면 안 됩니다.")
 
-    def fake_generate(query, sources, *, conversation_context=""):
+    def fake_generate(query, sources, *, conversation_context="", model_mode=None):
         captured["query"] = query
         captured["sources"] = sources
         captured["conversation_context"] = conversation_context
+        captured["model_mode"] = model_mode
         return "LLM이 부모 문서 원문을 읽기 쉽게 정리한 답변"
 
     monkeypatch.setattr(chat_rag, "retrieve_policy_document_sources", fake_parent_retrieve)
@@ -304,11 +310,13 @@ def test_policy_scoped_question_uses_parent_documents_and_llm(monkeypatch):
         db=None,
         query="지원 대상 확인",
         policy_id=policy_id,
+        model_mode="local",
     )
 
     assert response["answer"] == "LLM이 부모 문서 원문을 읽기 쉽게 정리한 답변"
     assert captured["query"] == "지원 대상 확인"
     assert captured["sources"] == [parent_source]
+    assert captured["model_mode"] == "local"
 
 
 def test_out_of_scope_weather_question_does_not_search_policy_chunks():
@@ -344,3 +352,11 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
+
+
+@patch("app.services.chat_rag.get_chat_model")
+def test_chat_model_timeout_is_not_replaced_with_retrieval_fallback(mock_get_chat_model):
+    mock_get_chat_model.return_value.generate.side_effect = ModelTimeoutError()
+
+    with pytest.raises(ModelTimeoutError):
+        generate_chat_answer("지원 대상이 누구야?", [_source("[지원 대상] 소상공인")])

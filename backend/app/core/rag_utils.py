@@ -1,6 +1,8 @@
 import os
 import uuid
 import hashlib
+import inspect
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -9,6 +11,60 @@ from sqlalchemy import func
 
 from app.models.chat import PolicyChunk
 from app.core.config import settings
+from app.core.model_errors import ModelResponseError, classify_model_exception
+from app.core.model_logging import log_model_call
+
+
+def _validate_embedding_dimensions(
+    embeddings: List[List[float]],
+    expected_dimensions: int | None,
+) -> None:
+    if expected_dimensions is None:
+        return
+    invalid = [len(vector) for vector in embeddings if len(vector) != expected_dimensions]
+    if invalid:
+        raise ModelResponseError(
+            f"임베딩 차원 불일치: expected={expected_dimensions}, actual={invalid[0]}"
+        )
+
+
+def _log_embedding_call(
+    *,
+    feature: str,
+    provider: str,
+    model: str,
+    texts: List[str],
+    embeddings: List[List[float]],
+    started: float,
+    status: str,
+    error_type: str | None = None,
+) -> None:
+    dimension = len(embeddings[0]) if embeddings else None
+    source_module = "app.core.rag_utils"
+    source_function = "embed_documents"
+    for frame_info in inspect.stack()[2:10]:
+        candidate_module = frame_info.frame.f_globals.get("__name__", "")
+        if candidate_module not in {"app.core.rag_utils", "app.core.model_provider"}:
+            source_module = candidate_module or source_module
+            source_function = frame_info.function
+            break
+    log_model_call(
+        feature=feature,
+        task="embedding",
+        stage="embedding",
+        provider=provider,
+        model=model,
+        source_module=source_module,
+        source_function=source_function,
+        status=status,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        input_type="text_batch",
+        input_count=len(texts),
+        input_chars=sum(len(text) for text in texts),
+        result_count=len(embeddings),
+        embedding_dimensions=dimension,
+        error_type=error_type,
+    )
 
 class EmbeddingModel(ABC):
     """
@@ -31,14 +87,26 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     OpenAI API를 사용하는 임베딩 모델 구현체.
     기본 모델: text-embedding-3-small (1536차원) 또는 text-embedding-ada-002 (1536차원)
     """
-    def __init__(self, model_name: str = "text-embedding-3-small", api_key: str = None):
+    def __init__(
+        self,
+        model_name: str = "text-embedding-3-small",
+        api_key: str = None,
+        expected_dimensions: int | None = None,
+        feature: str = "chat",
+        timeout_seconds: float | None = None,
+    ):
         try:
             from openai import OpenAI
         except ImportError:
             raise ImportError("OpenAIEmbeddingModel을 사용하려면 'openai' 패키지가 필요합니다. requirements.txt를 확인해 주세요.")
         
         self.model_name = model_name
-        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self.expected_dimensions = expected_dimensions
+        self.feature = feature
+        self.client = OpenAI(
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            timeout=timeout_seconds or settings.LLM_EMBEDDING_TIMEOUT_SECONDS,
+        )
         if settings.LANGSMITH_TRACING and settings.LANGSMITH_API_KEY:
             try:
                 from langsmith import wrappers
@@ -51,20 +119,47 @@ class OpenAIEmbeddingModel(EmbeddingModel):
                 pass
 
     def embed_text(self, text: str) -> List[float]:
-        # 개행 문자를 공백으로 치환하여 임베딩 품질 향상
-        response = self.client.embeddings.create(
-            input=[text.replace("\n", " ")],
-            model=self.model_name
-        )
-        return response.data[0].embedding
+        return self.embed_documents([text])[0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        started = time.perf_counter()
+        embeddings: List[List[float]] = []
         clean_texts = [t.replace("\n", " ") for t in texts]
-        response = self.client.embeddings.create(
-            input=clean_texts,
-            model=self.model_name
-        )
-        return [item.embedding for item in response.data]
+        request: Dict[str, Any] = {"input": clean_texts, "model": self.model_name}
+        if self.expected_dimensions is not None and self.model_name.startswith("text-embedding-3"):
+            request["dimensions"] = self.expected_dimensions
+        try:
+            response = self.client.embeddings.create(**request)
+            embeddings = [item.embedding for item in response.data]
+            _validate_embedding_dimensions(embeddings, self.expected_dimensions)
+            _log_embedding_call(
+                feature=self.feature,
+                provider="openai",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="success",
+            )
+            return embeddings
+        except Exception as exc:
+            _log_embedding_call(
+                feature=self.feature,
+                provider="openai",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="error",
+                error_type=type(exc).__name__,
+            )
+            raise classify_model_exception(
+                exc,
+                feature=self.feature,
+                task="embedding",
+                provider="openai",
+                model=self.model_name,
+            ) from exc
 
 
 class GeminiEmbeddingModel(EmbeddingModel):
@@ -72,29 +167,74 @@ class GeminiEmbeddingModel(EmbeddingModel):
     Google GenAI SDK를 사용하는 임베딩 모델 구현체.
     기본 모델: text-embedding-004 (768차원 또는 1536차원)
     """
-    def __init__(self, model_name: str = "text-embedding-004", api_key: str = None):
+    def __init__(
+        self,
+        model_name: str = "text-embedding-004",
+        api_key: str = None,
+        expected_dimensions: int | None = None,
+        feature: str = "chat",
+        timeout_seconds: float | None = None,
+    ):
         try:
             from google import genai
+            from google.genai import types
         except ImportError:
             raise ImportError("GeminiEmbeddingModel을 사용하려면 'google-genai' 패키지가 필요합니다. requirements.txt를 확인해 주세요.")
         
         self.model_name = model_name
+        self.expected_dimensions = expected_dimensions
+        self.feature = feature
         # Client 생성 시 GEMINI_API_KEY 환경변수를 기본적으로 탐색합니다.
-        self.client = genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
+        self.client = genai.Client(
+            api_key=api_key or os.getenv("GEMINI_API_KEY"),
+            http_options=types.HttpOptions(
+                timeout=int(
+                    (timeout_seconds or settings.LLM_EMBEDDING_TIMEOUT_SECONDS) * 1000
+                )
+            ),
+        )
 
     def embed_text(self, text: str) -> List[float]:
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=text
-        )
-        return response.embeddings[0].values
+        return self.embed_documents([text])[0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=texts
-        )
-        return [emb.values for emb in response.embeddings]
+        started = time.perf_counter()
+        embeddings: List[List[float]] = []
+        try:
+            response = self.client.models.embed_content(
+                model=self.model_name,
+                contents=texts,
+            )
+            embeddings = [emb.values for emb in response.embeddings]
+            _validate_embedding_dimensions(embeddings, self.expected_dimensions)
+            _log_embedding_call(
+                feature=self.feature,
+                provider="gemini",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="success",
+            )
+            return embeddings
+        except Exception as exc:
+            _log_embedding_call(
+                feature=self.feature,
+                provider="gemini",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="error",
+                error_type=type(exc).__name__,
+            )
+            raise classify_model_exception(
+                exc,
+                feature=self.feature,
+                task="embedding",
+                provider="gemini",
+                model=self.model_name,
+            ) from exc
 
 
 class OllamaEmbeddingModel(EmbeddingModel):
@@ -106,32 +246,72 @@ class OllamaEmbeddingModel(EmbeddingModel):
     떨어져 기본값을 bge-m3로 둔다. bge-m3는 컨텍스트가 8192 토큰이므로 그보다
     긴 문서는 호출 전에 청킹해야 뒷부분이 잘리지 않는다.
     """
-    def __init__(self, model_name: str = "bge-m3:latest", base_url: str = None):
+    def __init__(
+        self,
+        model_name: str = "bge-m3:latest",
+        base_url: str = None,
+        expected_dimensions: int | None = None,
+        feature: str = "chat",
+        timeout_seconds: float | None = None,
+    ):
         import httpx
         self.model_name = model_name
         self.base_url = base_url or settings.OLLAMA_BASE_URL
-        self.client = httpx.Client(timeout=60.0)
+        self.expected_dimensions = expected_dimensions
+        self.feature = feature
+        self.client = httpx.Client(
+            timeout=timeout_seconds or settings.LLM_EMBEDDING_TIMEOUT_SECONDS
+        )
 
     def embed_text(self, text: str) -> List[float]:
         return self.embed_documents([text])[0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         # /api/embed는 input에 리스트를 받아 한 번의 요청으로 배치 임베딩한다.
+        started = time.perf_counter()
+        embeddings: List[List[float]] = []
         clean_texts = [text_val.replace("\n", " ") for text_val in texts]
-        response = self.client.post(
-            f"{self.base_url}/api/embed",
-            json={"model": self.model_name, "input": clean_texts}
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if "embeddings" in payload:
-            return payload["embeddings"]
-
-        # 구버전 Ollama 호환 fallback
-        embeddings = []
-        for text_val in clean_texts:
-            embeddings.append(self._embed_text_legacy(text_val))
-        return embeddings
+        try:
+            response = self.client.post(
+                f"{self.base_url}/api/embed",
+                json={"model": self.model_name, "input": clean_texts}
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if "embeddings" in payload:
+                embeddings = payload["embeddings"]
+            else:
+                # 구버전 Ollama 호환 fallback
+                embeddings = [self._embed_text_legacy(text_val) for text_val in clean_texts]
+            _validate_embedding_dimensions(embeddings, self.expected_dimensions)
+            _log_embedding_call(
+                feature=self.feature,
+                provider="ollama",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="success",
+            )
+            return embeddings
+        except Exception as exc:
+            _log_embedding_call(
+                feature=self.feature,
+                provider="ollama",
+                model=self.model_name,
+                texts=texts,
+                embeddings=embeddings,
+                started=started,
+                status="error",
+                error_type=type(exc).__name__,
+            )
+            raise classify_model_exception(
+                exc,
+                feature=self.feature,
+                task="embedding",
+                provider="ollama",
+                model=self.model_name,
+            ) from exc
 
     def _embed_text_legacy(self, text: str) -> List[float]:
         response = self.client.post(
@@ -232,17 +412,9 @@ def create_embedding_model(
     - provider: openai | gemini | ollama
     - model_name을 생략하면 settings.CHAT_EMBEDDING_MODEL을 사용합니다.
     """
-    selected_provider = (provider or settings.CHAT_EMBEDDING_PROVIDER).lower()
-    selected_model = model_name or settings.CHAT_EMBEDDING_MODEL
+    from app.core.model_provider import get_embedding_model
 
-    if selected_provider == "openai":
-        return OpenAIEmbeddingModel(model_name=selected_model)
-    if selected_provider == "gemini":
-        return GeminiEmbeddingModel(model_name=selected_model)
-    if selected_provider == "ollama":
-        return OllamaEmbeddingModel(model_name=selected_model, base_url=settings.OLLAMA_BASE_URL)
-
-    raise ValueError(f"지원하지 않는 임베딩 provider입니다: {selected_provider}")
+    return get_embedding_model("chat", provider=provider, model_name=model_name)
 
 
 def upsert_policy_chunks(
@@ -252,6 +424,7 @@ def upsert_policy_chunks(
     text_content: str,
     embedding_model: EmbeddingModel,
     model_name_log: str,
+    model_mode: str = "cloud",
     chunk_size: int = settings.CHAT_CHUNK_SIZE,
     chunk_overlap: int = settings.CHAT_CHUNK_OVERLAP,
     metadata_base: Optional[Dict[str, Any]] = None,
@@ -278,6 +451,10 @@ def upsert_policy_chunks(
     ]
     embeddings = embedding_model.embed_documents(embedding_inputs)
     
+    from app.core.model_provider import normalize_model_mode
+
+    selected_mode = normalize_model_mode(model_mode) or "cloud"
+
     # 4) 데이터베이스 삽입
     for i, (chunk_text, vector) in enumerate(zip(chunks, embeddings)):
         chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
@@ -289,6 +466,18 @@ def upsert_policy_chunks(
             "embedding_input_strategy": "document_context_section_plus_chunk" if embedding_context else "chunk_only",
         }
         
+        vector_values: Dict[str, Any]
+        if selected_mode == "local":
+            vector_values = {
+                "embedding_ollama": vector,
+                "embedding_ollama_model": model_name_log,
+            }
+        else:
+            vector_values = {
+                "embedding_openai": vector,
+                "embedding_openai_model": model_name_log,
+            }
+
         db_chunk = PolicyChunk(
             policy_id=policy_id,
             document_id=document_id,
@@ -298,8 +487,8 @@ def upsert_policy_chunks(
             chunk_metadata=chunk_metadata,
             embedding_status="success",
             embedding_model=model_name_log,
-            embedding=vector,
-            created_at=func.now()
+            created_at=func.now(),
+            **vector_values,
         )
         db.add(db_chunk)
     
@@ -311,6 +500,7 @@ def search_policy_chunks(
     db: Session,
     query: str,
     embedding_model: EmbeddingModel,
+    embedding_column: Any,
     limit: int = 5,
     policy_id: Optional[uuid.UUID] = None,
 ) -> List[Tuple[PolicyChunk, float]]:
@@ -321,7 +511,7 @@ def search_policy_chunks(
     query_vector = embedding_model.embed_text(query)
     
     # pgvector의 cosine_distance를 기반으로 정렬하며, 점수는 1 - cosine_distance로 변환
-    distance_expr = PolicyChunk.embedding.cosine_distance(query_vector)
+    distance_expr = embedding_column.cosine_distance(query_vector)
     
     search_query = (
         db.query(
@@ -330,7 +520,7 @@ def search_policy_chunks(
         )
         .filter(
             PolicyChunk.embedding_status == "success",
-            PolicyChunk.embedding.isnot(None),
+            embedding_column.isnot(None),
         )
     )
 
@@ -347,17 +537,17 @@ def search_generic_vectors(
     model_class: Type[Any],
     query: str,
     embedding_model: EmbeddingModel,
+    embedding_column: Any,
     limit: int = 5
 ) -> List[Tuple[Any, float]]:
     """
     [범용 헬퍼] 각 도메인별(추천, 서류 검토, 일정 관리 등)로 정의한 개별 벡터 테이블 클래스를 타겟으로 유사도 검색을 수행합니다.
-    - 조건: model_class는 반드시 pgvector Column인 'embedding' 필드를 소유하고 있어야 합니다.
-    - 예시: search_generic_vectors(db, ReviewVector, "제출서류 질문", model)
+    - OpenAI/Ollama처럼 차원이 다른 벡터를 섞지 않도록 검색 컬럼을 반드시 명시합니다.
     """
     query_vector = embedding_model.embed_text(query)
     
     # pgvector cosine_distance 정렬 계산
-    distance_expr = model_class.embedding.cosine_distance(query_vector)
+    distance_expr = embedding_column.cosine_distance(query_vector)
     
     results = db.query(
         model_class,

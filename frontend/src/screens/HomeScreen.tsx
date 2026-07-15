@@ -7,7 +7,6 @@ import {
   Button,
   EmptyState,
   IconButton,
-  LoadingLine,
   PageIntro,
   StatusBadge,
   TagList,
@@ -16,7 +15,7 @@ import { localDateKey, toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
-import { useSavedPolicies } from '../lib/storage'
+import { useProfile, useSavedPolicies } from '../lib/storage'
 import { apiFetch } from '../lib/api'
 import type { SavedPolicy } from '../types'
 
@@ -35,6 +34,7 @@ function ymd(y: number, m: number, d: number) {
 export default function HomeScreen() {
   const navigate = useNavigate()
   const { policies, loading } = useSavedPolicies()
+  const { loading: profileLoading } = useProfile()
 
   const todayDate = new Date(`${TODAY}T00:00:00`)
   const [cursor, setCursor] = useState({
@@ -45,12 +45,14 @@ export default function HomeScreen() {
 
   // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
   const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>([])
+  const [googleEventsLoading, setGoogleEventsLoading] = useState(true)
 
   useEffect(() => {
     let ignore = false
 
     // 기본 패치 헬퍼
     const fetchEvents = () => {
+      setGoogleEventsLoading(true)
       apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
         .then((data) => {
           if (!ignore) {
@@ -60,6 +62,9 @@ export default function HomeScreen() {
         })
         .catch((err) => {
           console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
+        })
+        .finally(() => {
+          if (!ignore) setGoogleEventsLoading(false)
         })
     }
 
@@ -194,18 +199,10 @@ export default function HomeScreen() {
     }
   }
   const selDate = new Date(`${selected}T00:00:00`)
-  const isEmpty = !loading && policies.length === 0 && googleEvents.length === 0
+  const homeLoading = loading || profileLoading || googleEventsLoading
+  const isEmpty = !homeLoading && policies.length === 0 && googleEvents.length === 0
 
-  if (loading) {
-    return (
-      <div>
-        <TopBar />
-        <div className="px-5">
-          <LoadingLine message="저장한 정책을 불러오는 중이에요" />
-        </div>
-      </div>
-    )
-  }
+  if (homeLoading) return <HomeScreenSkeleton />
 
   if (isEmpty) {
     return (
@@ -471,6 +468,65 @@ export default function HomeScreen() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function HomeScreenSkeleton() {
+  return (
+    <div className="pb-6">
+      <TopBar />
+
+      <PageIntro
+        title="내 정책 달력"
+        description={
+          <span className="inline-flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-primary"
+            />
+            사용자 정보와 달력을 불러오는 중이에요
+          </span>
+        }
+      />
+
+      <section className="mt-4 px-5">
+        <div className="surface-panel animate-pulse p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="h-6 w-28 rounded-lg bg-line/80" />
+            <div className="flex gap-1">
+              <div className="h-11 w-11 rounded-full bg-line/70" />
+              <div className="h-11 w-11 rounded-full bg-line/70" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-7 text-center">
+            {WEEK.map((day) => (
+              <div key={day} className="pb-2">
+                <div className="mx-auto h-3 w-4 rounded bg-line/60" />
+              </div>
+            ))}
+            {Array.from({ length: 42 }, (_, index) => (
+              <div
+                key={index}
+                className="flex h-11 flex-col items-center justify-center"
+              >
+                <div className="h-8 w-8 rounded-lg bg-line/70" />
+                <div className="mt-1 h-1.5 w-3 rounded-full bg-line/50" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="mt-3 px-5">
+        <div className="h-12 animate-pulse rounded-xl border border-line bg-surface" />
+      </section>
+
+      <section className="mt-6 px-5">
+        <div className="h-6 w-40 animate-pulse rounded-lg bg-line/80" />
+        <div className="surface-panel mt-3 h-20 animate-pulse bg-line/30" />
+      </section>
     </div>
   )
 }

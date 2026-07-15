@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, UniqueConstraint, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, JSON, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
@@ -12,7 +12,7 @@ class PolicyChunk(Base):
     [RAG 챗봇 영역] 텍스트 청크 및 벡터 임베딩 테이블
     - 역할: 공고 상세 요건 문서(PolicyDocument)들을 RAG 모델 크기에 맞게 쪼갠 청크와 벡터를 관리합니다.
     - 소유자: 챗봇 RAG 서비스
-    - 벡터 규약: 이 테이블의 'embedding' 필드를 사용하여 사용자 질문의 임베딩 벡터와 유사도 검색(Cosine Distance 등)을 수행합니다.
+    - 벡터 규약: 사용자 설정에 따라 embedding_openai 또는 embedding_ollama를 검색합니다.
     """
     __tablename__ = "policy_chunks"
 
@@ -26,8 +26,19 @@ class PolicyChunk(Base):
     embedding_status = Column(String(30), nullable=False, default="pending", comment="임베딩 처리 상태 (pending, success, failed)")
     embedding_model = Column(Text, nullable=True, comment="임베딩에 사용한 인공지능 모델명")
     
-    # pgvector 임베딩 벡터 (차원은 settings.EMBEDDING_DIM으로 관리)
-    embedding = Column(Vector(settings.EMBEDDING_DIM), nullable=True, comment="[pgvector] 청크 임베딩 벡터값")
+    # 일반 정책 RAG 벡터. 서류검토(기본 1024차원)와 별도 테이블에서 관리한다.
+    embedding_openai = Column(
+        Vector(settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS),
+        nullable=True,
+        comment="[pgvector] 클라우드 AI 검색용 OpenAI 벡터",
+    )
+    embedding_ollama = Column(
+        Vector(settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS),
+        nullable=True,
+        comment="[pgvector] 로컬 AI 검색용 Ollama 벡터",
+    )
+    embedding_openai_model = Column(String(100), nullable=True)
+    embedding_ollama_model = Column(String(100), nullable=True)
     
     created_at = Column(DateTime, nullable=False, server_default=func.now())
 
@@ -38,6 +49,41 @@ class PolicyChunk(Base):
     # Relationships
     policy = relationship("NormalizedPolicy", back_populates="chunks")
     document = relationship("PolicyDocument", back_populates="chunks")
+
+
+POLICY_CHUNK_SCHEMA_SQL = [
+    f"ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS embedding_openai vector({settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS})",
+    f"ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS embedding_ollama vector({settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS})",
+    "ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS embedding_openai_model VARCHAR(100)",
+    "ALTER TABLE policy_chunks ADD COLUMN IF NOT EXISTS embedding_ollama_model VARCHAR(100)",
+    f"""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM pg_attribute
+            WHERE attrelid = 'policy_chunks'::regclass
+              AND (
+                    (attname = 'embedding_openai' AND atttypmod <> {settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS})
+                 OR (attname = 'embedding_ollama' AND atttypmod <> {settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS})
+              )
+        ) THEN
+            DELETE FROM policy_chunks;
+            ALTER TABLE policy_chunks
+                ALTER COLUMN embedding_openai TYPE vector({settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS});
+            ALTER TABLE policy_chunks
+                ALTER COLUMN embedding_ollama TYPE vector({settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS});
+        END IF;
+    END $$;
+    """,
+    "ALTER TABLE policy_chunks DROP COLUMN IF EXISTS embedding",
+]
+
+
+def ensure_policy_chunk_schema(bind) -> None:
+    if not settings.database_url.startswith("postgresql"):
+        return
+    for statement in POLICY_CHUNK_SCHEMA_SQL:
+        bind.execute(text(statement))
 
 
 class ChatSession(Base):

@@ -14,11 +14,10 @@ import {
   FileText,
   Download,
 } from 'lucide-react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
-import { formatDate } from '../lib/calendar'
 import { formatPeriod, getDeadlineInfo } from '../lib/deadline'
 import { cleanPolicyText, truncateAtSentence } from '../lib/text'
 import { Button, IconButton, Notice, Panel, ScreenHeader, StatusBadge } from '../components/ui'
@@ -26,7 +25,6 @@ import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
 import type {
   PolicyDetailResponse,
-  RecommendationResult,
   RecommendationExplanationResponse,
 } from '../types'
 
@@ -55,10 +53,6 @@ function requestExplanation(policyId: string, requestBody: unknown) {
 export default function PolicyDetailScreen() {
   const { policyId } = useParams()
   const navigate = useNavigate()
-  const location = useLocation()
-  // 추천 탭에서 넘어온 경우에만 채워진다. 없어도 서버가 설명을 만들어주므로 필수는 아니다.
-  const recommendation = (location.state as { recommendation?: RecommendationResult } | null)
-    ?.recommendation
   const { has, toggle } = useSavedPolicies()
   const [savePending, setSavePending] = useState(false)
   const { profile, loading: profileLoading } = useProfile()
@@ -66,6 +60,7 @@ export default function PolicyDetailScreen() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [explanation, setExplanation] = useState<RecommendationExplanationResponse | null>(null)
+  const [explanationError, setExplanationError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!policyId) return
@@ -74,6 +69,7 @@ export default function PolicyDetailScreen() {
     setError(null)
     setPolicy(null)
     setExplanation(null)
+    setExplanationError(null)
 
     apiFetch<PolicyDetailResponse>(`/api/v1/policies/normalized/${policyId}`)
       .then((data) => {
@@ -97,6 +93,7 @@ export default function PolicyDetailScreen() {
     if (profileLoading) return
 
     let ignore = false
+    setExplanationError(null)
     // apiFetch를 써야 JWT가 붙는다. /recommend는 인증 가드가 걸려 있어
     // 날것의 fetch로는 401이 나고 설명이 통째로 사라진다.
     requestExplanation(policyId, buildRecommendationRequest(profile))
@@ -104,62 +101,18 @@ export default function PolicyDetailScreen() {
         if (!ignore) setExplanation(data)
       })
       .catch((err) => {
-        console.error('추천 설명 생성 실패, 로컬 폴백 사용:', err)
-        if (ignore) return
-
-        const fallbackEligibility = recommendation?.eligibility_status || 'needs_review'
-        const fallbackPreference = recommendation?.preference_match || 'not_requested'
-        const fallbackSummary =
-          fallbackEligibility === 'eligible' && fallbackPreference === 'none'
-            ? '자격 조건은 맞지만 선택한 관심 분야와 직접 일치하지 않습니다.'
-            : fallbackEligibility === 'eligible'
-              ? '입력한 조건과 확인된 공고 조건이 잘 맞습니다.'
-              : '맞는 조건은 있지만 세부 자격 확인이 필요합니다.'
-        const fallbackStrengths = recommendation?.reasons?.length
-          ? recommendation.reasons
-          : []
-        const fallbackAspects = [
-          ...(recommendation?.unmet_conditions || []),
-          ...(recommendation?.warnings || []),
-        ]
-
-        const fallbackNext: string[] = []
-        if (policy.apply_end) {
-          const daysLeft = Math.ceil(
-            (new Date(policy.apply_end).getTime() - Date.now()) / 86_400_000,
+        if (!ignore) {
+          setExplanationError(
+            err instanceof Error
+              ? err.message
+              : 'AI 추천 설명을 생성하지 못했습니다. 잠시 후 다시 시도해주세요.',
           )
-          fallbackNext.push(
-            daysLeft >= 0
-              ? `마감일(${formatDate(policy.apply_end)})까지 ${daysLeft}일 남았으니 늦지 않게 신청해 보세요.`
-              : '신청 기간이 마감되었는지 확인해 보세요.',
-          )
-        } else {
-          fallbackNext.push('신청 기한을 확인해 보세요.')
         }
-        fallbackNext.push('정책 도우미에서 지원 서류와 자격을 이어서 확인해 보세요.')
-
-        setExplanation({
-          match_status: recommendation?.match_status || 'needs_review',
-          eligibility_status: fallbackEligibility,
-          preference_match: fallbackPreference,
-          confidence: recommendation?.confidence || 'low',
-          generated_by: 'rules',
-          summary: fallbackSummary,
-          strengths: fallbackStrengths,
-          aspects_to_check:
-            fallbackAspects.length > 0
-              ? fallbackAspects
-              : ['상세 공고의 세부 자격 조건을 다시 한번 확인해 보세요.'],
-          next_actions: fallbackNext,
-          evidence: policy.target_text
-            ? [`지원 대상 원문: ${policy.target_text.slice(0, 240)}`]
-            : [],
-        })
       })
     return () => {
       ignore = true
     }
-  }, [policyId, policy, profile, profileLoading, recommendation])
+  }, [policyId, policy, profile, profileLoading])
 
   const isSaved = policy ? has(policy.id) : false
 
@@ -242,7 +195,13 @@ export default function PolicyDetailScreen() {
           )}
         </Panel>
 
-        {!explanation && <ExplanationLoadingPanel />}
+        {!explanation && !explanationError && <ExplanationLoadingPanel />}
+
+        {explanationError && (
+          <Notice tone="error" className="mt-6" title="AI 조건 비교를 완료하지 못했어요">
+            {explanationError}
+          </Notice>
+        )}
 
         {explanation && (
           <section className="mt-6">
@@ -261,7 +220,7 @@ export default function PolicyDetailScreen() {
               <ResultGroup title="확인된 조건" items={explanation.strengths} tone="success" />
               <ResultGroup title="추가 확인 사항" items={explanation.aspects_to_check} />
               <ResultGroup title="다음 단계" items={explanation.next_actions} tone="action" />
-              <ResultGroup title="판정에 사용한 공고 근거" items={explanation.evidence} />
+              <EvidenceResultGroup items={explanation.evidence} />
             </Panel>
             <p className="mt-2 text-[11px] leading-relaxed text-subtle">
               공고문과 입력 정보를 바탕으로 자동 정리한 참고 안내입니다.
@@ -457,7 +416,7 @@ function Section({ title, content }: { title: string; content?: string | null })
   return (
     <section className="p-4">
       <h3 className="text-[15px] font-bold text-ink">{title}</h3>
-      <p className="mt-1.5 whitespace-pre-line text-[14px] leading-[1.7] text-muted">
+              <p className="mt-1.5 whitespace-pre-line text-[15px] leading-[1.7] text-muted">
         {expanded || !isLong ? text : preview}
       </p>
       {isLong && (
@@ -500,10 +459,10 @@ function ResultGroup({
 
   return (
     <div className="p-4">
-      <p className="text-xs font-bold text-muted">{title}</p>
+      <p className="text-[13px] font-bold text-muted">{title}</p>
       <ul className="mt-2.5 space-y-2.5">
         {items.map((item) => (
-          <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-muted">
+        <li key={item} className="flex items-start gap-2.5 text-[15px] leading-relaxed text-muted">
             <span
               aria-hidden="true"
               className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${marker}`}
@@ -514,6 +473,49 @@ function ResultGroup({
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+function EvidenceResultGroup({ items }: { items: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (items.length === 0) return null
+
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className="flex min-h-14 w-full items-center justify-between gap-3 p-4 text-left transition-colors active:bg-line/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/20"
+      >
+        <span className="text-xs font-bold text-muted">판정에 사용한 공고 근거</span>
+        <span className="flex shrink-0 items-center gap-1.5 text-subtle">
+          <span className="text-[11px]">{items.length}개</span>
+          <ChevronDown
+            size={16}
+            className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+          />
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-line p-4 pt-3">
+          <ul className="space-y-2.5">
+            {items.map((item) => (
+              <li key={item} className="flex items-start gap-2.5 text-[15px] leading-relaxed text-muted">
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-line text-muted"
+                >
+                  <Info size={11} strokeWidth={2.25} />
+                </span>
+                <span>{item.replace(/^\-\s*/, '')}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }
@@ -564,7 +566,7 @@ function MatchVerdict({
           {preferenceLabel}
         </span>
       )}
-      <span className="text-xs font-medium text-muted">{config.description}</span>
+      <span className="text-[13px] font-medium text-muted">{config.description}</span>
       <span className="ml-auto text-[11px] text-subtle">{confidenceLabel}</span>
     </div>
   )

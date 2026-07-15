@@ -4,7 +4,9 @@ import traceback
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.jobs.build_prep_vectors_once import build_prep_vectors_once
 from app.jobs.build_rec_vectors_once import build_rec_vectors_once
+from app.services.build_review_vectors import build_review_vectors_once
 from app.services.chat_rag import build_policy_chunks
 from app.services.extract_attachments import extract_pending_attachments_once
 from app.services.gov24_ingest import crawl_gov24_once
@@ -89,6 +91,28 @@ def _run_all_jobs() -> None:
         )
     except Exception:
         print("[embedding] failed", flush=True)
+        traceback.print_exc()
+
+    try:
+        stats = build_review_vectors_once()
+        print(
+            "[review-embedding] success "
+            + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+    except Exception:
+        print("[review-embedding] failed", flush=True)
+        traceback.print_exc()
+
+    try:
+        stats = build_prep_vectors_once()
+        print(
+            "[prep-embedding] success "
+            + json.dumps(stats, ensure_ascii=False, sort_keys=True),
+            flush=True,
+        )
+    except Exception:
+        print("[prep-embedding] failed", flush=True)
         traceback.print_exc()
 
 

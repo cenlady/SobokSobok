@@ -13,8 +13,16 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.model_errors import ModelResponseError, ModelServiceError
+from app.core.model_provider import (
+    get_chat_model,
+    get_embedding_model,
+    normalize_model_mode,
+    parse_json_response,
+    resolve_chat_model_spec_for_mode,
+    resolve_embedding_model_spec_for_mode,
+)
 from app.core.time import korea_now_naive
-from app.core.rag_utils import OllamaEmbeddingModel, OpenAIEmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.recommend import RecommendationVector
 from app.schemas.recommend import NumberRangeInput, RecommendationProfileRequest, RecommendationResult
@@ -87,9 +95,7 @@ EXPLANATION_JSON_SCHEMA = {
     "additionalProperties": False,
 }
 
-GEMINI_QUOTA_COOLDOWN_SECONDS = 5 * 60
 EXPLANATION_CACHE_TTL_SECONDS = 15 * 60
-_gemini_quota_cooldown_until = 0.0
 _explanation_cache: dict[str, tuple[float, Any]] = {}
 _explanation_cache_lock = threading.Lock()
 
@@ -133,9 +139,14 @@ def recommend_policies(
     db: Session,
     profile: RecommendationProfileRequest,
     limit: int = 15,
+    model_mode: str | None = None,
 ) -> tuple[list[RecommendationResult], bool, int]:
     policies = _candidate_query(db).all()
-    vector_scores, vector_used = _vector_scores(db, profile) if profile.use_vectors else ({}, False)
+    vector_scores, vector_used = (
+        _vector_scores(db, profile, model_mode=model_mode)
+        if profile.use_vectors
+        else ({}, False)
+    )
 
     deduplicated: dict[str, RecommendationResult] = {}
     for policy in policies:
@@ -242,15 +253,14 @@ def explain_policy_recommendation(
     db: Session,
     policy_id: UUID,
     profile: RecommendationProfileRequest,
+    model_mode: str | None = None,
 ) -> RecommendationExplanationResponse:
-    global _gemini_quota_cooldown_until
-
     from app.schemas.recommend import RecommendationExplanationResponse
     policy = db.get(NormalizedPolicy, policy_id)
     if not policy:
         raise ValueError("Policy not found")
 
-    cache_key = _explanation_cache_key(policy, profile)
+    cache_key = _explanation_cache_key(policy, profile, model_mode=model_mode)
     cached_response = _get_cached_explanation(cache_key)
     if cached_response is not None:
         return cached_response
@@ -285,28 +295,9 @@ def explain_policy_recommendation(
     else:
         fallback_next_actions.append("AI 상담에서 제출 서류와 세부 자격을 확인해 보세요.")
 
-    fallback_response = RecommendationExplanationResponse(
-        match_status=evaluation.status,
-        eligibility_status=evaluation.eligibility_status,
-        preference_match=evaluation.preference_match,
-        confidence=_confidence(evaluation),
-        generated_by="rules",
-        summary=fallback_summary,
-        strengths=fallback_strengths,
-        aspects_to_check=fallback_aspects_to_check,
-        next_actions=fallback_next_actions,
-        evidence=explanation_evidence,
-    )
-
-    if not settings.GEMINI_API_KEY or time.monotonic() < _gemini_quota_cooldown_until:
-        return fallback_response
+    model_spec = resolve_chat_model_spec_for_mode("recommendation", model_mode)
 
     try:
-        from google import genai
-        from google.genai import types
-        
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        
         profile_region = (
             f"{profile.region.sido or ''} {profile.region.sigungu or ''}".strip()
             if profile.region
@@ -382,27 +373,21 @@ def explain_policy_recommendation(
   "next_actions": ["다음 행동 1", "다음 행동 2"]
 }}"""
 
-        response = client.models.generate_content(
-            model=settings.GEMINI_TEXT_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_json_schema=EXPLANATION_JSON_SCHEMA,
-                temperature=0.2,
-                max_output_tokens=800,
-            )
+        response_text = get_chat_model("recommendation", model_mode=model_mode).generate(
+            system_prompt=(
+                "당신은 소상공인 정책 추천 결과를 설명하는 상담사입니다. "
+                "규칙 기반 적합성 판정을 바꾸거나 새로운 자격조건을 추측하지 마세요."
+            ),
+            user_prompt=prompt,
+            stage="recommendation_explanation",
+            source_module=__name__,
+            source_function="explain_policy_recommendation",
+            response_schema=EXPLANATION_JSON_SCHEMA,
+            temperature=0.2,
+            max_output_tokens=800,
         )
-        
-        res_text = response.text.strip()
-        if res_text.startswith("```json"):
-            res_text = res_text[7:]
-        elif res_text.startswith("```"):
-            res_text = res_text[3:]
-        if res_text.endswith("```"):
-            res_text = res_text[:-3]
-        res_text = res_text.strip()
-        
-        data = json.loads(res_text)
+
+        data = parse_json_response(response_text)
         generated_summary = _clean_explanation_summary(data.get("summary"), fallback_summary)
         # 불확실·불일치 판정은 모델 문장 하나가 판정을 뒤집지 못하도록 규칙 요약을
         # 그대로 사용한다. Gemini는 항목을 읽기 좋게 다듬는 역할만 맡는다.
@@ -412,7 +397,7 @@ def explain_policy_recommendation(
             eligibility_status=evaluation.eligibility_status,
             preference_match=evaluation.preference_match,
             confidence=_confidence(evaluation),
-            generated_by="gemini",
+            generated_by=model_spec.provider,
             summary=safe_summary,
             strengths=_clean_explanation_items(data.get("strengths"), fallback_strengths, limit=4),
             aspects_to_check=_clean_explanation_items(
@@ -423,24 +408,27 @@ def explain_policy_recommendation(
         )
         _cache_explanation(cache_key, generated_response)
         return generated_response
-    except Exception as e:
-        error_text = str(e)
-        if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-            _gemini_quota_cooldown_until = time.monotonic() + GEMINI_QUOTA_COOLDOWN_SECONDS
-        print("Gemini API call failed, falling back:", str(e))
-        return fallback_response
+    except ModelServiceError:
+        raise
+    except Exception as exc:
+        raise ModelResponseError("추천 설명 응답을 처리하지 못했습니다.") from exc
 
 
 def _explanation_cache_key(
     policy: NormalizedPolicy,
     profile: RecommendationProfileRequest,
+    *,
+    model_mode: str | None = None,
 ) -> str:
+    model_spec = resolve_chat_model_spec_for_mode("recommendation", model_mode)
     payload = {
         "policy_id": str(policy.id),
         "source_hash": getattr(policy, "source_content_hash", None),
         "profile": profile.model_dump(mode="json"),
-        "model": settings.GEMINI_TEXT_MODEL,
-        "version": 2,
+        "model_mode": model_mode,
+        "provider": model_spec.provider,
+        "model": model_spec.model,
+        "version": 3,
     }
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -639,12 +627,13 @@ def source_hash(source_text: str) -> str:
 
 
 def fit_embedding_dim(vector: list[float], dim: int | None = None) -> list[float]:
-    target_dim = dim or settings.REC_EMBEDDING_DIM
-    if len(vector) == target_dim:
-        return vector
-    if len(vector) > target_dim:
-        return vector[:target_dim]
-    return vector + [0.0] * (target_dim - len(vector))
+    target_dim = dim or settings.RECOMMEND_EMBEDDING_DIMENSIONS
+    if len(vector) != target_dim:
+        raise ModelResponseError(
+            f"추천 임베딩 차원 불일치: expected={target_dim}, actual={len(vector)}. "
+            "provider/model을 변경했다면 추천 벡터를 재생성하세요."
+        )
+    return vector
 
 
 def _candidate_query(db: Session):
@@ -657,41 +646,57 @@ def _candidate_query(db: Session):
     )
 
 
-def _vector_scores(db: Session, profile: RecommendationProfileRequest) -> tuple[dict[UUID, float], bool]:
+def _vector_scores(
+    db: Session,
+    profile: RecommendationProfileRequest,
+    *,
+    model_mode: str | None = None,
+) -> tuple[dict[UUID, float], bool]:
+    selected_mode = normalize_model_mode(model_mode)
+    if selected_mode is None:
+        selected_mode = (
+            "local"
+            if settings.RECOMMEND_EMBEDDING_PROVIDER.strip().lower() == "ollama"
+            else "cloud"
+        )
+    vector_column = (
+        RecommendationVector.embedding_ollama
+        if selected_mode == "local"
+        else RecommendationVector.embedding_openai
+    )
+    expected_dim = resolve_embedding_model_spec_for_mode(
+        "recommendation",
+        selected_mode,
+    ).dimensions
     vector_count = (
         db.query(RecommendationVector)
         .filter(RecommendationVector.vector_type == VECTOR_TYPE_POLICY_RECOMMENDATION)
         .filter(RecommendationVector.embedding_status == "success")
-        .filter(RecommendationVector.embedding.isnot(None))
+        .filter(vector_column.isnot(None))
         .count()
     )
     if vector_count == 0:
         return {}, False
 
-    try:
-        model = _embedding_model()
-        query_vector = fit_embedding_dim(model.embed_text(build_profile_query(profile)))
-        distance = RecommendationVector.embedding.cosine_distance(query_vector)
-        rows = (
-            db.query(RecommendationVector.policy_id, (1 - distance).label("similarity"))
-            .filter(RecommendationVector.vector_type == VECTOR_TYPE_POLICY_RECOMMENDATION)
-            .filter(RecommendationVector.embedding_status == "success")
-            .filter(RecommendationVector.embedding.isnot(None))
-            .order_by(distance)
-            .all()
-        )
-        return {policy_id: float(similarity) for policy_id, similarity in rows}, True
-    except Exception:
-        return {}, False
-
-
-def _embedding_model():
-    if settings.REC_EMBEDDING_PROVIDER == "openai":
-        return OpenAIEmbeddingModel(model_name=settings.REC_OPENAI_MODEL)
-    return OllamaEmbeddingModel(
-        model_name=settings.REC_OLLAMA_MODEL,
-        base_url=settings.REC_OLLAMA_BASE_URL,
+    model = _embedding_model(model_mode=model_mode)
+    query_vector = fit_embedding_dim(
+        model.embed_text(build_profile_query(profile)),
+        expected_dim,
     )
+    distance = vector_column.cosine_distance(query_vector)
+    rows = (
+        db.query(RecommendationVector.policy_id, (1 - distance).label("similarity"))
+        .filter(RecommendationVector.vector_type == VECTOR_TYPE_POLICY_RECOMMENDATION)
+        .filter(RecommendationVector.embedding_status == "success")
+        .filter(vector_column.isnot(None))
+        .order_by(distance)
+        .all()
+    )
+    return {policy_id: float(similarity) for policy_id, similarity in rows}, True
+
+
+def _embedding_model(model_mode: str | None = None):
+    return get_embedding_model("recommendation", model_mode=model_mode)
 
 
 def _check_region(policy: NormalizedPolicy, profile: RecommendationProfileRequest, evaluation: MatchEvaluation) -> None:
@@ -1004,10 +1009,10 @@ def classify_need_tags(policy: NormalizedPolicy) -> list[str]:
     text = " ".join(
         value
         for value in [
-            policy.title,
-            policy.summary,
-            policy.support_type,
-            policy.support_content,
+            getattr(policy, "title", None),
+            getattr(policy, "summary", None),
+            getattr(policy, "support_type", None),
+            getattr(policy, "support_content", None),
         ]
         if value
     )

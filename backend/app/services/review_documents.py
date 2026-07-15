@@ -5,11 +5,16 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.rag_utils import EmbeddingModel, OllamaEmbeddingModel
+from app.core.model_errors import ModelResponseError
+from app.core.model_provider import (
+    get_chat_model,
+    get_embedding_model,
+    normalize_model_mode,
+)
+from app.core.rag_utils import EmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.review import ReviewSession, ReviewUpload, ReviewVector
 from app.services.document_guides import get_guide
@@ -42,6 +47,7 @@ def create_review_session(
     files: list[UploadedFile],
     policy: NormalizedPolicy | None = None,
     user_id: int | None = None,
+    model_mode: str = "local",
 ) -> ReviewSession:
     """업로드 파일들을 저장하고 queued 상태의 검토 세션을 만든다.
 
@@ -53,6 +59,7 @@ def create_review_session(
         policy_id=policy.id if policy else None,
         review_status="queued",
         requirement_status=REQ_NOT_REQUESTED if policy is None else REQ_MATCHED,
+        model_mode=normalize_model_mode(model_mode) or "local",
     )
     db.add(session)
     db.flush()  # id 발급
@@ -108,6 +115,8 @@ def run_review_pipeline(
     각 단계 진입 시 즉시 커밋한다. 커밋하지 않으면 트랜잭션이 끝나지 않아 폴링하는
     쪽에서는 계속 queued만 보인다.
     """
+    model_mode = normalize_model_mode(session.model_mode) or "local"
+
     # ── 1) 텍스트 추출 ──────────────────────────────────────────────
     _advance(db, session, "extracting")
 
@@ -118,6 +127,7 @@ def run_review_pipeline(
     if not readable:
         session.requirement_status = REQ_NOT_REQUESTED if policy is None else REQ_NO_DATA
         session.summary = "올린 서류에서 텍스트를 읽지 못했습니다. 스캔 이미지이거나 지원하지 않는 형식일 수 있어요."
+        session.error_code = "DOCUMENT_TEXT_UNREADABLE"
         session.review_status = "failed"
         db.commit()
         return session
@@ -126,7 +136,7 @@ def run_review_pipeline(
     _advance(db, session, "diagnosing")
 
     for upload in readable:
-        upload.diagnosis = _diagnose_one(upload, policy)
+        upload.diagnosis = _diagnose_one(upload, policy, model_mode=model_mode)
         db.commit()  # 파일 하나 끝날 때마다 반영 — 진행을 볼 수 있게
 
     # ── 3) 요건 대조 (정책이 있고, 그 정책에 요건 데이터가 있을 때만) ──
@@ -140,12 +150,19 @@ def run_review_pipeline(
             requirement_status = REQ_NO_DATA
         else:
             _advance(db, session, "matching")
-            matches = _match_requirements(db, policy, readable, embedding_model)
+            matches = _match_requirements(
+                db,
+                policy,
+                readable,
+                embedding_model,
+                model_mode=model_mode,
+            )
             requirement_status = REQ_MATCHED
 
     session.requirement_status = requirement_status
     session.requirement_matches = matches
     session.summary = _summarize(session, readable, policy, matches, requirement_status)
+    session.error_code = None
     session.review_status = "done"
     db.commit()
     return session
@@ -163,8 +180,8 @@ def _extract_one(db: Session, upload: ReviewUpload) -> None:
 
     try:
         extracted = (_run_kordoc(upload.storage_path) or "").strip()
-    except Exception as exc:  # noqa: BLE001 - 한 파일이 세션 전체를 막지 않게
-        print(f"[review] 추출 실패 {upload.original_file_name}: {exc}", flush=True)
+    except Exception:  # noqa: BLE001 - 한 파일이 세션 전체를 막지 않게
+        print("[review] 로컬 텍스트 추출에 실패했습니다.", flush=True)
         upload.extraction_status = "failed"
         db.commit()
         return
@@ -177,6 +194,12 @@ def _extract_one(db: Session, upload: ReviewUpload) -> None:
     upload.extracted_text = extracted
     upload.extraction_status = "success"
     db.commit()
+    print(
+        f"pipeline_event feature=document_review parser=kordoc "
+        f"stage=text_extraction input_bytes={upload.file_size or 0} "
+        f"output_chars={len(extracted)} status=success",
+        flush=True,
+    )
 
 
 # ──────────────────────────── 요건 대조 ────────────────────────────
@@ -200,6 +223,8 @@ def _match_requirements(
     policy: NormalizedPolicy,
     uploads: list[ReviewUpload],
     embedding_model: EmbeddingModel | None,
+    *,
+    model_mode: str,
 ) -> list[dict]:
     """올린 서류들을 정책 필수서류에 1:1로 배정한다.
 
@@ -244,9 +269,9 @@ def _match_requirements(
     if not typed:
         return _uncovered(requirements)
 
-    embedder = embedding_model or OllamaEmbeddingModel(
-        model_name=settings.REVIEW_EMBEDDING_MODEL,
-        base_url=settings.OLLAMA_BASE_URL,
+    selected_mode = normalize_model_mode(model_mode) or "local"
+    embedder = embedding_model or get_embedding_model(
+        "document_review", model_mode=selected_mode
     )
     type_vectors = embedder.embed_documents([t for _, t in typed])
 
@@ -254,7 +279,17 @@ def _match_requirements(
     scored: list[tuple[float, int, int]] = []
     for fi, vector in enumerate(type_vectors):
         for ri, req in enumerate(requirements):
-            scored.append((_cosine(req.embedding, vector), fi, ri))
+            requirement_vector = (
+                req.embedding_openai
+                if selected_mode == "cloud"
+                else req.embedding_ollama
+            )
+            if requirement_vector is None:
+                raise RuntimeError(
+                    f"서류검토 {selected_mode} 요건 벡터가 없습니다. "
+                    "review_vectors 재임베딩 작업을 실행해주세요."
+                )
+            scored.append((_cosine(requirement_vector, vector), fi, ri))
     scored.sort(reverse=True)
 
     # 요건 하나엔 파일 하나, 파일 하나는 요건 하나. 탐욕적으로 1등부터 짝지운다.
@@ -331,7 +366,12 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # ───────────────────────────── LLM 진단 ─────────────────────────────
 
 
-def _diagnose_one(upload: ReviewUpload, policy: NormalizedPolicy | None) -> dict:
+def _diagnose_one(
+    upload: ReviewUpload,
+    policy: NormalizedPolicy | None,
+    *,
+    model_mode: str,
+) -> dict:
     """파일 하나의 자체 검토(오타·빈칸·형식).
 
     요건 대조는 여기서 하지 않는다. 그건 세션 전체 기준이고, 파일 하나만 보고
@@ -342,14 +382,10 @@ def _diagnose_one(upload: ReviewUpload, policy: NormalizedPolicy | None) -> dict
         upload.original_file_name or "",
         policy,
     )
-    try:
-        parsed = _parse_llm_json(_call_ollama_generate(prompt))
-        if parsed is not None:
-            return parsed
-    except Exception as exc:  # noqa: BLE001
-        print(f"[review] LLM 진단 실패 {upload.original_file_name}: {exc}", flush=True)
-
-    return _fallback_result("이 서류의 자동 진단에 실패했습니다.")
+    parsed = _parse_llm_json(_call_review_generate(prompt, model_mode=model_mode))
+    if parsed is None:
+        raise ModelResponseError("서류검토 모델 응답을 해석하지 못했습니다.")
+    return parsed
 
 
 def _build_file_prompt(extracted: str, file_name: str, policy: NormalizedPolicy | None) -> str:
@@ -427,20 +463,44 @@ def _summarize(
     return " ".join(parts)
 
 
-def _call_ollama_generate(prompt: str) -> str:
-    with httpx.Client(timeout=settings.REVIEW_LLM_TIMEOUT_SECONDS) as client:
-        resp = client.post(
-            f"{settings.OLLAMA_BASE_URL}/api/generate",
-            json={
-                "model": settings.REVIEW_LLM_MODEL,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.2},
+def _call_review_generate(prompt: str, *, model_mode: str) -> str:
+    return get_chat_model("document_review", model_mode=model_mode).generate(
+        system_prompt=(
+            "당신은 업로드된 신청 서류 한 건의 완성도만 검토합니다. "
+            "다른 서류의 필요 여부는 판단하지 마세요."
+        ),
+        user_prompt=prompt,
+        stage="document_diagnosis",
+        source_module=__name__,
+        source_function="_call_review_generate",
+        response_schema={
+            "type": "object",
+            "properties": {
+                "document_type": {"type": "string"},
+                "typos": {"type": "array", "items": {"type": "string"}},
+                "missing_fields": {"type": "array", "items": {"type": "string"}},
+                "format_issues": {"type": "array", "items": {"type": "string"}},
+                "improvement_points": {"type": "array", "items": {"type": "string"}},
+                "overall": {"type": "string"},
             },
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "")
+            "required": [
+                "document_type",
+                "typos",
+                "missing_fields",
+                "format_issues",
+                "improvement_points",
+                "overall",
+            ],
+            "additionalProperties": False,
+        },
+        temperature=0.2,
+        timeout_seconds=settings.REVIEW_LLM_TIMEOUT_SECONDS,
+    )
+
+
+def _call_ollama_generate(prompt: str) -> str:
+    """레거시 테스트/호출 호환용 로컬 서류검토 래퍼."""
+    return _call_review_generate(prompt, model_mode="local")
 
 
 def _parse_llm_json(raw: str) -> dict | None:

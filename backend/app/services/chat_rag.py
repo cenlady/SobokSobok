@@ -1,26 +1,29 @@
 import os
 import uuid
 import hashlib
-import logging
 import re
 from functools import wraps
+from collections.abc import Iterator
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.model_errors import ModelResponseError
+from app.core.model_provider import (
+    get_chat_model,
+    get_embedding_model,
+    normalize_model_mode,
+    resolve_embedding_model_spec_for_mode,
+)
 from app.core.rag_utils import (
     EmbeddingModel,
     SimpleTextSplitter,
-    create_embedding_model,
     search_policy_chunks,
 )
 from app.models.chat import ChatMessage, ChatSession, PolicyChunk
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
-
-
-logger = logging.getLogger(__name__)
 
 
 DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
@@ -274,51 +277,74 @@ def build_query_embedding_text(query: str, *, policy_id: Optional[uuid.UUID] = N
 
 def ensure_policy_chunk_embedding_dimension(db: Session) -> Dict[str, Any]:
     """
-    policy_chunks.embedding 컬럼의 pgvector 차원을 현재 settings.EMBEDDING_DIM에 맞춥니다.
-    기존 차원이 다르면 서로 다른 차원의 벡터를 섞을 수 없으므로 policy_chunks를 비운 뒤 컬럼 타입을 변경합니다.
+    policy_chunks의 OpenAI/Ollama 컬럼을 각각의 설정 차원에 맞춥니다.
+    기존 차원이 다르면 두 임베딩을 함께 재생성해야 하므로 청크를 비웁니다.
     """
     if not settings.database_url.startswith("postgresql"):
         return {"checked": False, "reason": "non-postgresql database"}
 
-    expected_dim = int(settings.EMBEDDING_DIM)
-    if expected_dim <= 0:
-        raise ValueError("EMBEDDING_DIM은 양수여야 합니다.")
+    expected_dims = {
+        "embedding_openai": int(settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS),
+        "embedding_ollama": int(settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS),
+    }
+    if any(dimension <= 0 for dimension in expected_dims.values()):
+        raise ValueError("CHAT_*_EMBEDDING_DIMENSIONS는 양수여야 합니다.")
 
-    current_type = db.execute(
-        text(
-            """
-            SELECT format_type(a.atttypid, a.atttypmod)
-            FROM pg_attribute a
-            JOIN pg_class c ON a.attrelid = c.oid
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            WHERE c.relname = 'policy_chunks'
-              AND n.nspname = 'public'
-              AND a.attname = 'embedding'
-              AND NOT a.attisdropped
-            """
-        )
-    ).scalar()
+    current_types: Dict[str, str | None] = {}
+    for column_name in expected_dims:
+        current_types[column_name] = db.execute(
+            text(
+                """
+                SELECT format_type(a.atttypid, a.atttypmod)
+                FROM pg_attribute a
+                JOIN pg_class c ON a.attrelid = c.oid
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE c.relname = 'policy_chunks'
+                  AND n.nspname = 'public'
+                  AND a.attname = :column_name
+                  AND NOT a.attisdropped
+                """
+            ),
+            {"column_name": column_name},
+        ).scalar()
 
-    expected_type = f"vector({expected_dim})"
-    if current_type == expected_type:
-        return {"checked": True, "changed": False, "current_type": current_type}
+    expected_types = {
+        column_name: f"vector({dimension})"
+        for column_name, dimension in expected_dims.items()
+    }
+    if current_types == expected_types:
+        return {"checked": True, "changed": False, "current_types": current_types}
 
     before_count = db.query(func.count(PolicyChunk.id)).scalar() or 0
-    db.execute(text("DELETE FROM policy_chunks"))
-    db.execute(
-        text(
-            f"ALTER TABLE policy_chunks "
-            f"ALTER COLUMN embedding TYPE vector({expected_dim})"
-        )
-    )
+    if any(
+        current_types[column_name] not in (None, expected_types[column_name])
+        for column_name in expected_dims
+    ):
+        db.execute(text("DELETE FROM policy_chunks"))
+
+    for column_name, dimension in expected_dims.items():
+        current_type = current_types[column_name]
+        if current_type is None:
+            db.execute(
+                text(
+                    f"ALTER TABLE policy_chunks ADD COLUMN {column_name} vector({dimension})"
+                )
+            )
+        elif current_type != expected_types[column_name]:
+            db.execute(
+                text(
+                    f"ALTER TABLE policy_chunks "
+                    f"ALTER COLUMN {column_name} TYPE vector({dimension})"
+                )
+            )
     db.commit()
 
     return {
         "checked": True,
         "changed": True,
-        "previous_type": current_type,
-        "current_type": expected_type,
-        "deleted_chunks": before_count,
+        "previous_types": current_types,
+        "current_types": expected_types,
+        "deleted_chunks": before_count if before_count else 0,
     }
 
 
@@ -327,17 +353,14 @@ def build_policy_chunks(
     *,
     policy_id: Optional[uuid.UUID] = None,
     limit: Optional[int] = None,
-    force: bool = True,
-    provider: Optional[str] = None,
-    model_name: Optional[str] = None,
+    force: bool = False,
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
 ) -> Dict[str, Any]:
-    embedding_model = create_embedding_model(provider=provider, model_name=model_name)
+    cloud_spec = resolve_embedding_model_spec_for_mode("chat", "cloud")
+    local_spec = resolve_embedding_model_spec_for_mode("chat", "local")
     schema_result = ensure_policy_chunk_embedding_dimension(db)
-    selected_provider = (provider or settings.CHAT_EMBEDDING_PROVIDER).lower()
-    selected_model = model_name or settings.CHAT_EMBEDDING_MODEL
-    model_name_log = f"{selected_provider}:{selected_model}"
+    model_name_log = f"openai:{cloud_spec.model}+ollama:{local_spec.model}"
 
     query = (
         db.query(PolicyDocument)
@@ -347,25 +370,37 @@ def build_policy_chunks(
     )
     if policy_id:
         query = query.filter(PolicyDocument.policy_id == policy_id)
-    if not force:
-        query = (
-            query.outerjoin(PolicyChunk, PolicyChunk.document_id == PolicyDocument.id)
-            .filter(PolicyChunk.id.is_(None))
-        )
-    if limit:
+    if force and limit:
         query = query.limit(limit)
 
     documents = query.all()
+    existing_chunks_by_document: Dict[uuid.UUID, List[PolicyChunk]] = {}
+    if not force and documents:
+        document_ids = [document.id for document in documents]
+        existing_chunks = (
+            db.query(PolicyChunk)
+            .filter(PolicyChunk.document_id.in_(document_ids))
+            .order_by(PolicyChunk.document_id, PolicyChunk.chunk_index)
+            .all()
+        )
+        for chunk in existing_chunks:
+            existing_chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
+
     actual_chunk_size = chunk_size or settings.CHAT_CHUNK_SIZE
     actual_chunk_overlap = chunk_overlap or settings.CHAT_CHUNK_OVERLAP
     stats: Dict[str, Any] = {
-        "embedding_model": model_name_log,
+        "embedding_models": {
+            "cloud": f"openai:{cloud_spec.model}:{cloud_spec.dimensions}",
+            "local": f"ollama:{local_spec.model}:{local_spec.dimensions}",
+        },
         "chunk_size": actual_chunk_size,
         "chunk_overlap": actual_chunk_overlap,
         "force": force,
         "schema": schema_result,
         "target_documents": len(documents),
         "embedded_documents": 0,
+        "skipped_documents": 0,
+        "metadata_backfilled": 0,
         "failed_documents": 0,
         "created_chunks": 0,
         "failures": [],
@@ -373,6 +408,7 @@ def build_policy_chunks(
 
     splitter = SimpleTextSplitter(chunk_size=actual_chunk_size, chunk_overlap=actual_chunk_overlap)
     prepared_chunks: List[Dict[str, Any]] = []
+    documents_to_replace: set[uuid.UUID] = set()
 
     for document in documents:
         try:
@@ -389,8 +425,13 @@ def build_policy_chunks(
                 seen_hashes.add(chunk_hash)
                 document_chunks.append((raw_chunk, chunk_hash))
 
+            prepared_document_chunks: List[Dict[str, Any]] = []
             for chunk_index, (chunk_text, chunk_hash) in enumerate(document_chunks):
-                prepared_chunks.append(
+                embedding_input = build_chunk_embedding_input(embedding_context, chunk_text)
+                embedding_source_hash = hashlib.sha256(
+                    embedding_input.encode("utf-8")
+                ).hexdigest()
+                prepared_document_chunks.append(
                     {
                         "policy_id": document.policy_id,
                         "document_id": document.id,
@@ -403,14 +444,43 @@ def build_policy_chunks(
                             "chunk_overlap": actual_chunk_overlap,
                             "length": len(chunk_text),
                             "embedding_input_strategy": "document_context_section_plus_chunk",
+                            "embedding_source_hash": embedding_source_hash,
                         },
-                        "embedding_input": build_chunk_embedding_input(embedding_context, chunk_text),
+                        "embedding_input": embedding_input,
+                        "embedding_source_hash": embedding_source_hash,
                     }
                 )
 
-            if document_chunks:
+            existing_document_chunks = existing_chunks_by_document.get(document.id, [])
+            if not force and _policy_chunks_are_current(
+                existing_document_chunks,
+                prepared_document_chunks,
+                cloud_model_name=cloud_spec.model,
+                local_model_name=local_spec.model,
+            ):
+                for existing, prepared in zip(
+                    sorted(existing_document_chunks, key=lambda chunk: chunk.chunk_index),
+                    prepared_document_chunks,
+                ):
+                    metadata = (
+                        existing.chunk_metadata
+                        if isinstance(existing.chunk_metadata, dict)
+                        else {}
+                    )
+                    if not metadata.get("embedding_source_hash"):
+                        existing.chunk_metadata = prepared["metadata"]
+                        stats["metadata_backfilled"] += 1
+                stats["skipped_documents"] += 1
+                continue
+
+            if not force and limit and len(documents_to_replace) >= limit:
+                break
+
+            documents_to_replace.add(document.id)
+            prepared_chunks.extend(prepared_document_chunks)
+            if prepared_document_chunks:
                 stats["embedded_documents"] += 1
-                stats["created_chunks"] += len(document_chunks)
+                stats["created_chunks"] += len(prepared_document_chunks)
         except Exception as exc:
             db.rollback()
             stats["failed_documents"] += 1
@@ -418,52 +488,109 @@ def build_policy_chunks(
                 {
                     "document_id": str(document.id),
                     "policy_id": str(document.policy_id),
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                 }
             )
 
-    if not prepared_chunks:
+    if not documents_to_replace:
+        if stats["metadata_backfilled"]:
+            db.commit()
         return stats
 
     try:
-        document_ids = list({item["document_id"] for item in prepared_chunks})
-        if document_ids:
-            (
-                db.query(PolicyChunk)
-                .filter(PolicyChunk.document_id.in_(document_ids))
-                .delete(synchronize_session=False)
-            )
-            db.flush()
+        (
+            db.query(PolicyChunk)
+            .filter(PolicyChunk.document_id.in_(documents_to_replace))
+            .delete(synchronize_session=False)
+        )
+        db.flush()
 
-        batch_size = 100
-        for start in range(0, len(prepared_chunks), batch_size):
-            batch = prepared_chunks[start:start + batch_size]
-            embeddings = embedding_model.embed_documents([item["embedding_input"] for item in batch])
-            for item, vector in zip(batch, embeddings):
-                db.add(
-                    PolicyChunk(
-                        policy_id=item["policy_id"],
-                        document_id=item["document_id"],
-                        chunk_index=item["chunk_index"],
-                        chunk_text=item["chunk_text"],
-                        chunk_hash=item["chunk_hash"],
-                        chunk_metadata=item["metadata"],
-                        embedding_status="success",
-                        embedding_model=model_name_log,
-                        embedding=vector,
-                        created_at=func.now(),
+        if prepared_chunks:
+            cloud_embedding_model = get_embedding_model("chat", model_mode="cloud")
+            local_embedding_model = get_embedding_model("chat", model_mode="local")
+            batch_size = 100
+            for start in range(0, len(prepared_chunks), batch_size):
+                batch = prepared_chunks[start:start + batch_size]
+                inputs = [item["embedding_input"] for item in batch]
+                cloud_embeddings = cloud_embedding_model.embed_documents(inputs)
+                local_embeddings = local_embedding_model.embed_documents(inputs)
+                for item, cloud_vector, local_vector in zip(
+                    batch,
+                    cloud_embeddings,
+                    local_embeddings,
+                ):
+                    db.add(
+                        PolicyChunk(
+                            policy_id=item["policy_id"],
+                            document_id=item["document_id"],
+                            chunk_index=item["chunk_index"],
+                            chunk_text=item["chunk_text"],
+                            chunk_hash=item["chunk_hash"],
+                            chunk_metadata=item["metadata"],
+                            embedding_status="success",
+                            embedding_model=model_name_log,
+                            embedding_openai=cloud_vector,
+                            embedding_ollama=local_vector,
+                            embedding_openai_model=cloud_spec.model,
+                            embedding_ollama_model=local_spec.model,
+                            created_at=func.now(),
+                        )
                     )
-                )
             db.flush()
         db.commit()
     except Exception as exc:
         db.rollback()
-        stats["failed_documents"] = stats["target_documents"]
+        stats["failed_documents"] = len(documents_to_replace)
         stats["embedded_documents"] = 0
         stats["created_chunks"] = 0
-        stats["failures"].append({"error": str(exc)})
+        stats["failures"].append({"error_type": type(exc).__name__})
 
     return stats
+
+
+def _policy_chunks_are_current(
+    existing_chunks: List[PolicyChunk],
+    prepared_chunks: List[Dict[str, Any]],
+    *,
+    cloud_model_name: str,
+    local_model_name: str,
+) -> bool:
+    """본문·검색 문맥·모델·양쪽 벡터가 모두 같을 때만 재임베딩을 건너뛴다."""
+    if len(existing_chunks) != len(prepared_chunks):
+        return False
+
+    ordered_existing = sorted(existing_chunks, key=lambda chunk: chunk.chunk_index)
+    for existing, prepared in zip(ordered_existing, prepared_chunks):
+        metadata = (
+            existing.chunk_metadata if isinstance(existing.chunk_metadata, dict) else {}
+        )
+        stored_source_hash = metadata.get("embedding_source_hash")
+        if stored_source_hash:
+            source_matches = stored_source_hash == prepared["embedding_source_hash"]
+        else:
+            prepared_metadata = prepared.get("metadata") or {}
+            source_matches = (
+                existing.chunk_text == prepared.get("chunk_text")
+                and metadata
+                == {
+                    key: value
+                    for key, value in prepared_metadata.items()
+                    if key != "embedding_source_hash"
+                }
+            )
+
+        if (
+            existing.chunk_index != prepared["chunk_index"]
+            or existing.chunk_hash != prepared["chunk_hash"]
+            or not source_matches
+            or existing.embedding_status != "success"
+            or existing.embedding_openai is None
+            or existing.embedding_ollama is None
+            or existing.embedding_openai_model != cloud_model_name
+            or existing.embedding_ollama_model != local_model_name
+        ):
+            return False
+    return True
 
 
 def get_policy_chunk_stats(db: Session) -> Dict[str, Any]:
@@ -473,6 +600,18 @@ def get_policy_chunk_stats(db: Session) -> Dict[str, Any]:
         "embedded_chunks": (
             db.query(func.count(PolicyChunk.id))
             .filter(PolicyChunk.embedding_status == "success")
+            .scalar()
+            or 0
+        ),
+        "cloud_embedded_chunks": (
+            db.query(func.count(PolicyChunk.id))
+            .filter(PolicyChunk.embedding_openai.isnot(None))
+            .scalar()
+            or 0
+        ),
+        "local_embedded_chunks": (
+            db.query(func.count(PolicyChunk.id))
+            .filter(PolicyChunk.embedding_ollama.isnot(None))
             .scalar()
             or 0
         ),
@@ -1168,6 +1307,7 @@ def retrieve_policy_chunk_sources(
     limit: Optional[int] = None,
     policy_id: Optional[uuid.UUID] = None,
     embedding_model: Optional[EmbeddingModel] = None,
+    model_mode: str | None = None,
 ) -> Dict[str, Any]:
     if is_out_of_policy_scope(query, policy_id=policy_id):
         return {
@@ -1179,7 +1319,19 @@ def retrieve_policy_chunk_sources(
             "sources": [],
         }
 
-    model = embedding_model or create_embedding_model()
+    selected_mode = normalize_model_mode(model_mode)
+    if selected_mode is None:
+        selected_mode = (
+            "local"
+            if settings.CHAT_EMBEDDING_PROVIDER.strip().lower() == "ollama"
+            else "cloud"
+        )
+    model = embedding_model or get_embedding_model("chat", model_mode=selected_mode)
+    vector_column = (
+        PolicyChunk.embedding_ollama
+        if selected_mode == "local"
+        else PolicyChunk.embedding_openai
+    )
     expanded_query = build_query_embedding_text(query, policy_id=policy_id)
     intent_tags = infer_intent_tags(None, None, query)
     requested_limit = limit or settings.CHAT_RETRIEVAL_LIMIT
@@ -1189,6 +1341,7 @@ def retrieve_policy_chunk_sources(
         embedding_model=model,
         limit=max(requested_limit * 4, requested_limit),
         policy_id=policy_id,
+        embedding_column=vector_column,
     )
     sources = [
         source
@@ -2100,74 +2253,51 @@ def generate_chat_answer(
     sources: List[Dict[str, Any]],
     *,
     conversation_context: str = "",
+    model_mode: str | None = None,
 ) -> str:
     if not sources:
         return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
 
-    provider = settings.CHAT_COMPLETION_PROVIDER.lower()
-    if provider == "disabled":
-        return build_retrieval_only_answer(query, sources)
-
-    user_prompt = build_chat_user_prompt(
-        query,
-        sources,
-        conversation_context=conversation_context,
+    answer = get_chat_model("chat", model_mode=model_mode).generate(
+        system_prompt=settings.CHAT_SYSTEM_PROMPT,
+        user_prompt=build_chat_user_prompt(
+            query,
+            sources,
+            conversation_context=conversation_context,
+        ),
+        stage="answer_generation",
+        source_module=__name__,
+        source_function="generate_chat_answer",
+        temperature=0.0,
     )
+    if not answer:
+        raise ModelResponseError("챗봇 모델이 빈 응답을 반환했습니다.")
+    return answer
 
-    if provider == "gemini":
-        if not settings.GEMINI_API_KEY:
-            logger.warning("GEMINI_API_KEY is not set; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
-        try:
-            from google import genai
-            from google.genai import types
 
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model=settings.CHAT_COMPLETION_MODEL or settings.GEMINI_TEXT_MODEL,
-                contents=f"{settings.CHAT_SYSTEM_PROMPT}\n\n{user_prompt}",
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                ),
-            )
-            return (response.text or "").strip() or build_retrieval_only_answer(query, sources)
-        except Exception:
-            logger.exception("Gemini chat completion failed; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
+def generate_chat_answer_stream(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    conversation_context: str = "",
+    model_mode: str | None = None,
+) -> Iterator[str]:
+    if not sources:
+        yield "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
+        return
 
-    if provider != "openai":
-        return build_retrieval_only_answer(query, sources)
-
-    try:
-        from openai import OpenAI
-
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            logger.warning("OPENAI_API_KEY is not set; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
-
-        client = OpenAI(api_key=openai_api_key)
-        if is_langsmith_enabled():
-            try:
-                from langsmith import wrappers
-
-                configure_langsmith_env()
-                client = wrappers.wrap_openai(client)
-            except ImportError:
-                pass
-
-        response = client.chat.completions.create(
-            model=settings.CHAT_COMPLETION_MODEL,
-            messages=[
-                {"role": "system", "content": settings.CHAT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.0,
-        )
-        return response.choices[0].message.content or ""
-    except Exception:
-        logger.exception("OpenAI chat completion failed; falling back to retrieval-only chat answer.")
-        return build_retrieval_only_answer(query, sources)
+    yield from get_chat_model("chat", model_mode=model_mode).stream(
+        system_prompt=settings.CHAT_SYSTEM_PROMPT,
+        user_prompt=build_chat_user_prompt(
+            query,
+            sources,
+            conversation_context=conversation_context,
+        ),
+        stage="answer_generation_stream",
+        source_module=__name__,
+        source_function="generate_chat_answer_stream",
+        temperature=0.0,
+    )
 
 
 def answer_policy_question(
@@ -2177,6 +2307,7 @@ def answer_policy_question(
     limit: Optional[int] = None,
     policy_id: Optional[uuid.UUID] = None,
     recent_messages: Optional[List[ChatMessage]] = None,
+    model_mode: str | None = None,
 ) -> Dict[str, Any]:
     if policy_id is not None:
         retrieval = retrieve_policy_document_sources(
@@ -2191,6 +2322,7 @@ def answer_policy_question(
             query=query,
             limit=limit,
             policy_id=None,
+            model_mode=model_mode,
         )
     response_mode = retrieval.get("response_mode", "answer")
     if response_mode == "out_of_scope":
@@ -2211,6 +2343,7 @@ def answer_policy_question(
             query,
             retrieval["sources"],
             conversation_context=build_conversation_context(recent_messages or []),
+            model_mode=model_mode,
         )
     return {
         **retrieval,

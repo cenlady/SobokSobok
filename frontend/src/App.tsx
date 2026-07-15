@@ -11,6 +11,7 @@ import OnboardingScreen from './screens/OnboardingScreen'
 import PolicyDetailScreen from './screens/PolicyDetailScreen'
 import LoginScreen from './screens/LoginScreen'
 import AuthCallbackScreen from './screens/AuthCallbackScreen'
+import AiSettingsScreen from './screens/AiSettingsScreen'
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
 
           {/* 상세는 탭 없이 전체 화면 */}
           <Route path="/policy/:policyId" element={<PolicyDetailScreen />} />
+          <Route path="/profile/ai-settings" element={<AiSettingsScreen />} />
         </Route>
       </Routes>
     </AuthProvider>

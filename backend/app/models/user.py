@@ -75,6 +75,29 @@ class UserProfile(Base):
     owner_name = Column(String(50), nullable=True, comment="사장님 성함")
     store_name = Column(String(200), nullable=True, comment="상호명")
 
+    # 레거시 단일 AI 선택. 기존 사용자 값을 기능별 컬럼으로 옮기기 위해 유지한다.
+    ai_model_mode = Column(
+        String(10),
+        nullable=False,
+        server_default="cloud",
+        comment="사용자 AI 실행 방식 (cloud=OpenAI, local=Ollama)",
+    )
+    chat_model_mode = Column(
+        String(10), nullable=False, server_default="cloud", comment="챗봇 AI 방식"
+    )
+    recommend_model_mode = Column(
+        String(10), nullable=False, server_default="cloud", comment="정책 추천 AI 방식"
+    )
+    policy_summary_model_mode = Column(
+        String(10), nullable=False, server_default="cloud", comment="정책 요약 AI 방식"
+    )
+    calendar_coach_model_mode = Column(
+        String(10), nullable=False, server_default="cloud", comment="캘린더 코치 AI 방식"
+    )
+    document_review_model_mode = Column(
+        String(10), nullable=False, server_default="local", comment="서류검토 AI 방식"
+    )
+
     # ── 지역 → RecommendationProfileRequest.region ──
     region_sido = Column(String(50), nullable=True, comment="시/도 (예: 서울특별시)")
     region_sigungu = Column(String(50), nullable=True, comment="시/군/구 (예: 마포구)")
@@ -124,6 +147,15 @@ class UserProfile(Base):
             "business_age_min IS NULL OR business_age_max IS NULL OR business_age_min <= business_age_max",
             name="ck_user_profiles_age_range",
         ),
+        CheckConstraint(
+            "ai_model_mode IN ('cloud', 'local')",
+            name="ck_user_profiles_ai_model_mode",
+        ),
+        CheckConstraint("chat_model_mode IN ('cloud', 'local')", name="ck_user_profiles_chat_model_mode"),
+        CheckConstraint("recommend_model_mode IN ('cloud', 'local')", name="ck_user_profiles_recommend_model_mode"),
+        CheckConstraint("policy_summary_model_mode IN ('cloud', 'local')", name="ck_user_profiles_policy_summary_model_mode"),
+        CheckConstraint("calendar_coach_model_mode IN ('cloud', 'local')", name="ck_user_profiles_calendar_coach_model_mode"),
+        CheckConstraint("document_review_model_mode IN ('cloud', 'local')", name="ck_user_profiles_document_review_model_mode"),
     )
 
 
@@ -198,6 +230,66 @@ USER_SCHEMA_SQL = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_refresh_token VARCHAR(255)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS google_token_expires_at TIMESTAMPTZ",
     "ALTER TABLE users ALTER COLUMN hashed_password DROP NOT NULL",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS ai_model_mode VARCHAR(10) NOT NULL DEFAULT 'cloud'",
+    # 기존 단일 선택은 일반 기능 네 곳에 한 번만 복사하고, 서류검토 신규 기본값은 local로 둔다.
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS chat_model_mode VARCHAR(10)",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS recommend_model_mode VARCHAR(10)",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS policy_summary_model_mode VARCHAR(10)",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS calendar_coach_model_mode VARCHAR(10)",
+    "ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS document_review_model_mode VARCHAR(10)",
+    "UPDATE user_profiles SET chat_model_mode = COALESCE(chat_model_mode, ai_model_mode, 'cloud')",
+    "UPDATE user_profiles SET recommend_model_mode = COALESCE(recommend_model_mode, ai_model_mode, 'cloud')",
+    "UPDATE user_profiles SET policy_summary_model_mode = COALESCE(policy_summary_model_mode, ai_model_mode, 'cloud')",
+    "UPDATE user_profiles SET calendar_coach_model_mode = COALESCE(calendar_coach_model_mode, ai_model_mode, 'cloud')",
+    "UPDATE user_profiles SET document_review_model_mode = COALESCE(document_review_model_mode, 'local')",
+    "ALTER TABLE user_profiles ALTER COLUMN chat_model_mode SET DEFAULT 'cloud'",
+    "ALTER TABLE user_profiles ALTER COLUMN recommend_model_mode SET DEFAULT 'cloud'",
+    "ALTER TABLE user_profiles ALTER COLUMN policy_summary_model_mode SET DEFAULT 'cloud'",
+    "ALTER TABLE user_profiles ALTER COLUMN calendar_coach_model_mode SET DEFAULT 'cloud'",
+    "ALTER TABLE user_profiles ALTER COLUMN document_review_model_mode SET DEFAULT 'local'",
+    "ALTER TABLE user_profiles ALTER COLUMN chat_model_mode SET NOT NULL",
+    "ALTER TABLE user_profiles ALTER COLUMN recommend_model_mode SET NOT NULL",
+    "ALTER TABLE user_profiles ALTER COLUMN policy_summary_model_mode SET NOT NULL",
+    "ALTER TABLE user_profiles ALTER COLUMN calendar_coach_model_mode SET NOT NULL",
+    "ALTER TABLE user_profiles ALTER COLUMN document_review_model_mode SET NOT NULL",
+    """
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_constraint WHERE conname = 'ck_user_profiles_ai_model_mode'
+        ) THEN
+            ALTER TABLE user_profiles
+                ADD CONSTRAINT ck_user_profiles_ai_model_mode
+                CHECK (ai_model_mode IN ('cloud', 'local'));
+        END IF;
+    END $$;
+    """,
+    """
+    DO $$
+    DECLARE
+        item RECORD;
+    BEGIN
+        FOR item IN
+            SELECT * FROM (VALUES
+                ('ck_user_profiles_chat_model_mode', 'chat_model_mode'),
+                ('ck_user_profiles_recommend_model_mode', 'recommend_model_mode'),
+                ('ck_user_profiles_policy_summary_model_mode', 'policy_summary_model_mode'),
+                ('ck_user_profiles_calendar_coach_model_mode', 'calendar_coach_model_mode'),
+                ('ck_user_profiles_document_review_model_mode', 'document_review_model_mode')
+            ) AS checks(constraint_name, column_name)
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint WHERE conname = item.constraint_name
+            ) THEN
+                EXECUTE format(
+                    'ALTER TABLE user_profiles ADD CONSTRAINT %I CHECK (%I IN (''cloud'', ''local''))',
+                    item.constraint_name,
+                    item.column_name
+                );
+            END IF;
+        END LOOP;
+    END $$;
+    """,
 ]
 
 

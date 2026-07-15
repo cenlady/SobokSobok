@@ -55,6 +55,11 @@ def upsert_my_profile(
 
     profile.owner_name = payload.owner_name
     profile.store_name = payload.store_name
+    profile.chat_model_mode = payload.chat_model_mode
+    profile.recommend_model_mode = payload.recommend_model_mode
+    profile.policy_summary_model_mode = payload.policy_summary_model_mode
+    profile.calendar_coach_model_mode = payload.calendar_coach_model_mode
+    profile.document_review_model_mode = payload.document_review_model_mode
 
     region = payload.region or RegionInput()
     profile.region_sido = region.sido
@@ -102,6 +107,11 @@ def _to_response(profile: UserProfile) -> ProfileResponse:
     return ProfileResponse(
         owner_name=profile.owner_name,
         store_name=profile.store_name,
+        chat_model_mode=profile.chat_model_mode or "cloud",
+        recommend_model_mode=profile.recommend_model_mode or "cloud",
+        policy_summary_model_mode=profile.policy_summary_model_mode or "cloud",
+        calendar_coach_model_mode=profile.calendar_coach_model_mode or "cloud",
+        document_review_model_mode=profile.document_review_model_mode or "local",
         region=RegionInput(sido=profile.region_sido, sigungu=profile.region_sigungu),
         industry=LabeledTags(
             label=profile.industry_label,

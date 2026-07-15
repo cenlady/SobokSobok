@@ -79,7 +79,7 @@ class RecommendationExplanationResponse(BaseModel):
     eligibility_status: Literal["eligible", "needs_review", "ineligible"]
     preference_match: Literal["exact", "partial", "none", "not_requested"]
     confidence: Literal["high", "medium", "low"]
-    generated_by: Literal["rules", "gemini"] = "rules"
+    generated_by: Literal["rules", "openai", "ollama", "gemini"] = "rules"
     summary: str
     strengths: list[str] = Field(default_factory=list)
     aspects_to_check: list[str] = Field(default_factory=list)
