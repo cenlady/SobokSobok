@@ -296,8 +296,9 @@ async def get_calendar_coach_timeline(
     google_access_token = await get_valid_google_token(current_user, db)
     user_schedules = await get_google_calendar_events(google_access_token)
 
-    # AI 코칭용: 오늘부터 해당 지원사업 마감일(policy.apply_end) 또는 사장님이 선택한 목표 날짜(target_date) 당일까지 필터링
-    now_utc = datetime.now(timezone.utc)
+    # AI 코칭용: 오늘(KST)부터 사장님이 선택한 목표 날짜(target_date) 당일까지의 스케줄만 엄격하게 필터링
+    kst = timezone(timedelta(hours=9))
+    today_kst = datetime.now(kst).date()
 
     if target_date:
         try:
@@ -311,11 +312,12 @@ async def get_calendar_coach_timeline(
     for item in user_schedules:
         try:
             item_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
-            # 오늘부터 지정된 목표일 당일까지의 스케줄만 수집
-            if now_utc.date() <= item_date <= deadline_date:
+            # 오늘(KST)부터 지정된 목표일 당일까지의 스케줄만 수집
+            if today_kst <= item_date <= deadline_date:
                 filtered_schedules.append(item)
         except Exception:
-            filtered_schedules.append(item)
+            # 날짜 파싱이 불가능한 잘못된 일정 포맷은 캘린더 코칭 신뢰도를 위해 스킵(Skip) 처리
+            pass
 
     # 3) 해당 지원사업에 등록된 RAG 청크 정보 추출
     chunks = db.query(PolicyChunk).filter(PolicyChunk.policy_id == policy_id).all()
