@@ -46,6 +46,7 @@ export default function HomeScreen() {
   // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
   const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>([])
   const [googleEventsLoading, setGoogleEventsLoading] = useState(true)
+  const [googleEventsError, setGoogleEventsError] = useState<string | null>(null)
 
   useEffect(() => {
     let ignore = false
@@ -53,15 +54,20 @@ export default function HomeScreen() {
     // 기본 패치 헬퍼
     const fetchEvents = () => {
       setGoogleEventsLoading(true)
+      setGoogleEventsError(null)
       apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
         .then((data) => {
           if (!ignore) {
             setGoogleEvents(data)
+            setGoogleEventsError(null)
             sessionStorage.removeItem('sobok_calendar_dirty')
           }
         })
         .catch((err) => {
-          console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
+          if (!ignore) {
+            setGoogleEventsError(err instanceof Error ? err.message : 'Google Calendar 일정을 불러오지 못했습니다.')
+          }
+          console.warn('Google Calendar 일정을 조회할 수 없습니다:', err)
         })
         .finally(() => {
           if (!ignore) setGoogleEventsLoading(false)
@@ -158,6 +164,11 @@ export default function HomeScreen() {
 
   // 선택한 날짜와 연결된 정책을 기준으로 신청 일정 안내를 불러온다.
   const handleCoachTimeline = async () => {
+    if (googleEventsError) {
+      alert('Google Calendar 일정을 불러오지 못해 신청 일정을 안내할 수 없습니다. Google 로그인을 다시 연결하거나 잠시 후 다시 시도해 주세요.')
+      return
+    }
+
     const selGoogleEvents = googleEventsMap[selected] || []
 
     // 1순위: 선택한 날짜의 구글 일정(파란 점) 중 본문에 매핑된 지원사업 ID가 있는 일정을 역추적해 타겟팅
@@ -169,13 +180,13 @@ export default function HomeScreen() {
       targetPolicyId = calendarTarget.policy_id
     } else {
       // 선택한 날짜에 정책 일정이 없으면 연결된 일정 중 가장 가까운 마감 정책을 사용한다.
-      const calendarPolicies = googleEvents.filter(ev => ev.policy_id)
-      if (calendarPolicies.length === 0) {
-        alert('구글 캘린더에 연결된 정책 일정이 없습니다. 정책 상세에서 캘린더 등록을 먼저 진행해 주세요.')
+      const upcomingCalendarPolicies = googleEvents.filter(ev => ev.policy_id && ev.date >= todayKey)
+      if (upcomingCalendarPolicies.length === 0) {
+        alert('앞으로 마감 예정인 정책 일정이 없습니다. 정책 상세에서 캘린더 등록을 먼저 진행해 주세요.')
         return
       }
-      // 연결된 일정 중 마감일이 가장 가까운 정책을 선택한다.
-      const urgentCalendarTarget = [...calendarPolicies].sort((a, b) => {
+      // 이미 지난 정책을 제외하고, 연결된 일정 중 마감일이 가장 가까운 정책을 선택한다.
+      const urgentCalendarTarget = [...upcomingCalendarPolicies].sort((a, b) => {
         const da = new Date(a.date).getTime()
         const db = new Date(b.date).getTime()
         return da - db
@@ -189,7 +200,7 @@ export default function HomeScreen() {
     setIsOpenCoachModal(true)
     setLoadingCoach(true)
     try {
-      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicyId}&target_date=${selected}`)
+      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${encodeURIComponent(targetPolicyId)}`)
       setCoachGuide(data.coach_guide)
     } catch (e) {
       alert(e instanceof Error ? e.message : '일정 안내를 불러오지 못했어요. 캘린더 연동 상태를 확인해 주세요.')
@@ -200,7 +211,7 @@ export default function HomeScreen() {
   }
   const selDate = new Date(`${selected}T00:00:00`)
   const homeLoading = loading || profileLoading || googleEventsLoading
-  const isEmpty = !homeLoading && policies.length === 0 && googleEvents.length === 0
+  const isEmpty = !homeLoading && !googleEventsError && policies.length === 0 && googleEvents.length === 0
 
   if (homeLoading) return <HomeScreenSkeleton />
 
@@ -225,6 +236,17 @@ export default function HomeScreen() {
       <TopBar />
 
       <PageIntro title="내 정책 달력" description={`저장한 정책 ${policies.length}건`} />
+
+      {googleEventsError && (
+        <section className="mt-4 px-5">
+          <div className="rounded-2xl border border-status-red/20 bg-status-red/5 px-4 py-3.5">
+            <p className="text-sm font-bold text-status-red">Google Calendar 일정을 불러오지 못했어요</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              일정 0건으로 처리하지 않았습니다. Google 로그인을 다시 연결하거나 잠시 후 화면을 다시 열어주세요.
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* 달력 */}
       <section className="mt-4 px-5">

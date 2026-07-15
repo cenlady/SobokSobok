@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, UUID4
 import asyncio
 import httpx
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from typing import List, Optional
 import re
 
@@ -84,8 +84,11 @@ async def get_valid_google_token(user: User, db: Session) -> str:
 
 async def get_google_calendar_events(access_token: str) -> List[dict]:
     """
-    구글 캘린더 API를 찔러 사용자의 향후 2주일간의 개인 일정을 조회합니다. (MCP Tool 역할 래퍼)
+    구글 캘린더 API에서 최근 30일부터 향후 1년간의 개인 일정을 조회합니다. (MCP Tool 역할 래퍼)
     시간(dateTime) 정보가 있으면 시/분 범위도 함께 파싱해 반환합니다.
+
+    정상적인 0건과 Google API 장애를 구분해야 한다. 장애를 빈 목록으로 바꾸면
+    캘린더 코치가 실제 일정이 많은 사용자에게 "일정이 없다"고 잘못 안내할 수 있다.
     """
     now = datetime.now(timezone.utc)
     time_min = (now - timedelta(days=30)).isoformat()
@@ -107,49 +110,90 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(url, params=params, headers=headers, timeout=5.0)
-            if response.status_code != 200:
-                return []
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Google Calendar 일정 조회 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.",
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Google Calendar에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Google Calendar 일정 조회 중 오류가 발생했습니다.",
+            ) from exc
 
-            items = response.json().get("items", [])
-            schedules = []
-            for item in items:
-                summary = item.get("summary", "이름 없음")
-                description = item.get("description", "")
+    if response.status_code in (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN):
+        raise HTTPException(
+            status_code=response.status_code,
+            detail="Google Calendar 권한이 만료되었거나 부족합니다. Google 로그인을 다시 연결해 주세요.",
+        )
+    if response.status_code != status.HTTP_200_OK:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar가 일정 조회 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+        )
 
-                # 본문 설명글에서 지원사업ID를 파싱
-                policy_id_str = None
-                if description:
-                    match = re.search(r"● 지원사업ID:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", description, re.IGNORECASE)
-                    if match:
-                        policy_id_str = match.group(1)
+    try:
+        payload = response.json()
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar에서 올바르지 않은 응답을 받았습니다.",
+        ) from exc
 
-                start_date_obj = item.get("start", {})
-                end_date_obj = item.get("end", {})
+    if not isinstance(payload, dict) or not isinstance(payload.get("items", []), list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar에서 올바르지 않은 응답을 받았습니다.",
+        )
 
-                start_dt = start_date_obj.get("dateTime")
-                start_d = start_date_obj.get("date")
+    schedules = []
+    for item in payload.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        summary_value = item.get("summary", "이름 없음")
+        summary = summary_value if isinstance(summary_value, str) else "이름 없음"
+        description_value = item.get("description", "")
+        description = description_value if isinstance(description_value, str) else ""
 
-                if start_dt:
-                    date_str = start_dt[:10]
-                    start_time = start_dt[11:16]
-                    end_dt = end_date_obj.get("dateTime")
-                    end_time = end_dt[11:16] if end_dt else None
-                    time_str = f"{start_time} ~ {end_time}" if end_time else start_time
-                elif start_d:
-                    date_str = start_d[:10]
-                    time_str = None
-                else:
-                    continue
+        # 본문 설명글에서 지원사업ID를 파싱
+        policy_id_str = None
+        if description:
+            match = re.search(r"● 지원사업ID:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", description, re.IGNORECASE)
+            if match:
+                policy_id_str = match.group(1)
 
-                schedules.append({
-                    "date": date_str,
-                    "time": time_str,
-                    "summary": summary,
-                    "policy_id": policy_id_str
-                })
-            return schedules
-        except Exception:
-            return []
+        start_date_obj = item.get("start", {})
+        end_date_obj = item.get("end", {})
+        if not isinstance(start_date_obj, dict) or not isinstance(end_date_obj, dict):
+            continue
+
+        start_dt = start_date_obj.get("dateTime")
+        start_d = start_date_obj.get("date")
+
+        if isinstance(start_dt, str) and len(start_dt) >= 16:
+            date_str = start_dt[:10]
+            start_time = start_dt[11:16]
+            end_dt = end_date_obj.get("dateTime")
+            end_time = end_dt[11:16] if isinstance(end_dt, str) else None
+            time_str = f"{start_time} ~ {end_time}" if end_time else start_time
+        elif isinstance(start_d, str) and len(start_d) >= 10:
+            date_str = start_d[:10]
+            time_str = None
+        else:
+            continue
+
+        schedules.append({
+            "date": date_str,
+            "time": time_str,
+            "summary": summary,
+            "policy_id": policy_id_str
+        })
+    return schedules
 
 @router.post("/event", summary="구글 캘린더 일정 등록")
 async def register_policy_calendar_event(
@@ -250,20 +294,53 @@ async def get_my_google_events(
 ):
     """
     [이재혁 - 캘린더 영역]
-    - 현재 로그인한 유저의 구글 캘린더를 실시간 조회하여 향후 2주간의 일정 목록을 반환합니다.
+    - 현재 로그인한 유저의 구글 캘린더를 실시간 조회하여 최근 30일부터 향후 1년간의 일정 목록을 반환합니다.
     """
+    access_token = await get_valid_google_token(current_user, db)
+    return await get_google_calendar_events(access_token)
+
+
+def _resolve_coaching_dates(
+    apply_end: date | datetime,
+    target_date: Optional[str],
+    *,
+    today: date,
+) -> tuple[date, date]:
+    """실제 마감일과 준비 목표일을 분리하고 안전한 범위만 허용한다."""
+    actual_deadline = apply_end.date() if isinstance(apply_end, datetime) else apply_end
+    if actual_deadline < today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미 신청 마감일이 지난 정책입니다.",
+        )
+
+    if not target_date:
+        return actual_deadline, actual_deadline
+
     try:
-        access_token = await get_valid_google_token(current_user, db)
-        return await get_google_calendar_events(access_token)
-    except Exception as e:
-        if isinstance(e, HTTPException):
-            raise
-        return []
+        coaching_target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_date는 YYYY-MM-DD 형식이어야 합니다.",
+        ) from exc
+
+    if coaching_target < today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="준비 목표일은 오늘 이후여야 합니다.",
+        )
+    if coaching_target > actual_deadline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="준비 목표일은 실제 신청 마감일을 넘을 수 없습니다.",
+        )
+    return actual_deadline, coaching_target
 
 @router.get("/coach", summary="RAG 일정 관리 AI 가이드 코치 스케줄러")
 async def get_calendar_coach_timeline(
     policy_id: UUID4,
-    target_date: Optional[str] = None,  # [이재혁 - 동적 오버라이드 목표일]
+    target_date: Optional[str] = None,  # 실제 마감일 이전의 선택적 준비 완료 목표일
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -288,28 +365,25 @@ async def get_calendar_coach_timeline(
 
     model_mode = get_user_model_mode(current_user, "calendar_coach")
 
+    kst = timezone(timedelta(hours=9))
+    today_kst = datetime.now(kst).date()
+    actual_deadline_date, coaching_target_date = _resolve_coaching_dates(
+        policy.apply_end,
+        target_date,
+        today=today_kst,
+    )
+
     # 2) 사용자의 실제 구글 달력 스케줄 연동 조회 (MCP Tool)
     google_access_token = await get_valid_google_token(current_user, db)
     user_schedules = await get_google_calendar_events(google_access_token)
 
-    # AI 코칭용: 오늘(KST)부터 사장님이 선택한 목표 날짜(target_date) 당일까지의 스케줄만 엄격하게 필터링
-    kst = timezone(timedelta(hours=9))
-    today_kst = datetime.now(kst).date()
-
-    if target_date:
-        try:
-            deadline_date = datetime.strptime(target_date, "%Y-%m-%d").date()
-        except Exception:
-            deadline_date = policy.apply_end.date() if hasattr(policy.apply_end, "date") else policy.apply_end
-    else:
-        deadline_date = policy.apply_end.date() if hasattr(policy.apply_end, "date") else policy.apply_end
-
+    # AI 코칭용: 오늘(KST)부터 검증된 준비 목표일까지의 일정만 사용한다.
     filtered_schedules = []
     for item in user_schedules:
         try:
             item_date = datetime.strptime(item["date"], "%Y-%m-%d").date()
             # 오늘(KST)부터 지정된 목표일 당일까지의 스케줄만 수집
-            if today_kst <= item_date <= deadline_date:
+            if today_kst <= item_date <= coaching_target_date:
                 filtered_schedules.append(item)
         except Exception:
             # 날짜 파싱이 불가능한 잘못된 일정 포맷은 캘린더 코칭 신뢰도를 위해 스킵(Skip) 처리
@@ -320,12 +394,13 @@ async def get_calendar_coach_timeline(
     rag_context = "\n".join([c.chunk_text for c in chunks]) if chunks else "상세 제출 서류 및 우대 조건이 누락되었습니다. 일반 공고 정보에 준합니다."
 
     # 4) AI 프롬프트 콘텍스트 조립
-    deadline_str = deadline_date.strftime("%Y-%m-%d")
+    deadline_str = actual_deadline_date.strftime("%Y-%m-%d")
+    coaching_target_str = coaching_target_date.strftime("%Y-%m-%d")
     schedules_list = []
     for item in filtered_schedules:
         time_part = f" ({item['time']})" if item.get('time') else ""
         schedules_list.append(f"{item['date']}{time_part}: {item['summary']}")
-    schedules_text = "\n".join(schedules_list) if schedules_list else "등록된 개인 일정이 없어 매우 한가한 상태입니다."
+    schedules_text = "\n".join(schedules_list) if schedules_list else "준비 기간 안에 등록된 개인 일정이 없습니다."
     required_docs_text = "공고 참조"
     doc_names: list[str] = []
     if policy.required_documents:
@@ -367,15 +442,16 @@ async def get_calendar_coach_timeline(
     user_prompt = (
         f"=== [지원사업 상세 정보] ===\n"
         f"- 지원사업명: {policy.title}\n"
-        f"- 신청 마감일: {deadline_str}\n"
+        f"- 실제 신청 마감일: {deadline_str}\n"
+        f"- 준비 완료 목표일: {coaching_target_str}\n"
         f"- 필수 구비 서류: {required_docs_text}\n"
         f"- RAG 상세 서류 요건:\n{rag_context}\n\n"
         f"- 서류 발급 가이드:\n{prep_guides_text}\n\n"
         f"=== [사장님의 구글 캘린더 스케줄] ===\n"
         f"{schedules_text}\n\n"
         f"위 두 가지 데이터를 치밀하게 대조 및 분석하여, "
-        f"사장님이 바쁜 구글 개인 일정(겹치는 날)을 피해 접수를 마감 기한 전 무사히 마칠 수 있도록 "
-        f"D-14(준비 개시), D-7(우대 증빙 발급 및 보완), D-3(최종 검토), D-Day(접수 완료) "
+        f"사장님이 바쁜 구글 개인 일정(겹치는 날)을 피해 실제 신청 마감일 전에 접수를 마치도록 "
+        f"준비 완료 목표일을 기준으로 D-14(준비 개시), D-7(우대 증빙 발급 및 보완), D-3(최종 검토), D-Day(접수 완료) "
         f"단계별 구체적인 행동 가이드를 친근하고 상냥한 구어체 톤으로 작성해 주세요.\n"
         f"[필수]: 절대로 # 이나 * 같은 마크다운 특수 기호를 내용에 포함하지 말고, 순수 한글 텍스트와 이모지로만 읽기 쉽게 줄바꿈해 출력하세요."
     )
@@ -398,9 +474,11 @@ async def get_calendar_coach_timeline(
     return {
         "policy_title": policy.title,
         "deadline": deadline_str,
+        "target_date": coaching_target_str,
         "provider": model_spec.provider,
         "prep_embedding_provider": "openai" if model_mode == "cloud" else "ollama",
         "prep_guides_used": len(prep_results),
         "coach_guide": ai_coach_timeline,
-        "utilized_user_events": len(user_schedules),
+        "utilized_user_events": len(filtered_schedules),
+        "total_user_events": len(user_schedules),
     }
