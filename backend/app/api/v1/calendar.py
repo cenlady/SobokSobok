@@ -331,10 +331,7 @@ def _resolve_coaching_dates(
             detail="준비 목표일은 오늘 이후여야 합니다.",
         )
     if coaching_target > actual_deadline:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="준비 목표일은 실제 신청 마감일을 넘을 수 없습니다.",
-        )
+        return actual_deadline, actual_deadline
     return actual_deadline, coaching_target
 
 @router.get("/coach", summary="RAG 일정 관리 AI 가이드 코치 스케줄러")
