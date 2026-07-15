@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -41,6 +42,11 @@ class ProfileUpsertRequest(BaseModel):
     """
     owner_name: str | None = None
     store_name: str | None = None
+    chat_model_mode: Literal["cloud", "local"] = "cloud"
+    recommend_model_mode: Literal["cloud", "local"] = "cloud"
+    policy_summary_model_mode: Literal["cloud", "local"] = "cloud"
+    calendar_coach_model_mode: Literal["cloud", "local"] = "cloud"
+    document_review_model_mode: Literal["cloud", "local"] = "local"
     region: RegionInput | None = None
 
     industry: LabeledTags = Field(default_factory=LabeledTags)

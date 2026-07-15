@@ -5,7 +5,11 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.core.rag_utils import EmbeddingModel, OllamaEmbeddingModel
+from app.core.model_provider import (
+    get_embedding_model,
+    resolve_embedding_model_spec_for_mode,
+)
+from app.core.rag_utils import EmbeddingModel
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
 from app.models.review import ReviewVector
 from app.services.document_names import canonicalize
@@ -28,19 +32,25 @@ def build_review_vectors_once(
       - normalized_policies.required_documents[].name  → document_type="required_document"
       - policy_documents(requirements/eligibility).text → document_type=해당 유형
 
-    멱등: (policy_id, document_type, document_name)이 이미 있으면 건너뛴다.
+    멱등: 키·원문·모델·양쪽 벡터가 모두 같으면 건너뛴다.
     rebuild=True면 해당 정책의 기존 벡터를 지우고 다시 만든다.
     """
-    embedder = embedding_model or OllamaEmbeddingModel(
-        model_name=settings.REVIEW_EMBEDDING_MODEL,
-        base_url=settings.OLLAMA_BASE_URL,
+    # 정책 요건은 개인정보가 아니므로 두 모드의 검색 벡터를 미리 준비한다.
+    # embedding_model 인자는 기존 테스트/관리 코드 호환을 위해 로컬 모델 override로 쓴다.
+    cloud_embedder = get_embedding_model("document_review", model_mode="cloud")
+    local_embedder = embedding_model or get_embedding_model(
+        "document_review", model_mode="local"
     )
+    cloud_spec = resolve_embedding_model_spec_for_mode("document_review", "cloud")
+    local_spec = resolve_embedding_model_spec_for_mode("document_review", "local")
 
     db = SessionLocal()
     stats: dict[str, int | bool] = {
         "locked": False,
         "policies_scanned": 0,
         "vectors_created": 0,
+        "vectors_updated": 0,
+        "vectors_deleted": 0,
         "skipped_existing": 0,
         "errors": 0,
     }
@@ -61,12 +71,24 @@ def build_review_vectors_once(
         for policy in policies:
             stats["policies_scanned"] = int(stats["policies_scanned"]) + 1
             try:
-                _build_for_policy(db, policy, embedder, rebuild, stats)
+                _build_for_policy(
+                    db,
+                    policy,
+                    cloud_embedder,
+                    local_embedder,
+                    cloud_spec.model,
+                    local_spec.model,
+                    rebuild,
+                    stats,
+                )
                 db.commit()
             except Exception as exc:  # noqa: BLE001 - 정책 하나가 전체를 막지 않게
                 db.rollback()
                 stats["errors"] = int(stats["errors"]) + 1
-                print(f"[review-vectors] policy={policy.id} failed: {exc}", flush=True)
+                print(
+                    f"[review-vectors] policy={policy.id} failed error_type={type(exc).__name__}",
+                    flush=True,
+                )
 
         return stats
     finally:
@@ -77,7 +99,10 @@ def build_review_vectors_once(
 def _build_for_policy(
     db: Session,
     policy: NormalizedPolicy,
-    embedder: EmbeddingModel,
+    cloud_embedder: EmbeddingModel,
+    local_embedder: EmbeddingModel,
+    cloud_model_name: str,
+    local_model_name: str,
     rebuild: bool,
     stats: dict[str, int | bool],
 ) -> None:
@@ -86,39 +111,88 @@ def _build_for_policy(
         db.flush()
 
     candidates = _collect_requirements(db, policy)
+    existing = {
+        (row.document_type, row.document_name): row
+        for row in db.query(ReviewVector).filter(ReviewVector.policy_id == policy.id).all()
+    }
+
     if not candidates:
+        for row in existing.values():
+            db.delete(row)
+            stats["vectors_deleted"] = int(stats["vectors_deleted"]) + 1
         return
 
-    existing = set()
-    if not rebuild:
-        existing = {
-            (row.document_type, row.document_name)
-            for row in db.query(ReviewVector).filter(ReviewVector.policy_id == policy.id).all()
-        }
+    candidate_keys = {
+        (candidate["document_type"], candidate["document_name"])
+        for candidate in candidates
+    }
+    for key, row in existing.items():
+        if key not in candidate_keys:
+            db.delete(row)
+            stats["vectors_deleted"] = int(stats["vectors_deleted"]) + 1
 
-    pending = [c for c in candidates if (c["document_type"], c["document_name"]) not in existing]
+    pending = []
+    for candidate in candidates:
+        row = existing.get((candidate["document_type"], candidate["document_name"]))
+        if _review_vector_needs_refresh(
+            row,
+            candidate,
+            cloud_model_name=cloud_model_name,
+            local_model_name=local_model_name,
+        ):
+            pending.append((candidate, row))
     stats["skipped_existing"] = int(stats["skipped_existing"]) + (len(candidates) - len(pending))
     if not pending:
         return
 
     # bge-m3 컨텍스트(8192 토큰)를 넘지 않도록 원문을 잘라 임베딩한다
-    texts = [c["source_text"][: settings.REVIEW_CHUNK_SIZE * 8] for c in pending]
+    texts = [c["source_text"][: settings.REVIEW_CHUNK_SIZE * 8] for c, _ in pending]
 
-    vectors: list[list[float]] = []
+    cloud_vectors: list[list[float]] = []
+    local_vectors: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
-        vectors.extend(embedder.embed_documents(texts[start : start + EMBED_BATCH_SIZE]))
+        batch = texts[start : start + EMBED_BATCH_SIZE]
+        cloud_vectors.extend(cloud_embedder.embed_documents(batch))
+        local_vectors.extend(local_embedder.embed_documents(batch))
 
-    for candidate, vector in zip(pending, vectors):
-        db.add(
-            ReviewVector(
+    for (candidate, row), cloud_vector, local_vector in zip(
+        pending,
+        cloud_vectors,
+        local_vectors,
+    ):
+        if row is None:
+            row = ReviewVector(
                 policy_id=policy.id,
                 document_name=candidate["document_name"],
                 document_type=candidate["document_type"],
                 source_text=candidate["source_text"],
-                embedding=vector,
             )
-        )
-        stats["vectors_created"] = int(stats["vectors_created"]) + 1
+            db.add(row)
+            stats["vectors_created"] = int(stats["vectors_created"]) + 1
+        else:
+            row.source_text = candidate["source_text"]
+            stats["vectors_updated"] = int(stats["vectors_updated"]) + 1
+        row.embedding_openai = cloud_vector
+        row.embedding_ollama = local_vector
+        row.embedding_openai_model = cloud_model_name
+        row.embedding_ollama_model = local_model_name
+
+
+def _review_vector_needs_refresh(
+    row: ReviewVector | None,
+    candidate: dict[str, str],
+    *,
+    cloud_model_name: str,
+    local_model_name: str,
+) -> bool:
+    return bool(
+        row is None
+        or row.source_text != candidate["source_text"]
+        or row.embedding_openai is None
+        or row.embedding_ollama is None
+        or row.embedding_openai_model != cloud_model_name
+        or row.embedding_ollama_model != local_model_name
+    )
 
 
 def _collect_requirements(db: Session, policy: NormalizedPolicy) -> list[dict[str, str]]:

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import unittest
-import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 import app.services.recommend as recommend_service
+from app.core.model_errors import ModelTimeoutError
 from app.schemas.recommend import NumberRangeInput, RecommendationProfileRequest, RegionInput
 from app.services.recommend import (
     evaluate_policy,
@@ -97,7 +97,7 @@ class FakeExplainSession:
 
 
 class RecommendationTests(unittest.TestCase):
-    def test_gemini_quota_cooldown_returns_rule_explanation_immediately(self) -> None:
+    def test_model_timeout_is_not_replaced_with_rule_explanation(self) -> None:
         policy = make_policy(
             title="교육 지원",
             summary="소상공인 교육 지원",
@@ -106,23 +106,14 @@ class RecommendationTests(unittest.TestCase):
         )
         profile = make_profile(need_tags=["funding"])
 
-        with (
-            patch.object(recommend_service.settings, "GEMINI_API_KEY", "test-key"),
-            patch.object(
-                recommend_service,
-                "_gemini_quota_cooldown_until",
-                time.monotonic() + 60,
-            ),
-        ):
-            explanation = explain_policy_recommendation(
-                FakeExplainSession(policy),
-                policy.id,
-                profile,
-            )
-
-        self.assertEqual(explanation.generated_by, "rules")
-        self.assertEqual(explanation.match_status, "near_match")
-        self.assertIn("직접 일치하지 않습니다", explanation.summary)
+        with patch.object(recommend_service, "get_chat_model") as mock_get_chat_model:
+            mock_get_chat_model.return_value.generate.side_effect = ModelTimeoutError()
+            with self.assertRaises(ModelTimeoutError):
+                explain_policy_recommendation(
+                    FakeExplainSession(policy),
+                    policy.id,
+                    profile,
+                )
 
     def test_sigungu_mismatch_is_ineligible(self) -> None:
         policy = make_policy(

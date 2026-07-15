@@ -1,26 +1,29 @@
 import os
 import uuid
 import hashlib
-import logging
 import re
 from functools import wraps
+from collections.abc import Iterator
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.model_errors import ModelResponseError
+from app.core.model_provider import (
+    get_chat_model,
+    get_embedding_model,
+    normalize_model_mode,
+    resolve_embedding_model_spec_for_mode,
+)
 from app.core.rag_utils import (
     EmbeddingModel,
     SimpleTextSplitter,
-    create_embedding_model,
     search_policy_chunks,
 )
 from app.models.chat import ChatMessage, ChatSession, PolicyChunk
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
-
-
-logger = logging.getLogger(__name__)
 
 
 DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
@@ -274,51 +277,74 @@ def build_query_embedding_text(query: str, *, policy_id: Optional[uuid.UUID] = N
 
 def ensure_policy_chunk_embedding_dimension(db: Session) -> Dict[str, Any]:
     """
-    policy_chunks.embedding 컬럼의 pgvector 차원을 현재 settings.EMBEDDING_DIM에 맞춥니다.
-    기존 차원이 다르면 서로 다른 차원의 벡터를 섞을 수 없으므로 policy_chunks를 비운 뒤 컬럼 타입을 변경합니다.
+    policy_chunks의 OpenAI/Ollama 컬럼을 각각의 설정 차원에 맞춥니다.
+    기존 차원이 다르면 두 임베딩을 함께 재생성해야 하므로 청크를 비웁니다.
     """
     if not settings.database_url.startswith("postgresql"):
         return {"checked": False, "reason": "non-postgresql database"}
 
-    expected_dim = int(settings.EMBEDDING_DIM)
-    if expected_dim <= 0:
-        raise ValueError("EMBEDDING_DIM은 양수여야 합니다.")
+    expected_dims = {
+        "embedding_openai": int(settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS),
+        "embedding_ollama": int(settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS),
+    }
+    if any(dimension <= 0 for dimension in expected_dims.values()):
+        raise ValueError("CHAT_*_EMBEDDING_DIMENSIONS는 양수여야 합니다.")
 
-    current_type = db.execute(
-        text(
-            """
-            SELECT format_type(a.atttypid, a.atttypmod)
-            FROM pg_attribute a
-            JOIN pg_class c ON a.attrelid = c.oid
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            WHERE c.relname = 'policy_chunks'
-              AND n.nspname = 'public'
-              AND a.attname = 'embedding'
-              AND NOT a.attisdropped
-            """
-        )
-    ).scalar()
+    current_types: Dict[str, str | None] = {}
+    for column_name in expected_dims:
+        current_types[column_name] = db.execute(
+            text(
+                """
+                SELECT format_type(a.atttypid, a.atttypmod)
+                FROM pg_attribute a
+                JOIN pg_class c ON a.attrelid = c.oid
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                WHERE c.relname = 'policy_chunks'
+                  AND n.nspname = 'public'
+                  AND a.attname = :column_name
+                  AND NOT a.attisdropped
+                """
+            ),
+            {"column_name": column_name},
+        ).scalar()
 
-    expected_type = f"vector({expected_dim})"
-    if current_type == expected_type:
-        return {"checked": True, "changed": False, "current_type": current_type}
+    expected_types = {
+        column_name: f"vector({dimension})"
+        for column_name, dimension in expected_dims.items()
+    }
+    if current_types == expected_types:
+        return {"checked": True, "changed": False, "current_types": current_types}
 
     before_count = db.query(func.count(PolicyChunk.id)).scalar() or 0
-    db.execute(text("DELETE FROM policy_chunks"))
-    db.execute(
-        text(
-            f"ALTER TABLE policy_chunks "
-            f"ALTER COLUMN embedding TYPE vector({expected_dim})"
-        )
-    )
+    if any(
+        current_types[column_name] not in (None, expected_types[column_name])
+        for column_name in expected_dims
+    ):
+        db.execute(text("DELETE FROM policy_chunks"))
+
+    for column_name, dimension in expected_dims.items():
+        current_type = current_types[column_name]
+        if current_type is None:
+            db.execute(
+                text(
+                    f"ALTER TABLE policy_chunks ADD COLUMN {column_name} vector({dimension})"
+                )
+            )
+        elif current_type != expected_types[column_name]:
+            db.execute(
+                text(
+                    f"ALTER TABLE policy_chunks "
+                    f"ALTER COLUMN {column_name} TYPE vector({dimension})"
+                )
+            )
     db.commit()
 
     return {
         "checked": True,
         "changed": True,
-        "previous_type": current_type,
-        "current_type": expected_type,
-        "deleted_chunks": before_count,
+        "previous_types": current_types,
+        "current_types": expected_types,
+        "deleted_chunks": before_count if before_count else 0,
     }
 
 
@@ -327,17 +353,14 @@ def build_policy_chunks(
     *,
     policy_id: Optional[uuid.UUID] = None,
     limit: Optional[int] = None,
-    force: bool = True,
-    provider: Optional[str] = None,
-    model_name: Optional[str] = None,
+    force: bool = False,
     chunk_size: Optional[int] = None,
     chunk_overlap: Optional[int] = None,
 ) -> Dict[str, Any]:
-    embedding_model = create_embedding_model(provider=provider, model_name=model_name)
+    cloud_spec = resolve_embedding_model_spec_for_mode("chat", "cloud")
+    local_spec = resolve_embedding_model_spec_for_mode("chat", "local")
     schema_result = ensure_policy_chunk_embedding_dimension(db)
-    selected_provider = (provider or settings.CHAT_EMBEDDING_PROVIDER).lower()
-    selected_model = model_name or settings.CHAT_EMBEDDING_MODEL
-    model_name_log = f"{selected_provider}:{selected_model}"
+    model_name_log = f"openai:{cloud_spec.model}+ollama:{local_spec.model}"
 
     query = (
         db.query(PolicyDocument)
@@ -347,25 +370,37 @@ def build_policy_chunks(
     )
     if policy_id:
         query = query.filter(PolicyDocument.policy_id == policy_id)
-    if not force:
-        query = (
-            query.outerjoin(PolicyChunk, PolicyChunk.document_id == PolicyDocument.id)
-            .filter(PolicyChunk.id.is_(None))
-        )
-    if limit:
+    if force and limit:
         query = query.limit(limit)
 
     documents = query.all()
+    existing_chunks_by_document: Dict[uuid.UUID, List[PolicyChunk]] = {}
+    if not force and documents:
+        document_ids = [document.id for document in documents]
+        existing_chunks = (
+            db.query(PolicyChunk)
+            .filter(PolicyChunk.document_id.in_(document_ids))
+            .order_by(PolicyChunk.document_id, PolicyChunk.chunk_index)
+            .all()
+        )
+        for chunk in existing_chunks:
+            existing_chunks_by_document.setdefault(chunk.document_id, []).append(chunk)
+
     actual_chunk_size = chunk_size or settings.CHAT_CHUNK_SIZE
     actual_chunk_overlap = chunk_overlap or settings.CHAT_CHUNK_OVERLAP
     stats: Dict[str, Any] = {
-        "embedding_model": model_name_log,
+        "embedding_models": {
+            "cloud": f"openai:{cloud_spec.model}:{cloud_spec.dimensions}",
+            "local": f"ollama:{local_spec.model}:{local_spec.dimensions}",
+        },
         "chunk_size": actual_chunk_size,
         "chunk_overlap": actual_chunk_overlap,
         "force": force,
         "schema": schema_result,
         "target_documents": len(documents),
         "embedded_documents": 0,
+        "skipped_documents": 0,
+        "metadata_backfilled": 0,
         "failed_documents": 0,
         "created_chunks": 0,
         "failures": [],
@@ -373,6 +408,7 @@ def build_policy_chunks(
 
     splitter = SimpleTextSplitter(chunk_size=actual_chunk_size, chunk_overlap=actual_chunk_overlap)
     prepared_chunks: List[Dict[str, Any]] = []
+    documents_to_replace: set[uuid.UUID] = set()
 
     for document in documents:
         try:
@@ -389,8 +425,13 @@ def build_policy_chunks(
                 seen_hashes.add(chunk_hash)
                 document_chunks.append((raw_chunk, chunk_hash))
 
+            prepared_document_chunks: List[Dict[str, Any]] = []
             for chunk_index, (chunk_text, chunk_hash) in enumerate(document_chunks):
-                prepared_chunks.append(
+                embedding_input = build_chunk_embedding_input(embedding_context, chunk_text)
+                embedding_source_hash = hashlib.sha256(
+                    embedding_input.encode("utf-8")
+                ).hexdigest()
+                prepared_document_chunks.append(
                     {
                         "policy_id": document.policy_id,
                         "document_id": document.id,
@@ -403,14 +444,43 @@ def build_policy_chunks(
                             "chunk_overlap": actual_chunk_overlap,
                             "length": len(chunk_text),
                             "embedding_input_strategy": "document_context_section_plus_chunk",
+                            "embedding_source_hash": embedding_source_hash,
                         },
-                        "embedding_input": build_chunk_embedding_input(embedding_context, chunk_text),
+                        "embedding_input": embedding_input,
+                        "embedding_source_hash": embedding_source_hash,
                     }
                 )
 
-            if document_chunks:
+            existing_document_chunks = existing_chunks_by_document.get(document.id, [])
+            if not force and _policy_chunks_are_current(
+                existing_document_chunks,
+                prepared_document_chunks,
+                cloud_model_name=cloud_spec.model,
+                local_model_name=local_spec.model,
+            ):
+                for existing, prepared in zip(
+                    sorted(existing_document_chunks, key=lambda chunk: chunk.chunk_index),
+                    prepared_document_chunks,
+                ):
+                    metadata = (
+                        existing.chunk_metadata
+                        if isinstance(existing.chunk_metadata, dict)
+                        else {}
+                    )
+                    if not metadata.get("embedding_source_hash"):
+                        existing.chunk_metadata = prepared["metadata"]
+                        stats["metadata_backfilled"] += 1
+                stats["skipped_documents"] += 1
+                continue
+
+            if not force and limit and len(documents_to_replace) >= limit:
+                break
+
+            documents_to_replace.add(document.id)
+            prepared_chunks.extend(prepared_document_chunks)
+            if prepared_document_chunks:
                 stats["embedded_documents"] += 1
-                stats["created_chunks"] += len(document_chunks)
+                stats["created_chunks"] += len(prepared_document_chunks)
         except Exception as exc:
             db.rollback()
             stats["failed_documents"] += 1
@@ -418,52 +488,109 @@ def build_policy_chunks(
                 {
                     "document_id": str(document.id),
                     "policy_id": str(document.policy_id),
-                    "error": str(exc),
+                    "error_type": type(exc).__name__,
                 }
             )
 
-    if not prepared_chunks:
+    if not documents_to_replace:
+        if stats["metadata_backfilled"]:
+            db.commit()
         return stats
 
     try:
-        document_ids = list({item["document_id"] for item in prepared_chunks})
-        if document_ids:
-            (
-                db.query(PolicyChunk)
-                .filter(PolicyChunk.document_id.in_(document_ids))
-                .delete(synchronize_session=False)
-            )
-            db.flush()
+        (
+            db.query(PolicyChunk)
+            .filter(PolicyChunk.document_id.in_(documents_to_replace))
+            .delete(synchronize_session=False)
+        )
+        db.flush()
 
-        batch_size = 100
-        for start in range(0, len(prepared_chunks), batch_size):
-            batch = prepared_chunks[start:start + batch_size]
-            embeddings = embedding_model.embed_documents([item["embedding_input"] for item in batch])
-            for item, vector in zip(batch, embeddings):
-                db.add(
-                    PolicyChunk(
-                        policy_id=item["policy_id"],
-                        document_id=item["document_id"],
-                        chunk_index=item["chunk_index"],
-                        chunk_text=item["chunk_text"],
-                        chunk_hash=item["chunk_hash"],
-                        chunk_metadata=item["metadata"],
-                        embedding_status="success",
-                        embedding_model=model_name_log,
-                        embedding=vector,
-                        created_at=func.now(),
+        if prepared_chunks:
+            cloud_embedding_model = get_embedding_model("chat", model_mode="cloud")
+            local_embedding_model = get_embedding_model("chat", model_mode="local")
+            batch_size = 100
+            for start in range(0, len(prepared_chunks), batch_size):
+                batch = prepared_chunks[start:start + batch_size]
+                inputs = [item["embedding_input"] for item in batch]
+                cloud_embeddings = cloud_embedding_model.embed_documents(inputs)
+                local_embeddings = local_embedding_model.embed_documents(inputs)
+                for item, cloud_vector, local_vector in zip(
+                    batch,
+                    cloud_embeddings,
+                    local_embeddings,
+                ):
+                    db.add(
+                        PolicyChunk(
+                            policy_id=item["policy_id"],
+                            document_id=item["document_id"],
+                            chunk_index=item["chunk_index"],
+                            chunk_text=item["chunk_text"],
+                            chunk_hash=item["chunk_hash"],
+                            chunk_metadata=item["metadata"],
+                            embedding_status="success",
+                            embedding_model=model_name_log,
+                            embedding_openai=cloud_vector,
+                            embedding_ollama=local_vector,
+                            embedding_openai_model=cloud_spec.model,
+                            embedding_ollama_model=local_spec.model,
+                            created_at=func.now(),
+                        )
                     )
-                )
             db.flush()
         db.commit()
     except Exception as exc:
         db.rollback()
-        stats["failed_documents"] = stats["target_documents"]
+        stats["failed_documents"] = len(documents_to_replace)
         stats["embedded_documents"] = 0
         stats["created_chunks"] = 0
-        stats["failures"].append({"error": str(exc)})
+        stats["failures"].append({"error_type": type(exc).__name__})
 
     return stats
+
+
+def _policy_chunks_are_current(
+    existing_chunks: List[PolicyChunk],
+    prepared_chunks: List[Dict[str, Any]],
+    *,
+    cloud_model_name: str,
+    local_model_name: str,
+) -> bool:
+    """본문·검색 문맥·모델·양쪽 벡터가 모두 같을 때만 재임베딩을 건너뛴다."""
+    if len(existing_chunks) != len(prepared_chunks):
+        return False
+
+    ordered_existing = sorted(existing_chunks, key=lambda chunk: chunk.chunk_index)
+    for existing, prepared in zip(ordered_existing, prepared_chunks):
+        metadata = (
+            existing.chunk_metadata if isinstance(existing.chunk_metadata, dict) else {}
+        )
+        stored_source_hash = metadata.get("embedding_source_hash")
+        if stored_source_hash:
+            source_matches = stored_source_hash == prepared["embedding_source_hash"]
+        else:
+            prepared_metadata = prepared.get("metadata") or {}
+            source_matches = (
+                existing.chunk_text == prepared.get("chunk_text")
+                and metadata
+                == {
+                    key: value
+                    for key, value in prepared_metadata.items()
+                    if key != "embedding_source_hash"
+                }
+            )
+
+        if (
+            existing.chunk_index != prepared["chunk_index"]
+            or existing.chunk_hash != prepared["chunk_hash"]
+            or not source_matches
+            or existing.embedding_status != "success"
+            or existing.embedding_openai is None
+            or existing.embedding_ollama is None
+            or existing.embedding_openai_model != cloud_model_name
+            or existing.embedding_ollama_model != local_model_name
+        ):
+            return False
+    return True
 
 
 def get_policy_chunk_stats(db: Session) -> Dict[str, Any]:
@@ -473,6 +600,18 @@ def get_policy_chunk_stats(db: Session) -> Dict[str, Any]:
         "embedded_chunks": (
             db.query(func.count(PolicyChunk.id))
             .filter(PolicyChunk.embedding_status == "success")
+            .scalar()
+            or 0
+        ),
+        "cloud_embedded_chunks": (
+            db.query(func.count(PolicyChunk.id))
+            .filter(PolicyChunk.embedding_openai.isnot(None))
+            .scalar()
+            or 0
+        ),
+        "local_embedded_chunks": (
+            db.query(func.count(PolicyChunk.id))
+            .filter(PolicyChunk.embedding_ollama.isnot(None))
             .scalar()
             or 0
         ),
@@ -496,18 +635,59 @@ def chunk_to_source(chunk: PolicyChunk, similarity: float) -> Dict[str, Any]:
         metadata.setdefault("support_type", policy.support_type)
         metadata.setdefault("industry_tags", _compact_list(policy.industry_tags))
         metadata.setdefault("business_status_tags", _compact_list(policy.business_status_tags))
+    display_text = clean_rag_evidence_text(chunk.chunk_text)
+    answer_text = clean_rag_answer_text(chunk.chunk_text)
     return {
         "chunk_id": str(chunk.id),
         "policy_id": str(chunk.policy_id),
         "document_id": str(chunk.document_id),
         "chunk_index": chunk.chunk_index,
         "similarity": similarity,
-        "chunk_text": chunk.chunk_text,
+        "chunk_text": display_text,
+        "answer_text": answer_text,
+        "raw_chunk_text": chunk.chunk_text,
         "metadata": metadata,
         "policy_title": metadata.get("policy_title"),
         "document_type": metadata.get("document_type"),
         "document_title": metadata.get("document_title"),
         "source_ref": metadata.get("source_ref"),
+        "apply_start": metadata.get("apply_start"),
+        "apply_end": metadata.get("apply_end"),
+        "contact_points": metadata.get("contact_points") or [],
+        "question_hints": metadata.get("question_hints") or [],
+    }
+
+
+def policy_document_to_source(
+    policy: NormalizedPolicy,
+    document: PolicyDocument,
+) -> Dict[str, Any]:
+    """상세 채팅에서 부모 문서 전체를 기존 근거 응답 형식으로 변환한다."""
+    intent_tags = infer_intent_tags(
+        document.document_type,
+        document.title,
+        document.text,
+    )
+    metadata = build_policy_document_metadata(policy, document, intent_tags)
+    metadata["retrieval_mode"] = "parent_document"
+    display_text = clean_rag_evidence_text(document.text)
+    answer_text = clean_rag_answer_text(document.text)
+    return {
+        # 프론트/응답 스키마 호환을 위해 부모 문서 ID를 근거 ID로 사용한다.
+        "chunk_id": str(document.id),
+        "policy_id": str(policy.id),
+        "document_id": str(document.id),
+        "chunk_index": 0,
+        "similarity": 1.0,
+        "rerank_score": 1.0,
+        "chunk_text": display_text,
+        "answer_text": answer_text,
+        "raw_chunk_text": document.text,
+        "metadata": metadata,
+        "policy_title": policy.title,
+        "document_type": document.document_type,
+        "document_title": document.title,
+        "source_ref": document.source_ref,
         "apply_start": metadata.get("apply_start"),
         "apply_end": metadata.get("apply_end"),
         "contact_points": metadata.get("contact_points") or [],
@@ -1039,6 +1219,86 @@ def record_chat_turn(
     db.commit()
 
 
+@traceable_if_enabled("chat-parent-document-retrieve")
+def retrieve_policy_document_sources(
+    db: Session,
+    query: str,
+    *,
+    policy_id: uuid.UUID,
+    limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """정책이 정해진 채팅은 임베딩 없이 부모 문서 전체에서 근거를 고른다."""
+    if is_out_of_policy_scope(query, policy_id=policy_id):
+        return {
+            "query": query,
+            "expanded_query": query,
+            "intent_tags": ["out_of_scope"],
+            "response_mode": "out_of_scope",
+            "candidates": [],
+            "sources": [],
+        }
+
+    policy = (
+        db.query(NormalizedPolicy)
+        .filter(NormalizedPolicy.id == policy_id)
+        .one_or_none()
+    )
+    if policy is None:
+        return {
+            "query": query,
+            "expanded_query": query,
+            "intent_tags": ["general"],
+            "response_mode": "no_result",
+            "candidates": [],
+            "sources": [],
+        }
+
+    documents = (
+        db.query(PolicyDocument)
+        .filter(PolicyDocument.policy_id == policy_id)
+        .order_by(PolicyDocument.created_at.asc(), PolicyDocument.id.asc())
+        .all()
+    )
+    intent_tags = infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(intent_tags)
+    target_document_types = (
+        _document_types_for_intents([primary_intent])
+        if primary_intent
+        else ()
+    )
+
+    selected_documents = [
+        document
+        for document in documents
+        if document.document_type in target_document_types
+    ]
+    if target_document_types and not selected_documents:
+        # 구비 서류처럼 별도 문서가 생성되지 않은 경우에는 전체 항목이 보존된
+        # body/section 부모 문서를 LLM 근거로 사용한다.
+        selected_documents = [
+            document
+            for document in documents
+            if document.document_type in ("body", "section")
+        ]
+    if not selected_documents:
+        selected_documents = documents
+
+    requested_limit = limit or settings.CHAT_RETRIEVAL_LIMIT
+    sources = [
+        policy_document_to_source(policy, document)
+        for document in selected_documents[:requested_limit]
+        if _normalize_space(document.text)
+    ]
+    return {
+        "query": query,
+        "expanded_query": query,
+        "intent_tags": intent_tags,
+        "response_mode": "answer" if sources else "no_result",
+        "candidates": [],
+        "sources": sources,
+    }
+
+
 @traceable_if_enabled("chat-rag-retrieve")
 def retrieve_policy_chunk_sources(
     db: Session,
@@ -1047,6 +1307,7 @@ def retrieve_policy_chunk_sources(
     limit: Optional[int] = None,
     policy_id: Optional[uuid.UUID] = None,
     embedding_model: Optional[EmbeddingModel] = None,
+    model_mode: str | None = None,
 ) -> Dict[str, Any]:
     if is_out_of_policy_scope(query, policy_id=policy_id):
         return {
@@ -1058,7 +1319,19 @@ def retrieve_policy_chunk_sources(
             "sources": [],
         }
 
-    model = embedding_model or create_embedding_model()
+    selected_mode = normalize_model_mode(model_mode)
+    if selected_mode is None:
+        selected_mode = (
+            "local"
+            if settings.CHAT_EMBEDDING_PROVIDER.strip().lower() == "ollama"
+            else "cloud"
+        )
+    model = embedding_model or get_embedding_model("chat", model_mode=selected_mode)
+    vector_column = (
+        PolicyChunk.embedding_ollama
+        if selected_mode == "local"
+        else PolicyChunk.embedding_openai
+    )
     expanded_query = build_query_embedding_text(query, policy_id=policy_id)
     intent_tags = infer_intent_tags(None, None, query)
     requested_limit = limit or settings.CHAT_RETRIEVAL_LIMIT
@@ -1068,8 +1341,13 @@ def retrieve_policy_chunk_sources(
         embedding_model=model,
         limit=max(requested_limit * 4, requested_limit),
         policy_id=policy_id,
+        embedding_column=vector_column,
     )
-    sources = [chunk_to_source(chunk, similarity) for chunk, similarity in results]
+    sources = [
+        source
+        for source in (chunk_to_source(chunk, similarity) for chunk, similarity in results)
+        if _normalize_space(str(source.get("chunk_text") or ""))
+    ]
     sources = rerank_sources_by_intent(
         sources,
         intent_tags,
@@ -1140,7 +1418,9 @@ def attach_neighbor_context(
 
     by_document: Dict[uuid.UUID, Dict[int, str]] = {}
     for row in chunk_rows:
-        by_document.setdefault(row.document_id, {})[row.chunk_index] = row.chunk_text
+        cleaned_text = clean_rag_answer_text(row.chunk_text)
+        if cleaned_text:
+            by_document.setdefault(row.document_id, {})[row.chunk_index] = cleaned_text
 
     for source in sources:
         try:
@@ -1166,13 +1446,20 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
     total_chars = 0
     for index, source in enumerate(sources, start=1):
         metadata = source.get("metadata") or {}
-        context_body = source.get("retrieval_context") or source.get("chunk_text")
+        context_body = clean_rag_answer_text(source.get("retrieval_context")) or source_answer_text(source)
+        if not context_body:
+            continue
         region = " ".join(
             str(value)
             for value in [metadata.get("sido"), metadata.get("sigungu")]
             if value
         ) or ("전국" if metadata.get("region_scope") == "national" else "확인 필요")
         application_methods = ", ".join(metadata.get("application_methods") or [])
+        content_label = (
+            "선택된 부모 문서 전체 원문"
+            if metadata.get("retrieval_mode") == "parent_document"
+            else "검색 청크 및 인접 문맥"
+        )
         block = (
             f"[근거 {index}]\n"
             f"정책명: {source.get('policy_title')}\n"
@@ -1186,7 +1473,7 @@ def build_context_text(sources: List[Dict[str, Any]]) -> str:
             f"신청방법: {application_methods or '확인 필요'}\n"
             f"문의처: {', '.join(source.get('contact_points') or [])}\n"
             f"예상질문태그: {', '.join(metadata.get('intent_tags') or [])}\n"
-            f"내용(검색 청크 및 인접 문맥): {context_body}\n"
+            f"내용({content_label}): {context_body}\n"
         )
         if total_chars + len(block) > settings.CHAT_MAX_CONTEXT_CHARS:
             break
@@ -1215,6 +1502,136 @@ SECTION_LABEL_PATTERN = re.compile(r"\[([^\[\]]{1,30})\]")
 
 def _normalize_space(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip(" \n\t:-")
+
+
+STRUCTURED_JSON_NOISE_KEYS: Tuple[str, ...] = (
+    "business_age_limit",
+    "employee_limit",
+    "sales_limit",
+    "constraints",
+    "operator",
+    "source_text",
+    "unit",
+    "value",
+    "logic",
+    "requires_manual_review",
+    "review_reason",
+    "extraction_method",
+)
+STRUCTURED_JSON_NOISE_PATTERN = re.compile(
+    r'"(?:business_age_limit|employee_limit|sales_limit|constraints|operator|source_text|unit|value|logic|requires_manual_review|review_reason|extraction_method)"\s*:'
+)
+
+
+def _source_text_values_from_json_noise(value: str) -> List[str]:
+    return _dedupe_preserve_order(
+        _normalize_space(match.group(1))
+        for match in re.finditer(r'"source_text"\s*:\s*"([^"]+)"', value)
+        if _normalize_space(match.group(1))
+    )
+
+
+def _is_structured_json_noise_line(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if STRUCTURED_JSON_NOISE_PATTERN.search(stripped):
+        return True
+    if not any(key in stripped for key in STRUCTURED_JSON_NOISE_KEYS):
+        return False
+    json_marks = sum(stripped.count(mark) for mark in ('"', "{", "}", "[", "]", ":"))
+    return stripped.startswith(("{", "}", "[", "]", '"', ",")) or json_marks >= 4
+
+
+def clean_rag_display_text(value: Any) -> str:
+    """사용자 답변/근거에 노출할 RAG 텍스트에서 정규화용 JSON 찌꺼기를 제거한다."""
+    if value is None:
+        return ""
+
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    source_text_values = _source_text_values_from_json_noise(text)
+    kept_lines: List[str] = []
+    for line in text.split("\n"):
+        if _is_structured_json_noise_line(line):
+            continue
+        kept_lines.append(line)
+
+    cleaned = _normalize_space("\n".join(kept_lines))
+    if cleaned and source_text_values:
+        existing = cleaned
+        missing_values = [item for item in source_text_values if item not in existing]
+        if missing_values:
+            cleaned = _normalize_space(f"{cleaned} {' '.join(missing_values)}")
+    elif not cleaned and source_text_values:
+        cleaned = " / ".join(source_text_values)
+
+    if _is_structured_json_noise_line(cleaned) and not source_text_values:
+        return ""
+    return cleaned
+
+
+INTERNAL_JUDGEMENT_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:[-•]\s*)?(?:여부\s*)?판단\s*\d{0,3}\s*"
+)
+
+
+def clean_rag_evidence_text(value: Any) -> str:
+    """답변 근거 카드에 표시할 텍스트를 사람이 읽기 쉬운 형태로 가공한다."""
+    display_text = clean_rag_display_text(value)
+    if not display_text:
+        return ""
+
+    if "판단" not in display_text:
+        return display_text
+
+    cleaned = INTERNAL_JUDGEMENT_PREFIX_PATTERN.sub("", display_text).strip()
+    if not cleaned:
+        return ""
+
+    cleaned = re.sub(
+        r"\(([^)]*?)-([^)]*?)\)",
+        lambda match: f"({match.group(1).strip()} {match.group(2).strip()})",
+        cleaned,
+    )
+    cleaned = re.sub(r"^([^:：]{2,40})\s+\(([^)]{2,60})\)\s+(.+)$", r"\1: \2, \3", cleaned)
+    return _normalize_space(cleaned)
+
+
+ANSWER_ONLY_ADMIN_LINE_PATTERN = re.compile(
+    r"^\s*(?:[-•]\s*)?(?:여부\s*)?판단\s*\d{0,3}\b.*$"
+)
+ANSWER_CONDITION_ANCHOR_PATTERN = re.compile(
+    r"(?:\d+\s*(?:인|명|억원|만원|원|년)\s*(?:미만|이하|이상|초과)|상시\s*근로자|소상공인기본법|제조업|건설업|운수업|업체|사업자|매출|업력)"
+)
+
+
+def clean_rag_answer_text(value: Any) -> str:
+    """채팅 답변 본문/LLM 프롬프트에서는 내부 판정 절차 문구를 빼고 조건만 남긴다."""
+    display_text = clean_rag_display_text(value)
+    if not display_text:
+        return ""
+
+    if "여부 판단" in display_text:
+        condition_start = ANSWER_CONDITION_ANCHOR_PATTERN.search(display_text)
+        if condition_start:
+            display_text = display_text[condition_start.start():]
+
+    kept_lines: List[str] = []
+    for line in display_text.split("\n"):
+        normalized_line = _normalize_space(line)
+        if not normalized_line:
+            continue
+        if ANSWER_ONLY_ADMIN_LINE_PATTERN.match(normalized_line):
+            continue
+        kept_lines.append(normalized_line)
+
+    return _normalize_space("\n".join(kept_lines))
+
+
+def source_answer_text(source: Dict[str, Any]) -> str:
+    if source.get("answer_text") is not None:
+        return clean_rag_answer_text(source.get("answer_text"))
+    return clean_rag_answer_text(source.get("raw_chunk_text") or source.get("chunk_text"))
 
 
 POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
@@ -1434,7 +1851,9 @@ def _fallback_points(value: str, limit: int = 5) -> List[str]:
     if cleaned in {"해당없음", "해당 없음", "없음", "없습니다"}:
         return [cleaned]
 
-    pieces = re.split(r"\s*(?:\|\||ㆍ|•|,|;| 또는 | 혹은 )\s*", cleaned)
+    # 일반 쉼표는 목록 구분자로 사용하되 4,500만원처럼 숫자 사이의 천 단위
+    # 쉼표는 보존한다.
+    pieces = re.split(r"\s*(?:\|\||ㆍ|•|(?<!\d),(?!\d)|;| 또는 | 혹은 )\s*", cleaned)
     points = [_normalize_space(piece) for piece in pieces if _normalize_space(piece)]
     return _dedupe_preserve_order(points)[:limit] or [cleaned]
 
@@ -1490,6 +1909,31 @@ ATTRIBUTE_ANSWER_INTENTS: Tuple[str, ...] = (
     "contact",
 )
 
+PLAIN_LANGUAGE_ANSWER_INSTRUCTION = (
+    "일반인이 한 번에 이해할 수 있도록 중학생도 이해할 수 있는 쉬운 한국어로 설명해라. "
+    "법률명·행정용어·전문용어만 그대로 반복하지 말고, 쉬운 뜻을 먼저 말한 뒤 "
+    "필요한 경우에만 원문 용어를 괄호 안에 덧붙여라. "
+    "예를 들어 '「소상공인기본법」에 따른 소상공인'은 "
+    "'직원 수와 매출 규모 등이 법에서 정한 소상공인 기준에 맞는 작은 사업체'처럼 풀어 설명해라. "
+    "'융자'는 '정책자금 대출', '융자제외업종'은 "
+    "'정책자금 대출을 받을 수 없도록 정해진 업종', '구비서류'는 '준비할 서류', "
+    "'업력'은 '사업을 운영한 기간', '영위'는 '운영', "
+    "'상시근로자'는 '평소 계속 고용한 직원', '선정기준'은 '지원 대상을 뽑는 기준', "
+    "'소관기관'은 '담당 기관'처럼 바꿔라. "
+    "다만 검색 근거에 구체적인 직원 수·매출 기준이 없으면 숫자를 만들지 말고, "
+    "업종에 따라 기준이 다를 수 있어 공고나 담당 기관 확인이 필요하다고 알려라."
+)
+
+
+def _primary_attribute_intent(intent_tags: Iterable[str]) -> Optional[str]:
+    """질문에 여러 키워드가 있어도 가장 구체적인 단일 답변 항목을 고른다."""
+    tag_set = set(intent_tags)
+    for priority_group in DIRECT_INTENT_PRIORITY:
+        for intent in priority_group:
+            if intent in tag_set:
+                return intent
+    return None
+
 REQUIREMENT_PATTERNS: Tuple[Tuple[str, str], ...] = (
     (r"사업자등록증\s*사본", "사업자등록증 사본"),
     (r"사업자등록증", "사업자등록증"),
@@ -1524,7 +1968,7 @@ def _requirement_points(text: str) -> List[str]:
     if not cleaned:
         return []
 
-    if re.search(r"\|\||ㆍ|•|,|;| 또는 | 혹은 ", cleaned):
+    if re.search(r"\|\||ㆍ|•|(?<!\d),(?!\d)|;| 또는 | 혹은 ", cleaned):
         return _fallback_points(cleaned)
 
     matches: List[Tuple[int, int, str]] = []
@@ -1555,6 +1999,43 @@ def _document_types_for_intents(intent_tags: Iterable[str]) -> Tuple[str, ...]:
     return tuple(_dedupe_preserve_order(document_types))
 
 
+def _render_focused_attribute_answer(
+    policy_title: str,
+    intent_tags: List[str],
+    points: Iterable[str],
+) -> Optional[str]:
+    cleaned_points = _dedupe_preserve_order(
+        _normalize_space(point) for point in points if _normalize_space(point)
+    )[:8]
+    if not cleaned_points:
+        return None
+
+    primary_intent = _primary_attribute_intent(intent_tags)
+    compact_single = cleaned_points[0].replace(" ", "") if len(cleaned_points) == 1 else ""
+    if primary_intent in ("requirements", "documents") and compact_single in {
+        "해당없음",
+        "없음",
+        "없습니다",
+    }:
+        return f"{policy_title} 기준으로 보면, 별도로 준비해야 하는 서류는 명시되어 있지 않아요."
+    if primary_intent in ("deadline", "schedule") and compact_single in {
+        "상시신청",
+        "상시접수",
+    }:
+        return f"{policy_title}의 신청 기간은 상시 신청이에요."
+
+    heading = _friendly_heading(intent_tags)
+    if len(cleaned_points) == 1:
+        return f"{policy_title} 기준으로 보면, {heading}\n\n{cleaned_points[0]}"
+    return "\n".join(
+        [
+            f"{policy_title} 기준으로 보면, {heading}",
+            "",
+            *[f"- {point}" for point in cleaned_points],
+        ]
+    )
+
+
 def build_direct_document_type_answer(
     policy_title: str,
     intent_tags: List[str],
@@ -1574,7 +2055,7 @@ def build_direct_document_type_answer(
 
     points: List[str] = []
     for source in matched_sources:
-        chunk_text = str(source.get("chunk_text") or "")
+        chunk_text = source_answer_text(source)
         if source.get("document_type") == "requirements":
             points.extend(_requirement_points(chunk_text))
         else:
@@ -1584,16 +2065,59 @@ def build_direct_document_type_answer(
     if not points:
         return None
 
-    heading = _friendly_heading(intent_tags)
-    if len(points) == 1:
-        return f"{policy_title} 기준으로 보면, {heading}\n\n{points[0]}"
-    return "\n".join(
-        [
-            f"{policy_title} 기준으로 보면, {heading}",
-            "",
-            *[f"- {point}" for point in points],
-        ]
+    return _render_focused_attribute_answer(
+        policy_title,
+        intent_tags,
+        points,
     )
+
+
+def build_focused_attribute_answer(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    intent_tags: Optional[List[str]] = None,
+) -> Optional[str]:
+    """대상·서류·기간 등 단일 속성 질문에는 그 속성의 근거만 답한다."""
+    if not sources:
+        return None
+
+    resolved_intents = intent_tags or infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(resolved_intents)
+    if not primary_intent or primary_intent not in ATTRIBUTE_ANSWER_INTENTS:
+        return None
+    focused_intents = [primary_intent]
+
+    best_source = sources[0]
+    best_policy_id = best_source.get("policy_id")
+    scoped_sources = (
+        [source for source in sources if source.get("policy_id") == best_policy_id]
+        if best_policy_id
+        else sources
+    )
+    policy_title = best_source.get("policy_title") or "이 공고"
+
+    direct_answer = build_direct_document_type_answer(
+        policy_title,
+        focused_intents,
+        scoped_sources,
+    )
+    if direct_answer:
+        return direct_answer
+
+    for source in scoped_sources:
+        focused_value = _section_value_for_intents(
+            source_answer_text(source),
+            focused_intents,
+        )
+        if not focused_value:
+            continue
+        return _render_focused_attribute_answer(
+            policy_title,
+            focused_intents,
+            _fallback_points(focused_value),
+        )
+    return None
 
 
 def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> str:
@@ -1604,35 +2128,20 @@ def build_retrieval_only_answer(query: str, sources: List[Dict[str, Any]]) -> st
     best_source = sources[0]
     policy_title = best_source.get("policy_title") or "이 공고"
 
-    direct_answer = build_direct_document_type_answer(policy_title, intent_tags, sources)
-    if direct_answer:
-        return direct_answer
-
-    focused_value = None
-    for source in sources:
-        chunk_text = str(source.get("chunk_text") or "")
-        focused_value = _section_value_for_intents(chunk_text, intent_tags)
-        if focused_value:
-            break
-
-    if focused_value:
-        points = _fallback_points(focused_value)
-        if len(points) == 1:
-            return f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}\n\n{points[0]}"
-        return "\n".join(
-            [
-                f"{policy_title} 기준으로 보면, {_friendly_heading(intent_tags)}",
-                "",
-                *[f"- {point}" for point in points],
-            ]
-        )
+    focused_answer = build_focused_attribute_answer(
+        query,
+        sources,
+        intent_tags=intent_tags,
+    )
+    if focused_answer:
+        return focused_answer
 
     candidate_answer = build_policy_candidate_fallback(query, sources, intent_tags)
     if candidate_answer:
         return candidate_answer
 
     snippets = _dedupe_preserve_order(
-        _normalize_space(str(source.get("chunk_text") or "")) for source in sources[:3]
+        source_answer_text(source) for source in sources[:3]
     )
     if not snippets:
         return "공고문에서 관련 내용을 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요."
@@ -1680,7 +2189,7 @@ def build_policy_candidate_fallback(
         metadata = source.get("metadata") or {}
         title = source.get("policy_title") or "정책명 확인 필요"
         support_type = metadata.get("support_type") or source.get("document_title")
-        snippet = _normalize_space(str(source.get("chunk_text") or ""))
+        snippet = source_answer_text(source)
         if len(snippet) > 90:
             snippet = f"{snippet[:90].rstrip()}..."
         suffix = f" ({support_type})" if support_type else ""
@@ -1698,19 +2207,25 @@ def build_policy_candidate_fallback(
     return "\n".join(lines)
 
 
-@traceable_if_enabled("chat-rag-answer")
-def generate_chat_answer(
+def build_chat_user_prompt(
     query: str,
     sources: List[Dict[str, Any]],
     *,
     conversation_context: str = "",
 ) -> str:
-    if not sources:
-        return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
-
-    provider = settings.CHAT_COMPLETION_PROVIDER.lower()
-    if provider == "disabled":
-        return build_retrieval_only_answer(query, sources)
+    intent_tags = infer_intent_tags(None, None, query)
+    primary_intent = _primary_attribute_intent(intent_tags)
+    if primary_intent:
+        focus_label = _friendly_heading([primary_intent]).rstrip(".")
+        answer_scope_instruction = (
+            f"사용자가 물은 항목은 '{focus_label}'이다. 이 항목에만 답하고, "
+            "신청 대상·방법·기간·서류·문의처 등 다른 항목을 함께 나열하지 마라."
+        )
+    else:
+        answer_scope_instruction = (
+            "질문에서 요구한 내용에만 직접 답하고, 사용자가 여러 항목을 요청하지 않았다면 "
+            "관련 없는 신청 대상·방법·기간·서류·문의처를 덧붙이지 마라."
+        )
 
     context_text = build_context_text(sources)
     conversation_block = (
@@ -1718,69 +2233,71 @@ def generate_chat_answer(
         if conversation_context
         else ""
     )
-    user_prompt = (
+    return (
         f"{conversation_block}"
         f"사용자 질문:\n{query}\n\n"
         f"검색 근거:\n{context_text}\n\n"
-        "위 근거만 사용해서 답변해줘. "
-        "가능하면 신청 대상/방법/기간/서류/문의처를 항목별로 정리해줘. "
-        "근거에 없는 내용은 추측하지 말고 모른다고 말해줘."
+        "위 검색 근거만 사용해서 질문에 바로 답해줘. "
+        f"{answer_scope_instruction} "
+        f"{PLAIN_LANGUAGE_ANSWER_INSTRUCTION} "
+        "원문의 숫자·금액·날짜·AND/OR 조건·제외 조건은 의미를 바꾸거나 생략하지 마라. "
+        "원문에 슬래시(/)처럼 논리 관계가 명확하지 않은 기호가 있으면 임의로 '그리고'나 '또는'으로 해석하지 말고 원문 표현을 유지해라. "
+        "조건이 둘 이상이면 조건별로 짧은 글머리표를 사용하고, 제외 조건은 마지막에 별도 문장으로 분리해라. "
+        "근거에 없는 내용은 추측하거나 보완하지 말고, 원문이 모호하면 단정하지 말고 확인이 필요하다고 말해줘."
     )
 
-    if provider == "gemini":
-        if not settings.GEMINI_API_KEY:
-            logger.warning("GEMINI_API_KEY is not set; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
-        try:
-            from google import genai
-            from google.genai import types
 
-            client = genai.Client(api_key=settings.GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model=settings.CHAT_COMPLETION_MODEL or settings.GEMINI_TEXT_MODEL,
-                contents=f"{settings.CHAT_SYSTEM_PROMPT}\n\n{user_prompt}",
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                ),
-            )
-            return (response.text or "").strip() or build_retrieval_only_answer(query, sources)
-        except Exception:
-            logger.exception("Gemini chat completion failed; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
+@traceable_if_enabled("chat-rag-answer")
+def generate_chat_answer(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    conversation_context: str = "",
+    model_mode: str | None = None,
+) -> str:
+    if not sources:
+        return "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
 
-    if provider != "openai":
-        return build_retrieval_only_answer(query, sources)
+    answer = get_chat_model("chat", model_mode=model_mode).generate(
+        system_prompt=settings.CHAT_SYSTEM_PROMPT,
+        user_prompt=build_chat_user_prompt(
+            query,
+            sources,
+            conversation_context=conversation_context,
+        ),
+        stage="answer_generation",
+        source_module=__name__,
+        source_function="generate_chat_answer",
+        temperature=0.0,
+    )
+    if not answer:
+        raise ModelResponseError("챗봇 모델이 빈 응답을 반환했습니다.")
+    return answer
 
-    try:
-        from openai import OpenAI
 
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            logger.warning("OPENAI_API_KEY is not set; falling back to retrieval-only chat answer.")
-            return build_retrieval_only_answer(query, sources)
+def generate_chat_answer_stream(
+    query: str,
+    sources: List[Dict[str, Any]],
+    *,
+    conversation_context: str = "",
+    model_mode: str | None = None,
+) -> Iterator[str]:
+    if not sources:
+        yield "관련 정책 문서 근거를 찾지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
+        return
 
-        client = OpenAI(api_key=openai_api_key)
-        if is_langsmith_enabled():
-            try:
-                from langsmith import wrappers
-
-                configure_langsmith_env()
-                client = wrappers.wrap_openai(client)
-            except ImportError:
-                pass
-
-        response = client.chat.completions.create(
-            model=settings.CHAT_COMPLETION_MODEL,
-            messages=[
-                {"role": "system", "content": settings.CHAT_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-        )
-        return response.choices[0].message.content or ""
-    except Exception:
-        logger.exception("OpenAI chat completion failed; falling back to retrieval-only chat answer.")
-        return build_retrieval_only_answer(query, sources)
+    yield from get_chat_model("chat", model_mode=model_mode).stream(
+        system_prompt=settings.CHAT_SYSTEM_PROMPT,
+        user_prompt=build_chat_user_prompt(
+            query,
+            sources,
+            conversation_context=conversation_context,
+        ),
+        stage="answer_generation_stream",
+        source_module=__name__,
+        source_function="generate_chat_answer_stream",
+        temperature=0.0,
+    )
 
 
 def answer_policy_question(
@@ -1790,23 +2307,43 @@ def answer_policy_question(
     limit: Optional[int] = None,
     policy_id: Optional[uuid.UUID] = None,
     recent_messages: Optional[List[ChatMessage]] = None,
+    model_mode: str | None = None,
 ) -> Dict[str, Any]:
-    retrieval = retrieve_policy_chunk_sources(
-        db=db,
-        query=query,
-        limit=limit,
-        policy_id=policy_id,
-    )
+    if policy_id is not None:
+        retrieval = retrieve_policy_document_sources(
+            db=db,
+            query=query,
+            limit=limit,
+            policy_id=policy_id,
+        )
+    else:
+        retrieval = retrieve_policy_chunk_sources(
+            db=db,
+            query=query,
+            limit=limit,
+            policy_id=None,
+            model_mode=model_mode,
+        )
     response_mode = retrieval.get("response_mode", "answer")
     if response_mode == "out_of_scope":
         answer = build_out_of_scope_answer(query)
     elif response_mode == "policy_selection":
         answer = build_policy_selection_answer(retrieval.get("candidates") or [])
     else:
-        answer = generate_chat_answer(
+        # 정책이 특정된 상세/후속 채팅은 부모 문서 전체를 GPT가 읽기 쉽게
+        # 가공한다. 메인 검색만 짧은 속성 질문에 결정적 응답을 사용한다.
+        focused_answer = None
+        if policy_id is None:
+            focused_answer = build_focused_attribute_answer(
+                query,
+                retrieval["sources"],
+                intent_tags=retrieval.get("intent_tags") or None,
+            )
+        answer = focused_answer or generate_chat_answer(
             query,
             retrieval["sources"],
             conversation_context=build_conversation_context(recent_messages or []),
+            model_mode=model_mode,
         )
     return {
         **retrieval,

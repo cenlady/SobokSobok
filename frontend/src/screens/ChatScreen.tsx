@@ -5,7 +5,7 @@ import PolicyCard, { type PolicyCardData } from '../components/PolicyCard'
 import TopBar from '../components/TopBar'
 import assistantBotIcon from '../assets/sobok-assistant-bot.png'
 import { Panel } from '../components/ui'
-import { apiFetch } from '../lib/api'
+import { apiFetch, apiFetchStream } from '../lib/api'
 import { buildRecommendationRequest } from '../lib/recommend'
 import { useProfile, useSavedPolicies } from '../lib/storage'
 import type {
@@ -89,6 +89,64 @@ function readStoredCandidate(policyId: string | null): ChatPolicyCandidate | nul
   }
 }
 
+interface ChatStreamMeta {
+  session_id: string
+  response_mode?: ChatAnswerResponse['response_mode']
+  sources?: ChatChunkSource[]
+  candidates?: ChatPolicyCandidate[]
+  active_policy_id?: string | null
+}
+
+interface ChatStreamHandlers {
+  onMeta: (meta: ChatStreamMeta) => void
+  onToken: (text: string) => void
+  onDone: (data: { answer: string }) => void
+}
+
+async function consumeChatStream(response: Response, handlers: ChatStreamHandlers) {
+  if (!response.body) throw new Error('AI 스트리밍 응답을 읽을 수 없습니다.')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const consumeEvent = (block: string) => {
+    let eventName = 'message'
+    let data = ''
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith('event:')) eventName = line.slice(6).trim()
+      if (line.startsWith('data:')) data += line.slice(5).trim()
+    }
+    if (!data) return
+
+    const payload = JSON.parse(data) as Record<string, unknown>
+    if (eventName === 'meta') {
+      handlers.onMeta(payload as unknown as ChatStreamMeta)
+    } else if (eventName === 'token' && typeof payload.text === 'string') {
+      handlers.onToken(payload.text)
+    } else if (eventName === 'done') {
+      handlers.onDone({ answer: typeof payload.answer === 'string' ? payload.answer : '' })
+    } else if (eventName === 'error') {
+      throw new Error(
+        typeof payload.message === 'string'
+          ? payload.message
+          : 'AI 답변을 생성하지 못했습니다. 잠시 후 다시 시도해주세요.',
+      )
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
+    const blocks = buffer.split(/\r?\n\r?\n/)
+    buffer = blocks.pop() || ''
+    blocks.forEach(consumeEvent)
+    if (done) break
+  }
+
+  if (buffer.trim()) consumeEvent(buffer)
+}
+
 export default function ChatScreen() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -110,6 +168,22 @@ export default function ChatScreen() {
     const frame = window.requestAnimationFrame(() => {
       const container = messageScrollRef.current
       if (!container) return
+
+      const latestMessage = messages[messages.length - 1]
+      if (latestMessage?.role === 'bot') {
+        const target = container.querySelector<HTMLElement>(
+          `[data-message-id="${latestMessage.id}"]`,
+        )
+        if (target) {
+          const targetTop =
+            target.getBoundingClientRect().top -
+            container.getBoundingClientRect().top +
+            container.scrollTop
+          container.scrollTo({ top: Math.max(0, targetTop - 8), behavior: 'smooth' })
+          return
+        }
+      }
+
       container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
     })
 
@@ -196,11 +270,16 @@ export default function ChatScreen() {
       pending: true,
     })
 
+    let streamedText = ''
+    let streamSources: ChatChunkSource[] = []
+    let streamCandidates: ChatPolicyCandidate[] = []
+    let streamCompleted = false
+
     try {
       const path = policyId
-        ? `/api/v1/chat/ask?policy_id=${encodeURIComponent(policyId)}`
-        : '/api/v1/chat/ask'
-      const data = await apiFetch<ChatAnswerResponse>(path, {
+        ? `/api/v1/chat/ask/stream?policy_id=${encodeURIComponent(policyId)}`
+        : '/api/v1/chat/ask/stream'
+      const response = await apiFetchStream(path, {
         method: 'POST',
         json: {
           query,
@@ -209,17 +288,38 @@ export default function ChatScreen() {
           ...(!policyId && sessionPolicy?.policy_id ? { selected_policy_id: sessionPolicy.policy_id } : {}),
         },
       })
-      persistSessionId(data.session_id)
 
-      if (!policyId && data.active_policy_id === null) {
-        persistSessionPolicy(null)
-      }
-      replace(pendingId, {
-        role: 'bot',
-        text: data.answer || '공고문에서 답변 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요.',
-        sources: data.response_mode === 'policy_selection' ? [] : data.sources,
-        candidates: data.candidates,
+      await consumeChatStream(response, {
+        onMeta: (meta) => {
+          persistSessionId(meta.session_id)
+          streamSources = meta.response_mode === 'policy_selection' ? [] : meta.sources || []
+          streamCandidates = meta.candidates || []
+          if (!policyId && meta.active_policy_id === null) {
+            persistSessionPolicy(null)
+          }
+        },
+        onToken: (text) => {
+          streamedText += text
+          replace(pendingId, {
+            role: 'bot',
+            text: streamedText,
+            sources: streamSources,
+            candidates: streamCandidates,
+            pending: true,
+          })
+        },
+        onDone: ({ answer }) => {
+          streamCompleted = true
+          streamedText = answer || streamedText
+          replace(pendingId, {
+            role: 'bot',
+            text: streamedText || '공고문에서 답변 근거를 찾지 못했어요. 질문을 조금 더 구체적으로 입력해 주세요.',
+            sources: streamSources,
+            candidates: streamCandidates,
+          })
+        },
       })
+      if (!streamCompleted) throw new Error('AI 답변 스트림이 정상적으로 끝나지 않았습니다.')
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
       if (detail.includes('대화 세션')) {
@@ -229,9 +329,11 @@ export default function ChatScreen() {
       }
       replace(pendingId, {
         role: 'bot',
-        text: detail.includes('로그인')
-          ? detail
-          : '정책 내용을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+        text: streamedText
+          ? `${streamedText}\n\n${detail || 'AI 답변을 끝까지 불러오지 못했습니다.'}`
+          : detail || '정책 내용을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+        sources: streamSources,
+        candidates: streamCandidates,
       })
     } finally {
       setSending(false)
@@ -282,10 +384,13 @@ export default function ChatScreen() {
           : '현재 입력 정보로 추천할 정책을 찾지 못했습니다. 마이페이지에서 업종, 지역, 매출 정보를 확인해 주세요.',
         policies,
       })
-    } catch {
+    } catch (error) {
       replace(pendingId, {
         role: 'bot',
-        text: '맞춤 정책을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+        text:
+          error instanceof Error
+            ? error.message
+            : '맞춤 정책을 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.',
       })
     } finally {
       setSending(false)
@@ -501,7 +606,7 @@ function BotBubble({
   const displayText = cleanChatDisplayText(message.text || '')
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-message-id={message.id}>
       {displayText && (
         <div className="flex items-start gap-2">
           <span

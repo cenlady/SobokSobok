@@ -4,7 +4,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.core.rag_utils import OllamaEmbeddingModel, OpenAIEmbeddingModel
+from app.core.model_provider import (
+    get_embedding_model,
+    resolve_embedding_model_spec_for_mode,
+)
 from app.models.normalized_policy import NormalizedPolicy
 from app.models.recommend import RecommendationVector
 from app.services.recommend import (
@@ -27,7 +30,9 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
     }
 
     try:
-        model = _embedding_model()
+        cloud_model, local_model = _embedding_models()
+        cloud_spec = resolve_embedding_model_spec_for_mode("recommendation", "cloud")
+        local_spec = resolve_embedding_model_spec_for_mode("recommendation", "local")
         query = (
             db.query(NormalizedPolicy)
             .filter(NormalizedPolicy.is_active.is_(True))
@@ -56,8 +61,11 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
                 and not force
                 and vector.source_hash == current_hash
                 and vector.embedding_status == "success"
-                and vector.embedding_model == _model_name()
-                and vector.embedding_dim == settings.REC_EMBEDDING_DIM
+                and vector.embedding_provider == "openai+ollama"
+                and vector.embedding_openai_model == cloud_spec.model
+                and vector.embedding_ollama_model == local_spec.model
+                and vector.embedding_openai is not None
+                and vector.embedding_ollama is not None
             ):
                 stats["skipped"] += 1
                 continue
@@ -68,9 +76,11 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
                     vector_type=VECTOR_TYPE_POLICY_RECOMMENDATION,
                     source_text=source_text,
                     source_hash=current_hash,
-                    embedding_provider=settings.REC_EMBEDDING_PROVIDER,
-                    embedding_model=_model_name(),
-                    embedding_dim=settings.REC_EMBEDDING_DIM,
+                    embedding_provider="openai+ollama",
+                    embedding_model=cloud_spec.model,
+                    embedding_dim=cloud_spec.dimensions,
+                    embedding_openai_model=cloud_spec.model,
+                    embedding_ollama_model=local_spec.model,
                     embedding_status="pending",
                     vector_metadata=build_recommendation_metadata(policy),
                 )
@@ -79,17 +89,27 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
             else:
                 vector.source_text = source_text
                 vector.source_hash = current_hash
-                vector.embedding_provider = settings.REC_EMBEDDING_PROVIDER
-                vector.embedding_model = _model_name()
-                vector.embedding_dim = settings.REC_EMBEDDING_DIM
+                vector.embedding_provider = "openai+ollama"
+                vector.embedding_model = cloud_spec.model
+                vector.embedding_dim = cloud_spec.dimensions
+                vector.embedding_openai_model = cloud_spec.model
+                vector.embedding_ollama_model = local_spec.model
                 vector.embedding_status = "pending"
                 vector.embedding_error = None
                 vector.vector_metadata = build_recommendation_metadata(policy)
                 stats["updated"] += 1
 
             try:
-                embedding = model.embed_text(source_text)
-                vector.embedding = fit_embedding_dim(embedding, settings.REC_EMBEDDING_DIM)
+                cloud_embedding = fit_embedding_dim(
+                    cloud_model.embed_text(source_text),
+                    cloud_spec.dimensions,
+                )
+                local_embedding = fit_embedding_dim(
+                    local_model.embed_text(source_text),
+                    local_spec.dimensions,
+                )
+                vector.embedding_openai = cloud_embedding
+                vector.embedding_ollama = local_embedding
                 vector.embedding_status = "success"
                 vector.embedding_error = None
                 db.commit()
@@ -107,14 +127,16 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
                         vector_type=VECTOR_TYPE_POLICY_RECOMMENDATION,
                         source_text=source_text,
                         source_hash=current_hash,
-                        embedding_provider=settings.REC_EMBEDDING_PROVIDER,
-                        embedding_model=_model_name(),
-                        embedding_dim=settings.REC_EMBEDDING_DIM,
+                        embedding_provider="openai+ollama",
+                        embedding_model=cloud_spec.model,
+                        embedding_dim=cloud_spec.dimensions,
+                        embedding_openai_model=cloud_spec.model,
+                        embedding_ollama_model=local_spec.model,
                         vector_metadata=build_recommendation_metadata(policy),
                     )
                     db.add(vector)
                 vector.embedding_status = "failed"
-                vector.embedding_error = str(exc)[:1000]
+                vector.embedding_error = type(exc).__name__
                 db.commit()
                 stats["failed"] += 1
 
@@ -126,19 +148,11 @@ def build_rec_vectors_once(force: bool = False, limit: int | None = None) -> dic
         db.close()
 
 
-def _embedding_model():
-    if settings.REC_EMBEDDING_PROVIDER == "openai":
-        return OpenAIEmbeddingModel(model_name=settings.REC_OPENAI_MODEL)
-    return OllamaEmbeddingModel(
-        model_name=settings.REC_OLLAMA_MODEL,
-        base_url=settings.REC_OLLAMA_BASE_URL,
+def _embedding_models():
+    return (
+        get_embedding_model("recommendation", model_mode="cloud"),
+        get_embedding_model("recommendation", model_mode="local"),
     )
-
-
-def _model_name() -> str:
-    if settings.REC_EMBEDDING_PROVIDER == "openai":
-        return settings.REC_OPENAI_MODEL
-    return settings.REC_OLLAMA_MODEL
 
 
 if __name__ == "__main__":

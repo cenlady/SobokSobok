@@ -18,9 +18,20 @@ export interface Benefit {
   content?: string // 상세 본문
 }
 
+export type AiModelMode = 'cloud' | 'local'
+
+export interface AiModelModes {
+  chat: AiModelMode
+  recommend: AiModelMode
+  policySummary: AiModelMode
+  calendarCoach: AiModelMode
+  documentReview: AiModelMode
+}
+
 export interface Profile {
   ownerName: string
   storeName: string
+  aiModelModes: AiModelModes
   industry: string // 업종
   industryTags: string[]
   region: string // 활동 지역
@@ -147,6 +158,11 @@ export interface UserMe {
 export interface ServerProfile {
   owner_name?: string | null
   store_name?: string | null
+  chat_model_mode: AiModelMode
+  recommend_model_mode: AiModelMode
+  policy_summary_model_mode: AiModelMode
+  calendar_coach_model_mode: AiModelMode
+  document_review_model_mode: AiModelMode
   region?: { sido?: string | null; sigungu?: string | null } | null
   industry: { label?: string | null; tags: string[] }
   business_status: { label?: string | null; tags: string[] }
@@ -162,6 +178,7 @@ export interface ReviewStartResponse {
   session_id: string
   policy_id: string | null
   review_status: ReviewStatus
+  model_mode: AiModelMode
   file_count: number
   /**
    * 요건 대조 단계를 실제로 거치는지. 진행 단계 수를 결정한다.
@@ -238,11 +255,14 @@ export interface ReviewResponse {
   session_id: string
   policy_id: string | null
   review_status: ReviewStatus
+  model_mode: AiModelMode
   requirement_status: RequirementStatus
   requirement_matches: RequirementMatch[]
   files: ReviewFile[]
   /** 진행 중이면 null */
   summary: string | null
+  /** 실패 시 내부 원문 대신 내려오는 안전한 오류 코드 */
+  error_code: string | null
 }
 
 export interface RecommendationExplanationResponse {
@@ -250,7 +270,7 @@ export interface RecommendationExplanationResponse {
   eligibility_status: 'eligible' | 'needs_review' | 'ineligible'
   preference_match: 'exact' | 'partial' | 'none' | 'not_requested'
   confidence: 'high' | 'medium' | 'low'
-  generated_by: 'rules' | 'gemini'
+  generated_by: 'rules' | 'openai' | 'ollama' | 'gemini'
   summary: string
   strengths: string[]
   aspects_to_check: string[]

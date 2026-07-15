@@ -85,7 +85,7 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
           )}
 
           {policy.summary && (
-            <p className="mt-2 line-clamp-2 text-[13px] leading-relaxed text-muted">
+            <p className="mt-2 line-clamp-2 text-[14px] leading-relaxed text-muted">
               {policy.summary}
             </p>
           )}
@@ -101,8 +101,11 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
           onKeyDown={(event) => event.stopPropagation()}
           disabled={savePending}
           aria-label={saved ? '저장 해제' : '정책 저장'}
-          className={`-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full transition-colors active:scale-95 disabled:pointer-events-none disabled:text-faint ${
-            saved ? 'text-brand' : 'text-subtle hover:text-muted'
+          title={saved ? '저장 해제' : '정책 저장'}
+          className={`-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border transition-colors active:scale-95 disabled:pointer-events-none disabled:text-faint ${
+            saved
+              ? 'border-accent/40 bg-accent-soft text-brand shadow-sm'
+              : 'border-line bg-surface text-muted hover:border-brand/40 hover:bg-accent-soft/40 hover:text-brand'
           }`}
         >
           {saved ? <BookmarkCheck size={19} /> : <Bookmark size={19} />}
@@ -111,13 +114,13 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
 
       {/* 추천 이유는 한 줄만. 여러 줄이면 목록이 아니라 문서가 된다. */}
       {policy.reasons?.[0] && (
-        <p className="mt-2.5 line-clamp-1 border-l-2 border-line pl-2.5 text-xs text-subtle">
+        <p className="mt-2.5 line-clamp-1 border-l-2 border-line pl-2.5 text-[13px] text-subtle">
           {policy.reasons[0]}
         </p>
       )}
 
       {(needsReview || isPreferenceMismatch) && (
-        <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-muted">
+        <p className="mt-2 flex items-start gap-1.5 text-[13px] font-medium text-muted">
           <AlertCircle size={13} className="mt-px shrink-0 text-subtle" />
           {needsReview
             ? policy.warnings?.[0] || '지원 자격 조건을 다시 확인해보세요'
