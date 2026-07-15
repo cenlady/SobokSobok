@@ -185,6 +185,9 @@ export default function HomeScreen() {
     .filter((event) => Boolean(event.policy_id) && todayKey <= event.date && event.date <= selected)
     .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
   const hasPolicyScheduleInRange = policySchedulesInRange.length > 0
+  const selectedPolicySchedule =
+    policySchedulesInRange.find((event) => event.date === selected) ??
+    policySchedulesInRange[policySchedulesInRange.length - 1]
 
   // 오늘부터 선택일까지의 정책 일정을 기준으로 신청 준비 순서를 불러온다.
   const handleCoachTimeline = async () => {
@@ -193,9 +196,9 @@ export default function HomeScreen() {
       return
     }
 
-    // 기간의 첫 정책을 대표 공고로 사용하되, 서버에는 목표일을 함께 보내
-    // 오늘부터 선택일까지 포함된 모든 캘린더 일정을 고려하게 한다.
-    const targetPolicyId = policySchedulesInRange[0]?.policy_id
+    // 선택한 날짜의 정책 일정을 우선 사용하고, 없으면 기간 안에서 가장 가까운 정책으로 안내한다.
+    // 서버에는 목표일을 함께 보내 오늘부터 선택일까지 포함된 캘린더 일정을 고려하게 한다.
+    const targetPolicyId = selectedPolicySchedule?.policy_id
     if (!targetPolicyId) return
     if (loadingCoach) return
     setCoachGuide(null)
