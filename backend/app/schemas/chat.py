@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -99,6 +100,49 @@ class SelectChatPolicyRequest(BaseModel):
 class ChatSessionResponse(BaseModel):
     session_id: UUID
     active_policy_id: Optional[str] = None
+
+
+class ChatHistoryPolicy(BaseModel):
+    policy_id: str
+    title: str
+    summary: Optional[str] = None
+    support_type: Optional[str] = None
+    apply_end: Optional[str] = None
+
+
+class ChatHistorySession(BaseModel):
+    session_id: UUID
+    title: str
+    preview: str
+    message_count: int
+    active_policy: Optional[ChatHistoryPolicy] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatHistoryListResponse(BaseModel):
+    items: List[ChatHistorySession]
+    total: int
+    skip: int
+    limit: int
+    has_next: bool
+
+
+class ChatHistoryMessage(BaseModel):
+    message_id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    policy_id: Optional[str] = None
+    policy_title: Optional[str] = None
+    response_mode: Optional[str] = None
+    candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    sources: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime
+
+
+class ChatHistoryDetailResponse(BaseModel):
+    session: ChatHistorySession
+    messages: List[ChatHistoryMessage]
 
 
 class PolicyChunkStatsResponse(BaseModel):

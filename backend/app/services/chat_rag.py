@@ -1196,6 +1196,7 @@ def record_chat_turn(
     response_mode: str,
     context_policy_id: Optional[uuid.UUID],
     candidates: List[Dict[str, Any]],
+    sources: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     db.add(
         ChatMessage(
@@ -1213,6 +1214,7 @@ def record_chat_turn(
             policy_id=context_policy_id,
             response_mode=response_mode,
             candidates=candidates or None,
+            sources=sources or None,
         )
     )
     session.updated_at = func.now()

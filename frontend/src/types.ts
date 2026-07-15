@@ -321,3 +321,46 @@ export interface ChatSessionResponse {
   session_id: string
   active_policy_id?: string | null
 }
+
+export interface ChatHistoryPolicy {
+  policy_id: string
+  title: string
+  summary?: string | null
+  support_type?: string | null
+  apply_end?: string | null
+}
+
+export interface ChatHistorySession {
+  session_id: string
+  title: string
+  preview: string
+  message_count: number
+  active_policy?: ChatHistoryPolicy | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatHistoryListResponse {
+  items: ChatHistorySession[]
+  total: number
+  skip: number
+  limit: number
+  has_next: boolean
+}
+
+export interface ChatHistoryMessage {
+  message_id: string
+  role: 'user' | 'assistant'
+  content: string
+  policy_id?: string | null
+  policy_title?: string | null
+  response_mode?: string | null
+  candidates: Record<string, unknown>[]
+  sources: ChatChunkSource[]
+  created_at: string
+}
+
+export interface ChatHistoryDetailResponse {
+  session: ChatHistorySession
+  messages: ChatHistoryMessage[]
+}

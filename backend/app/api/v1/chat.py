@@ -2,7 +2,7 @@ import json
 from collections.abc import Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -19,11 +19,18 @@ from app.schemas.chat import (
     BuildPolicyChunksResponse,
     ChatAnswerRequest,
     ChatAnswerResponse,
+    ChatHistoryDetailResponse,
+    ChatHistoryListResponse,
     ChatSearchRequest,
     ChatSearchResponse,
     ChatSessionResponse,
     PolicyChunkStatsResponse,
     SelectChatPolicyRequest,
+)
+from app.services.chat_history import (
+    delete_user_chat_session,
+    get_user_chat_session,
+    list_user_chat_sessions,
 )
 from app.services.chat_rag import (
     answer_policy_question,
@@ -45,6 +52,64 @@ from app.services.chat_rag import (
 )
 
 router = APIRouter()
+
+
+@router.get("/sessions", response_model=ChatHistoryListResponse)
+def list_chat_history(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=30, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """로그인 사용자의 대화 목록을 최근 대화 순서로 반환한다."""
+    items, total = list_user_chat_sessions(
+        db,
+        user_id=current_user.id,
+        skip=skip,
+        limit=limit,
+    )
+    return ChatHistoryListResponse(
+        items=items,
+        total=total,
+        skip=skip,
+        limit=limit,
+        has_next=skip + len(items) < total,
+    )
+
+
+@router.get("/sessions/{session_id}", response_model=ChatHistoryDetailResponse)
+def read_chat_history(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """본인이 소유한 대화의 질문과 답변을 다시 불러온다."""
+    try:
+        return get_user_chat_session(
+            db,
+            user_id=current_user.id,
+            session_id=session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_chat_history(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """본인이 소유한 대화와 그 메시지를 삭제한다."""
+    try:
+        delete_user_chat_session(
+            db,
+            user_id=current_user.id,
+            session_id=session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/chunks/stats", response_model=PolicyChunkStatsResponse)
@@ -128,6 +193,7 @@ def ask_policy_chatbot(
             response_mode="answer",
             context_policy_id=None,
             candidates=[],
+            sources=[],
         )
         return {
             **response,
@@ -165,6 +231,7 @@ def ask_policy_chatbot(
         response_mode=response_mode,
         context_policy_id=context_policy_id,
         candidates=response.get("candidates") or [],
+        sources=response.get("sources") or [],
     )
     return {
         **response,
@@ -294,6 +361,7 @@ def ask_policy_chatbot_stream(
                 response_mode=response_mode,
                 context_policy_id=context_policy_id,
                 candidates=response_data.get("candidates") or [],
+                sources=response_data.get("sources") or [],
             )
             yield _sse("done", {"answer": answer})
         except Exception as exc:
