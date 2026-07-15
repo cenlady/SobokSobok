@@ -646,6 +646,15 @@ function RequirementSection({ review }: { review: ReviewResponse }) {
   const covered = requirement_matches.filter((m) => m.likely_covered)
   const missing = requirement_matches.filter((m) => !m.likely_covered)
 
+  // 매칭은 '확정'이 아니라 '후보'다(likely_covered). 어떤 판정·점수로 커버됐는지
+  // 근거를 같이 보여줘야, 잘못 매칭된 ✓를 사용자가 직접 가려낼 수 있다.
+  const typeByFile = new Map<string, string>()
+  for (const f of review.files) {
+    if (f.file_name && f.diagnosis && f.diagnosis.document_type !== 'unknown') {
+      typeByFile.set(f.file_name, f.diagnosis.document_type)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-baseline justify-between">
@@ -658,7 +667,11 @@ function RequirementSection({ review }: { review: ReviewResponse }) {
 
       <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
         {[...covered, ...missing].map((m) => (
-          <RequirementRow key={m.document_name} match={m} />
+          <RequirementRow
+            key={m.document_name}
+            match={m}
+            matchedType={m.matched_file ? typeByFile.get(m.matched_file) : undefined}
+          />
         ))}
       </div>
 
@@ -677,7 +690,13 @@ function RequirementSection({ review }: { review: ReviewResponse }) {
  * 이미 낸 서류에는 가이드를 붙이지 않는다. 이미 가진 것을 어떻게 발급받는지는
  * 알려줄 필요가 없다.
  */
-function RequirementRow({ match }: { match: RequirementMatch }) {
+function RequirementRow({
+  match,
+  matchedType,
+}: {
+  match: RequirementMatch
+  matchedType?: string
+}) {
   const [open, setOpen] = useState(false)
   const guide = !match.likely_covered ? match.guide : null
 
@@ -704,7 +723,11 @@ function RequirementRow({ match }: { match: RequirementMatch }) {
           {match.document_name}
         </span>
         {match.matched_file ? (
-          <span className="mt-0.5 block truncate text-xs text-subtle">{match.matched_file}</span>
+          <span className="mt-0.5 block truncate text-xs text-subtle">
+            {match.matched_file}
+            {matchedType ? ` · '${matchedType}' 판정` : ''} · 유사도{' '}
+            {match.best_similarity.toFixed(2)}
+          </span>
         ) : guide ? (
           <span className="mt-0.5 block truncate text-xs text-primary">
             {guide.issuer} · {guide.fee}
@@ -818,7 +841,12 @@ function FileResult({ file }: { file: ReviewFile }) {
         <FileText size={17} strokeWidth={1.8} className="shrink-0 text-brand" />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold text-ink">{file.file_name}</span>
-          <span className="block text-xs text-subtle">{d.document_type}</span>
+          {/* unknown은 검역이 되돌린 값 — 사용자에게 영문 코드가 아니라 상태로 말한다 */}
+          <span className="block text-xs text-subtle">
+            {d.document_type === 'unknown'
+              ? '서류 유형을 확인하지 못했어요 (요건 대조에서 제외)'
+              : d.document_type}
+          </span>
         </span>
         {issueCount === 0 ? (
           <span className="shrink-0 rounded-md bg-status-green/10 px-2 py-0.5 text-[11px] font-bold text-status-green">
