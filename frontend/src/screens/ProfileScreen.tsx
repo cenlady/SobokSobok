@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   Bell,
+  Bot,
   BriefcaseBusiness,
   CalendarSync,
   ChevronRight,
@@ -124,6 +125,12 @@ export default function ProfileScreen() {
           </div>
 
           <SettingRow
+            icon={Bot}
+            title="AI 사용 방식"
+            description="기능별 클라우드·로컬 AI 설정"
+            onClick={() => navigate('/profile/ai-settings')}
+          />
+          <SettingRow
             icon={CalendarSync}
             title="Google Calendar"
             description="정책 마감일 일정 등록"
@@ -180,13 +187,18 @@ function SettingRow({
   icon: Icon,
   title,
   description,
+  onClick,
 }: {
   icon: typeof MapPin
   title: string
   description: string
+  onClick?: () => void
 }) {
   return (
-    <button className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-cream/60 active:bg-cream">
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-cream/60 active:bg-cream"
+    >
       <Icon size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
       <span className="flex-1">
         <span className="block text-sm font-medium text-ink">{title}</span>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { FileSearch } from 'lucide-react'
+import { BookmarkCheck, CalendarCheck2 } from 'lucide-react'
+import BrandMark from '../components/BrandMark'
 import { Button, Notice } from '../components/ui'
 import { apiFetch } from '../lib/api'
 
@@ -25,44 +26,73 @@ export default function LoginScreen() {
   }
 
   return (
-    <div className="app-frame flex flex-col items-center justify-center px-8">
-      <div className="flex flex-col items-center text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-surface">
-          <FileSearch size={28} strokeWidth={1.7} className="text-brand" />
-        </div>
+    <main className="app-frame flex min-h-[100dvh] flex-col bg-cream px-5">
+      <div className="flex flex-1 flex-col justify-center py-10">
+        <section className="flex flex-col items-center text-center">
+          <BrandMark size={68} />
+          <p className="mt-4 text-2xl font-extrabold tracking-[-0.02em] text-brand">소복소복</p>
 
-        <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-brand">소복소복</h1>
-        <p className="mt-3 text-[15px] leading-relaxed text-muted">
-          사업장 조건에 맞는 지원 정책을
-          <br />
-          한곳에서 확인하세요.
-        </p>
+          <h1 className="mt-6 text-[27px] font-bold leading-[1.35] tracking-[-0.03em] text-ink">
+            사장님에게 맞는
+            <br />
+            지원 정책을 찾아드려요
+          </h1>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            흩어진 지원 공고를 사업장 조건과 비교해
+            <br />
+            신청할 만한 정책부터 보여드릴게요.
+          </p>
+        </section>
+
+        <section className="mt-9">
+          <Button
+            onClick={startGoogleLogin}
+            disabled={loading}
+            variant="secondary"
+            full
+            className="gap-3 shadow-card"
+          >
+            {loading ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-muted" />
+            ) : (
+              <GoogleMark />
+            )}
+            {loading ? 'Google로 이동 중…' : 'Google 계정으로 계속하기'}
+          </Button>
+
+          <div className="mt-4 grid grid-cols-2 divide-x divide-line rounded-xl border border-line bg-surface/70 py-3.5">
+            <LoginBenefit icon={BookmarkCheck} label="맞춤 정책 저장" />
+            <LoginBenefit icon={CalendarCheck2} label="마감일 일정 등록" />
+          </div>
+
+          {error && (
+            <Notice tone="error" className="mt-3" title="로그인 연결이 원활하지 않아요">
+              잠시 후 버튼을 다시 눌러주세요.
+            </Notice>
+          )}
+        </section>
       </div>
 
-      <div className="mt-12 w-full">
-        <Button
-          onClick={startGoogleLogin}
-          disabled={loading}
-          variant="secondary"
-          full
-          className="gap-3"
-        >
-          <GoogleMark />
-          {loading ? '이동 중…' : 'Google로 시작하기'}
-        </Button>
+      <p className="pb-7 text-center text-xs leading-relaxed text-subtle">
+        로그인하면 저장한 정책을 어느 기기에서든
+        <br />
+        이어서 확인할 수 있어요.
+      </p>
+    </main>
+  )
+}
 
-        {error && (
-          <Notice tone="error" className="mt-4">
-            {error}
-          </Notice>
-        )}
-
-        <p className="mt-6 text-center text-xs leading-relaxed text-subtle">
-          로그인하면 저장한 정책이 계정에 보관되고,
-          <br />
-          마감일을 구글 캘린더에 등록할 수 있어요.
-        </p>
-      </div>
+function LoginBenefit({
+  icon: Icon,
+  label,
+}: {
+  icon: typeof BookmarkCheck
+  label: string
+}) {
+  return (
+    <div className="flex items-center justify-center gap-2 px-2 text-xs font-semibold text-muted">
+      <Icon size={16} strokeWidth={1.9} className="shrink-0 text-brand" />
+      <span>{label}</span>
     </div>
   )
 }

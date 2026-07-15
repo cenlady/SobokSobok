@@ -135,8 +135,8 @@ export default function PolicySearchScreen() {
           unmet_conditions: item.unmet_conditions,
         })),
       )
-    } catch {
-      setRecError('추천을 불러오지 못했습니다.')
+    } catch (error) {
+      setRecError(error instanceof Error ? error.message : '추천을 불러오지 못했습니다.')
     } finally {
       setRecLoading(false)
     }

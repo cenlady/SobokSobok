@@ -41,10 +41,12 @@ export class UnauthorizedError extends Error {
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code: string | null
+  constructor(status: number, message: string, code: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -81,20 +83,59 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await readErrorDetail(response))
+    const error = await readErrorDetail(response)
+    throw new ApiError(response.status, error.message, error.code)
   }
 
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
 
-async function readErrorDetail(response: Response): Promise<string> {
+/** 인증을 붙인 SSE/스트리밍 응답용 요청. 응답 body는 호출부가 직접 읽는다. */
+export async function apiFetchStream(path: string, options: RequestOptions = {}): Promise<Response> {
+  const { method = 'GET', json, body, anonymous = false } = options
+
+  const headers: Record<string, string> = { Accept: 'text/event-stream' }
+  if (!anonymous) {
+    const token = getToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+  }
+  if (json !== undefined) headers['Content-Type'] = 'application/json'
+
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers,
+    body: json !== undefined ? JSON.stringify(json) : body,
+  })
+
+  if (response.status === 401) {
+    clearToken()
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    const error = await readErrorDetail(response)
+    throw new ApiError(response.status, error.message, error.code)
+  }
+
+  return response
+}
+
+async function readErrorDetail(
+  response: Response,
+): Promise<{ message: string; code: string | null }> {
   try {
     const data = await response.json()
     const detail = (data as { detail?: unknown }).detail
-    if (typeof detail === 'string') return detail
+    const errorCode = (data as { error_code?: unknown }).error_code
+    if (typeof detail === 'string') {
+      return {
+        message: detail,
+        code: typeof errorCode === 'string' ? errorCode : null,
+      }
+    }
   } catch {
     // JSON이 아니면 상태 코드만으로 안내한다
   }
-  return `요청에 실패했습니다 (HTTP ${response.status})`
+  return { message: `요청에 실패했습니다 (HTTP ${response.status})`, code: null }
 }
