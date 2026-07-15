@@ -12,7 +12,7 @@ import {
   StatusBadge,
   TagList,
 } from '../components/ui'
-import { toDateKey } from '../lib/calendar'
+import { localDateKey, toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
@@ -148,6 +148,8 @@ export default function HomeScreen() {
   }
 
   const dayList = dated.filter((p) => toDateKey(p.apply_end) === selected)
+  const todayKey = localDateKey(new Date())
+  const isPastDate = selected < todayKey
 
   // 선택한 날짜와 연결된 정책을 기준으로 신청 일정 안내를 불러온다.
   const handleCoachTimeline = async () => {
@@ -297,7 +299,7 @@ export default function HomeScreen() {
       <section className="mt-3 px-5">
         <Button
           onClick={handleCoachTimeline}
-          disabled={loadingCoach}
+          disabled={loadingCoach || isPastDate}
           full
           variant="secondary"
         >
@@ -306,7 +308,7 @@ export default function HomeScreen() {
           ) : (
             <CalendarDays size={16} />
           )}
-          신청 일정 안내 받기
+          {isPastDate ? '오늘 이후 날짜만 안내받을 수 있어요' : '신청 일정 안내 받기'}
         </Button>
       </section>
 
