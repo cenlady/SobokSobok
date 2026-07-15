@@ -389,6 +389,55 @@ async def get_calendar_coach_timeline(
             # 날짜 파싱이 불가능한 잘못된 일정 포맷은 캘린더 코칭 신뢰도를 위해 스킵(Skip) 처리
             pass
 
+    days_until_target = max((coaching_target_date - today_kst).days, 0)
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+
+    schedules_by_date: dict[str, list[dict]] = {}
+    for item in filtered_schedules:
+        schedules_by_date.setdefault(item["date"], []).append(item)
+
+    busy_day_summaries: list[str] = []
+    for date_key in sorted(schedules_by_date.keys()):
+        events = schedules_by_date[date_key]
+        sample = ", ".join(str(event.get("summary") or "일정") for event in events[:2])
+        if len(events) > 2:
+            sample += f" 외 {len(events) - 2}건"
+        busy_day_summaries.append(f"{date_key}: {len(events)}건 ({sample})")
+    busy_days_text = "\n".join(busy_day_summaries[:10]) if busy_day_summaries else "기간 내 등록된 개인 일정이 없습니다."
+
+    quiet_weekdays: list[str] = []
+    for day_offset in range(days_until_target + 1):
+        candidate_date = today_kst + timedelta(days=day_offset)
+        candidate_key = candidate_date.strftime("%Y-%m-%d")
+        if candidate_date.weekday() < 5 and candidate_key not in schedules_by_date:
+            quiet_weekdays.append(f"{candidate_key} ({weekday_names[candidate_date.weekday()]})")
+        if len(quiet_weekdays) >= 5:
+            break
+    quiet_days_text = ", ".join(quiet_weekdays) if quiet_weekdays else "기간 내 비어 있는 평일이 부족합니다. 짧은 확인 작업 중심으로 배치하세요."
+
+    timeline_headings: list[str] = []
+    seen_headings: set[str] = set()
+
+    def add_timeline_heading(day_label: str, phase_date: date, title: str) -> None:
+        if phase_date < today_kst or phase_date > coaching_target_date or day_label in seen_headings:
+            return
+        seen_headings.add(day_label)
+        date_label = f"{phase_date.year}년 {phase_date.month}월 {phase_date.day}일"
+        timeline_headings.append(f"{day_label} ({date_label}) - {title}")
+
+    today_day_label = "D-Day" if days_until_target == 0 else f"D-{days_until_target}"
+    add_timeline_heading(today_day_label, today_kst, "오늘 우선순위")
+    for offset, title in [
+        (14, "준비 개시"),
+        (7, "우대 증빙 발급 및 보완"),
+        (3, "최종 검토"),
+        (0, "접수 완료"),
+    ]:
+        phase_date = coaching_target_date - timedelta(days=offset)
+        day_label = "D-Day" if offset == 0 else f"D-{offset}"
+        add_timeline_heading(day_label, phase_date, title)
+    timeline_headings_text = "\n".join(timeline_headings)
+
     # 3) 해당 지원사업에 등록된 RAG 청크 정보 추출
     chunks = db.query(PolicyChunk).filter(PolicyChunk.policy_id == policy_id).all()
     rag_context = "\n".join([c.chunk_text for c in chunks]) if chunks else "상세 제출 서류 및 우대 조건이 누락되었습니다. 일반 공고 정보에 준합니다."
@@ -432,11 +481,19 @@ async def get_calendar_coach_timeline(
         )
 
     system_prompt = (
-        "당신은 소상공인 사장님들의 지원금 신청 일정을 밀착 코칭해 주는 친절하고 전문적인 AI 비서 '소복이'입니다. "
-        "사장님의 개인 일정이 지원사업 준비에 방해되지 않도록 캘린더 빈틈을 노린 세심한 타임라인 가이드를 짜줍니다.\n"
-        "[중요형식지침]: 마크다운 특수기호(샵 #, 별표 *, 백틱 ` 등)를 절대 사용하지 마세요. "
-        "오직 줄바꿈(엔터), 번호 매기기(1., 2.), 그리고 적절한 이모지만을 활용하여, "
-        "모바일 화면에서 바로 읽기 쉬운 깔끔한 플레인 텍스트로만 응답해야 합니다."
+        "당신은 소상공인 사장님들의 지원금 신청 일정을 밀착 코칭해 주는 전문 AI 비서 '소복이'입니다. "
+        "응답은 모바일 하단 시트의 카드형 체크리스트로 표시됩니다. "
+        "사용자가 바로 실행할 수 있도록 짧고 구체적인 행동 중심으로 안내하세요.\n"
+        "[작성 원칙]\n"
+        "1. 공고, RAG 상세 요건, 서류 발급 가이드에 없는 서류나 자격조건을 지어내지 마세요.\n"
+        "2. 사용자의 바쁜 날짜에는 방문, 발급, 제출 같은 집중 작업을 배치하지 말고 빈 평일 후보를 우선 활용하세요.\n"
+        "3. 각 행동은 '확인하기', '발급하기', '저장하기', '제출하기'처럼 사용자가 바로 할 수 있는 동사형으로 쓰세요.\n"
+        "4. 한 문장은 38자 안팎으로 짧게 쓰고, 같은 말을 반복하지 마세요.\n"
+        "[출력 형식]\n"
+        "첫 줄은 반드시 '한줄요약: ...' 형식으로 작성하세요.\n"
+        "그 다음에는 사용자가 제공받은 단계 제목만 그대로 사용하세요.\n"
+        "각 단계마다 번호 항목 2~3개를 쓰고, 각 번호 아래에는 • 불릿 1~2개를 쓰세요.\n"
+        "마크다운 제목, 굵게, 코드, 표, JSON, 하이픈 불릿, 이모지는 사용하지 마세요."
     )
     
     user_prompt = (
@@ -444,16 +501,21 @@ async def get_calendar_coach_timeline(
         f"- 지원사업명: {policy.title}\n"
         f"- 실제 신청 마감일: {deadline_str}\n"
         f"- 준비 완료 목표일: {coaching_target_str}\n"
+        f"- 오늘(KST): {today_kst.strftime('%Y-%m-%d')}\n"
+        f"- 남은 준비 기간: {days_until_target}일\n"
         f"- 필수 구비 서류: {required_docs_text}\n"
         f"- RAG 상세 서류 요건:\n{rag_context}\n\n"
         f"- 서류 발급 가이드:\n{prep_guides_text}\n\n"
         f"=== [사장님의 구글 캘린더 스케줄] ===\n"
         f"{schedules_text}\n\n"
-        f"위 두 가지 데이터를 치밀하게 대조 및 분석하여, "
-        f"사장님이 바쁜 구글 개인 일정(겹치는 날)을 피해 실제 신청 마감일 전에 접수를 마치도록 "
-        f"준비 완료 목표일을 기준으로 D-14(준비 개시), D-7(우대 증빙 발급 및 보완), D-3(최종 검토), D-Day(접수 완료) "
-        f"단계별 구체적인 행동 가이드를 친근하고 상냥한 구어체 톤으로 작성해 주세요.\n"
-        f"[필수]: 절대로 # 이나 * 같은 마크다운 특수 기호를 내용에 포함하지 말고, 순수 한글 텍스트와 이모지로만 읽기 쉽게 줄바꿈해 출력하세요."
+        f"=== [일정 분석] ===\n"
+        f"- 바쁜 날짜 요약:\n{busy_days_text}\n"
+        f"- 발급/방문 추천 후보일: {quiet_days_text}\n\n"
+        f"=== [반드시 사용할 단계 제목] ===\n"
+        f"{timeline_headings_text}\n\n"
+        f"위 데이터를 대조하여, 오늘부터 목표일까지 실제로 끝낼 수 있는 신청 준비 체크리스트를 작성하세요. "
+        f"서류 발급, 누락 위험, 캘린더가 바쁜 날 회피, 최종 제출 확인을 반드시 포함하세요. "
+        f"단, 공고에서 확인되지 않은 내용은 '공고에서 확인 필요'라고 쓰세요."
     )
 
     # 5) 캘린더 CRUD와 분리된 AI 코치 전용 모델 설정을 사용한다.
