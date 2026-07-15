@@ -148,7 +148,21 @@ class ChatMessage(Base):
     )
     response_mode = Column(String(30), nullable=True)
     candidates = Column(JSON, nullable=True)
+    sources = Column(JSON, nullable=True, comment="채팅 복원용 답변 근거 목록")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     session = relationship("ChatSession", back_populates="messages")
     policy = relationship("NormalizedPolicy", foreign_keys=[policy_id])
+
+
+CHAT_HISTORY_SCHEMA_SQL = [
+    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS sources JSON",
+]
+
+
+def ensure_chat_history_schema(bind) -> None:
+    """기존 DB에도 채팅 복원용 컬럼을 안전하게 추가한다."""
+    if not settings.database_url.startswith("postgresql"):
+        return
+    for statement in CHAT_HISTORY_SCHEMA_SQL:
+        bind.execute(text(statement))

@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowRight, ChevronDown, LoaderCircle, Send, X } from 'lucide-react'
+import { ArrowRight, ChevronDown, History, LoaderCircle, MessageSquarePlus, Send, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import PolicyCard, { type PolicyCardData } from '../components/PolicyCard'
+import ChatHistoryDrawer from '../components/ChatHistoryDrawer'
 import TopBar from '../components/TopBar'
 import assistantBotIcon from '../assets/sobok-assistant-bot.png'
 import { Panel } from '../components/ui'
-import { apiFetch, apiFetchStream } from '../lib/api'
+import { ApiError, apiFetch, apiFetchStream } from '../lib/api'
 import { buildRecommendationRequest } from '../lib/recommend'
 import { useProfile, useSavedPolicies } from '../lib/storage'
 import type {
   ChatAnswerResponse,
   ChatChunkSource,
+  ChatHistoryDetailResponse,
+  ChatHistoryListResponse,
+  ChatHistoryPolicy,
+  ChatHistorySession,
   ChatPolicyCandidate,
   ChatSessionResponse,
   RecommendationPreviewResponse,
@@ -89,6 +94,105 @@ function readStoredCandidate(policyId: string | null): ChatPolicyCandidate | nul
   }
 }
 
+function historyPolicyToCandidate(policy?: ChatHistoryPolicy | null): ChatPolicyCandidate | null {
+  if (!policy) return null
+  return {
+    policy_id: policy.policy_id,
+    title: policy.title,
+    summary: policy.summary,
+    support_type: policy.support_type,
+    apply_end: policy.apply_end,
+    score: 0,
+    source_count: 0,
+  }
+}
+
+function historyCandidateToChatCandidate(value: Record<string, unknown>): ChatPolicyCandidate | null {
+  const policyId = typeof value.policy_id === 'string' ? value.policy_id : null
+  const title = typeof value.title === 'string' ? value.title : null
+  if (!policyId || !title) return null
+  return {
+    policy_id: policyId,
+    title,
+    summary: typeof value.summary === 'string' ? value.summary : null,
+    support_type: typeof value.support_type === 'string' ? value.support_type : null,
+    apply_end: typeof value.apply_end === 'string' ? value.apply_end : null,
+    score: typeof value.score === 'number' ? value.score : 0,
+    source_count: typeof value.source_count === 'number' ? value.source_count : 0,
+  }
+}
+
+function historyCandidateToPolicy(value: Record<string, unknown>): PolicyCardData | null {
+  const policyId = typeof value.policy_id === 'string' ? value.policy_id : null
+  const title = typeof value.title === 'string' ? value.title : null
+  if (!policyId || !title) return null
+
+  const eligibilityStatus =
+    value.eligibility_status === 'eligible' || value.eligibility_status === 'needs_review'
+      ? value.eligibility_status
+      : undefined
+  const preferenceMatch =
+    value.preference_match === 'exact' ||
+    value.preference_match === 'partial' ||
+    value.preference_match === 'none' ||
+    value.preference_match === 'not_requested'
+      ? value.preference_match
+      : undefined
+  const matchStatus =
+    value.match_status === 'eligible' ||
+    value.match_status === 'needs_review' ||
+    value.match_status === 'near_match'
+      ? value.match_status
+      : undefined
+  const stringList = (candidate: unknown) =>
+    Array.isArray(candidate) ? candidate.filter((item): item is string => typeof item === 'string') : []
+
+  return {
+    policy_id: policyId,
+    title,
+    summary: typeof value.summary === 'string' ? value.summary : null,
+    support_type: typeof value.support_type === 'string' ? value.support_type : null,
+    apply_end: typeof value.apply_end === 'string' ? value.apply_end : null,
+    rank_score: typeof value.rank_score === 'number' ? value.rank_score : undefined,
+    eligibility_status: eligibilityStatus,
+    preference_match: preferenceMatch,
+    match_status: matchStatus,
+    reasons: stringList(value.reasons),
+    warnings: stringList(value.warnings),
+    unmet_conditions: stringList(value.unmet_conditions),
+  }
+}
+
+function restoreHistoryMessages(detail: ChatHistoryDetailResponse): Message[] {
+  return detail.messages.map((message, index) => {
+    if (message.role === 'user') {
+      return {
+        id: index + 1,
+        role: 'user' as const,
+        text: message.content,
+      }
+    }
+
+    const candidates = message.candidates
+      .map(historyCandidateToChatCandidate)
+      .filter((candidate): candidate is ChatPolicyCandidate => candidate !== null)
+    const policies = message.response_mode === 'recommendation'
+      ? message.candidates
+          .map(historyCandidateToPolicy)
+          .filter((policy): policy is PolicyCardData => policy !== null)
+      : []
+
+    return {
+      id: index + 1,
+      role: 'bot' as const,
+      text: message.content,
+      sources: message.sources,
+      candidates: policies.length > 0 ? undefined : candidates,
+      policies: policies.length > 0 ? policies : undefined,
+    }
+  })
+}
+
 interface ChatStreamMeta {
   session_id: string
   response_mode?: ChatAnswerResponse['response_mode']
@@ -161,6 +265,13 @@ export default function ChatScreen() {
   const [selectingPolicyId, setSelectingPolicyId] = useState<string | null>(null)
   const [pendingSave, setPendingSave] = useState<string | null>(null)
   const [policyContext, setPolicyContext] = useState<PolicyContext | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historySessions, setHistorySessions] = useState<ChatHistorySession[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyRestoring, setHistoryRestoring] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [selectingHistoryId, setSelectingHistoryId] = useState<string | null>(null)
+  const [deletingHistoryId, setDeletingHistoryId] = useState<string | null>(null)
   const nextId = useRef(2)
   const messageScrollRef = useRef<HTMLDivElement>(null)
 
@@ -191,13 +302,55 @@ export default function ChatScreen() {
   }, [messages])
 
   useEffect(() => {
+    let ignore = false
+    const storedSessionId = readStorage(sessionStorageKey(policyId))
+    const storedPolicy = readStoredCandidate(policyId)
+
     setMessages(initialMessagesFor(policyId))
-    setChatSessionId(readStorage(sessionStorageKey(policyId)))
-    setSessionPolicy(readStoredCandidate(policyId))
+    setChatSessionId(storedSessionId)
+    setSessionPolicy(storedPolicy)
     setInput('')
     setSending(false)
     setSelectingPolicyId(null)
     nextId.current = 2
+
+    if (!storedSessionId) {
+      setHistoryRestoring(false)
+      return () => {
+        ignore = true
+      }
+    }
+
+    setHistoryRestoring(true)
+    apiFetch<ChatHistoryDetailResponse>(`/api/v1/chat/sessions/${storedSessionId}`)
+      .then((detail) => {
+        if (ignore) return
+        const restoredMessages = restoreHistoryMessages(detail)
+        const activePolicy = historyPolicyToCandidate(detail.session.active_policy)
+        setMessages(restoredMessages.length > 0 ? restoredMessages : initialMessagesFor(policyId))
+        setChatSessionId(detail.session.session_id)
+        if (!policyId) {
+          setSessionPolicy(activePolicy)
+          writeStorage(policyStorageKey(null), activePolicy ? JSON.stringify(activePolicy) : null)
+        }
+        nextId.current = Math.max(2, restoredMessages.length + 1)
+      })
+      .catch((error) => {
+        if (ignore) return
+        if (error instanceof ApiError && error.status === 404) {
+          writeStorage(sessionStorageKey(policyId), null)
+          writeStorage(policyStorageKey(policyId), null)
+          setChatSessionId(null)
+          setSessionPolicy(null)
+        }
+      })
+      .finally(() => {
+        if (!ignore) setHistoryRestoring(false)
+      })
+
+    return () => {
+      ignore = true
+    }
   }, [policyId])
 
   useEffect(() => {
@@ -236,6 +389,89 @@ export default function ChatScreen() {
   const persistSessionPolicy = (candidate: ChatPolicyCandidate | null) => {
     setSessionPolicy(candidate)
     writeStorage(policyStorageKey(policyId), candidate ? JSON.stringify(candidate) : null)
+  }
+
+  const openChatHistory = () => {
+    setHistoryOpen(true)
+    setHistoryLoading(true)
+    setHistoryError(null)
+    void apiFetch<ChatHistoryListResponse>('/api/v1/chat/sessions?limit=100')
+      .then((data) => setHistorySessions(data.items))
+      .catch((error) => {
+        setHistoryError(error instanceof Error ? error.message : '잠시 후 다시 시도해 주세요.')
+      })
+      .finally(() => setHistoryLoading(false))
+  }
+
+  const startNewConversation = () => {
+    setMessages(initialMessagesFor(policyId))
+    setChatSessionId(null)
+    setSessionPolicy(null)
+    setInput('')
+    setSending(false)
+    setSelectingPolicyId(null)
+    writeStorage(sessionStorageKey(policyId), null)
+    writeStorage(policyStorageKey(policyId), null)
+    nextId.current = 2
+    setHistoryOpen(false)
+  }
+
+  const applyHistoryDetail = (detail: ChatHistoryDetailResponse) => {
+    const restoredMessages = restoreHistoryMessages(detail)
+    const activePolicy = historyPolicyToCandidate(detail.session.active_policy)
+
+    writeStorage(sessionStorageKey(null), detail.session.session_id)
+    writeStorage(policyStorageKey(null), activePolicy ? JSON.stringify(activePolicy) : null)
+
+    if (policyId) {
+      setHistoryOpen(false)
+      navigate('/chat', { replace: true })
+      return
+    }
+
+    setMessages(restoredMessages.length > 0 ? restoredMessages : initialMessages)
+    setChatSessionId(detail.session.session_id)
+    setSessionPolicy(activePolicy)
+    nextId.current = Math.max(2, restoredMessages.length + 1)
+    setHistoryOpen(false)
+  }
+
+  const selectHistorySession = async (session: ChatHistorySession) => {
+    if (session.session_id === chatSessionId && !policyId) {
+      setHistoryOpen(false)
+      return
+    }
+    setSelectingHistoryId(session.session_id)
+    setHistoryError(null)
+    try {
+      const detail = await apiFetch<ChatHistoryDetailResponse>(
+        `/api/v1/chat/sessions/${session.session_id}`,
+      )
+      applyHistoryDetail(detail)
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '대화를 다시 불러오지 못했어요.')
+    } finally {
+      setSelectingHistoryId(null)
+    }
+  }
+
+  const deleteHistorySession = async (session: ChatHistorySession) => {
+    const confirmed = window.confirm(`‘${session.title}’ 대화를 삭제할까요? 삭제한 대화는 복구할 수 없습니다.`)
+    if (!confirmed) return
+
+    setDeletingHistoryId(session.session_id)
+    setHistoryError(null)
+    try {
+      await apiFetch<void>(`/api/v1/chat/sessions/${session.session_id}`, { method: 'DELETE' })
+      setHistorySessions((previous) => previous.filter((item) => item.session_id !== session.session_id))
+      if (chatSessionId === session.session_id) {
+        startNewConversation()
+      }
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '대화를 삭제하지 못했어요.')
+    } finally {
+      setDeletingHistoryId(null)
+    }
   }
 
   const clearSelectedPolicy = async () => {
@@ -423,7 +659,7 @@ export default function ChatScreen() {
 
   const send = (text: string) => {
     const trimmed = text.trim()
-    if (!trimmed || sending) return
+    if (!trimmed || sending || historyRestoring) return
     push({ role: 'user', text: trimmed })
     setInput('')
     void askChatbot(trimmed)
@@ -447,10 +683,51 @@ export default function ChatScreen() {
       <TopBar />
       <h1 className="sr-only">정책 도우미</h1>
 
+      <div className="flex items-center justify-between gap-3 px-4 pb-2">
+        <button
+          type="button"
+          onClick={openChatHistory}
+          disabled={sending}
+          className="flex min-h-11 items-center gap-2 rounded-xl border border-line bg-surface px-3.5 text-sm font-bold text-ink shadow-card outline-none transition-colors active:bg-line/30 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-primary/20"
+        >
+          <History size={17} className="text-brand" />
+          대화 기록
+        </button>
+        <button
+          type="button"
+          onClick={startNewConversation}
+          disabled={sending || historyRestoring}
+          className="flex min-h-11 items-center gap-2 rounded-xl px-3 text-sm font-bold text-primary outline-none transition-colors active:bg-primary-soft disabled:text-faint focus-visible:ring-2 focus-visible:ring-primary/20"
+        >
+          <MessageSquarePlus size={17} />
+          새 대화
+        </button>
+      </div>
+
+      <ChatHistoryDrawer
+        open={historyOpen}
+        sessions={historySessions}
+        currentSessionId={chatSessionId}
+        loading={historyLoading}
+        error={historyError}
+        selectingSessionId={selectingHistoryId}
+        deletingSessionId={deletingHistoryId}
+        onClose={() => setHistoryOpen(false)}
+        onNewChat={startNewConversation}
+        onSelect={(session) => void selectHistorySession(session)}
+        onDelete={(session) => void deleteHistorySession(session)}
+      />
+
       <div
         ref={messageScrollRef}
         className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 pb-5 pt-1"
       >
+        {historyRestoring && (
+          <div className="flex items-center justify-center gap-2 py-2 text-xs font-medium text-muted">
+            <LoaderCircle size={15} className="animate-spin text-primary" />
+            이전 대화를 불러오는 중이에요.
+          </div>
+        )}
         {policyId && (
           <section className="rounded-2xl bg-brand-dark p-4 text-white shadow-card">
             <div className="flex items-start gap-3">
@@ -559,13 +836,14 @@ export default function ChatScreen() {
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            disabled={historyRestoring}
             placeholder="확인할 내용을 입력하세요"
             aria-label="정책 질문"
             className="min-w-0 flex-1 bg-transparent pr-2 text-[15px] text-ink outline-none placeholder:text-subtle"
           />
           <button
             type="submit"
-            disabled={sending || !input.trim()}
+            disabled={sending || historyRestoring || !input.trim()}
             aria-label="질문 보내기"
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-white outline-none transition-colors active:bg-primary-hover disabled:bg-line disabled:text-subtle focus-visible:ring-2 focus-visible:ring-primary/25"
           >
