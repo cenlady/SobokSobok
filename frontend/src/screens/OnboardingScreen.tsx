@@ -90,7 +90,8 @@ export default function OnboardingScreen() {
       markOnboarded()
       // 수정한 경우엔 바뀐 프로필로 다시 계산된 추천을 바로 보여준다.
       // (정책 찾기 화면은 마운트될 때 프로필을 새로 읽어 추천을 다시 요청한다)
-      navigate(isEditing ? '/policies' : '/', { replace: true })
+      // 최초 온보딩이면 환영 화면을 한 번 거쳐 홈으로 간다.
+      navigate(isEditing ? '/policies' : '/welcome', { replace: true })
     } catch {
       setError('저장에 실패했습니다. 잠시 후 다시 시도해주세요.')
       setSaving(false)

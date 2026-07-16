@@ -12,6 +12,7 @@ import PolicyDetailScreen from './screens/PolicyDetailScreen'
 import LoginScreen from './screens/LoginScreen'
 import AuthCallbackScreen from './screens/AuthCallbackScreen'
 import AiSettingsScreen from './screens/AiSettingsScreen'
+import WelcomeScreen from './screens/WelcomeScreen'
 
 export default function App() {
   return (
@@ -23,8 +24,9 @@ export default function App() {
 
         {/* 이하 전부 로그인 필수. 온보딩을 안 마쳤으면 /onboarding으로 보낸다. */}
         <Route element={<RequireAuth />}>
-          {/* 온보딩은 하단 탭 없이 전체 화면 */}
+          {/* 온보딩·환영은 하단 탭 없이 전체 화면 */}
           <Route path="/onboarding" element={<OnboardingScreen />} />
+          <Route path="/welcome" element={<WelcomeScreen />} />
 
           {/* 하단 탭이 있는 화면 */}
           <Route element={<AppLayout />}>
