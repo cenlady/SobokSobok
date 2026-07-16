@@ -3,7 +3,7 @@ import json
 import uuid
 
 from app.core.database import SessionLocal
-from app.services.chat_rag import build_policy_chunks, get_policy_chunk_stats, is_langsmith_enabled
+from app.services.chat_rag import build_policy_chunks, get_policy_chunk_stats
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,7 +44,6 @@ def main() -> None:
                     "before": before,
                     "result": result,
                     "after": after,
-                    "langsmith_enabled": is_langsmith_enabled(),
                 },
                 ensure_ascii=False,
                 indent=2,
