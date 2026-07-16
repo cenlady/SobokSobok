@@ -1025,7 +1025,23 @@ function cleanChatDisplayText(value: string) {
 function isRecommendationRequest(text: string) {
   const normalized = text.trim().toLowerCase()
   const recommendationSignals = ['추천', '맞춤', '나에게', '내게', '내가 받을', '받을 수', '찾아줘', '찾아 줘']
-  const nonPolicySignals = ['맛집', '음식', '메뉴', '노래', '영화', '드라마', '여행', '옷', '코디', '머리', '단발', '미용실']
+  const dailyLifeSignals = [
+    '날씨', '기온', '비와', '눈와', '더워', '추워',
+    '아침', '점심', '저녁', '야식', '브런치', '메뉴', '식사', '밥', '음식', '요리', '레시피',
+    '맛집', '식당', '카페', '커피', '디저트', '배달',
+    '노래', '영화', '드라마', '음악', '게임', '웹툰', '여행', '휴가', '숙소', '취미',
+    '옷', '코디', '패션', '머리', '단발', '미용실', '운동', '헬스', '다이어트',
+    '건강', '병원', '반려동물', '강아지', '고양이',
+  ]
+  const specificPolicySignals = [
+    '복지', '지원금', '보조금', '장려금', '대출', '융자', '보증', '정책자금',
+    '혜택', '바우처', '지원사업', '감면', '손실보상', '긴급자금', '재난지원',
+  ]
+  const businessContextSignals = [
+    '창업', '사업장', '장사', '영업', '매장', '점포', '경영', '운영', '매출', '고용',
+    '직원', '임대료', '시설', '장비', '판로', '수출', '업종', '미용실', '식당', '카페',
+    '공장', '제조', '농업', '어업', '소공인',
+  ]
   const policyDomainSignals = [
     '정책',
     '공고',
@@ -1048,12 +1064,20 @@ function isRecommendationRequest(text: string) {
     '업종',
     '매출',
   ]
-  if (nonPolicySignals.some((keyword) => normalized.includes(keyword))) return false
+  const hasRecommendationSignal = recommendationSignals.some((keyword) => normalized.includes(keyword))
+  const hasPolicyDomainSignal = policyDomainSignals.some((keyword) => normalized.includes(keyword))
+  if (!hasRecommendationSignal || (!hasPolicyDomainSignal && normalized.length > 8)) return false
+
+  const hasDailyLifeSignal = dailyLifeSignals.some((keyword) => normalized.includes(keyword))
+  if (hasDailyLifeSignal) {
+    const hasSpecificPolicySignal = specificPolicySignals.some((keyword) => normalized.includes(keyword))
+    const hasBusinessContextSignal = businessContextSignals.some((keyword) => normalized.includes(keyword))
+    if (!hasSpecificPolicySignal && !hasBusinessContextSignal) return false
+  }
 
   // 로그인 사용자의 메인 채팅에서 "추천해줘"만 입력해도 프로필 기반 추천으로 연결한다.
-  // 다만 정책과 무관한 추천 키워드는 위에서 먼저 제외한다.
-  return recommendationSignals.some((keyword) => normalized.includes(keyword))
-    && (policyDomainSignals.some((keyword) => normalized.includes(keyword)) || normalized.length <= 8)
+  // 일상 주제가 섞이면 구체적인 정책 수단이나 사업 맥락이 있어야 추천으로 연결한다.
+  return true
 }
 
 function uniqueSourcesByPolicy(sources: ChatChunkSource[]) {

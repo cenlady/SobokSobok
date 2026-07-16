@@ -17,7 +17,11 @@ from app.services.recommend import (
     profile_validation_warnings,
     recommend_policies,
 )
-from app.services.chat_rag import get_or_create_chat_session, record_recommendation_turn
+from app.services.chat_rag import (
+    get_or_create_chat_session,
+    is_out_of_policy_scope,
+    record_recommendation_turn,
+)
 
 router = APIRouter()
 
@@ -43,6 +47,12 @@ def preview_recommendations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if source_query is not None and is_out_of_policy_scope(source_query):
+        raise HTTPException(
+            status_code=422,
+            detail="정책 추천과 관련된 질문을 입력해 주세요.",
+        )
+
     all_results, vector_used, total_candidates = recommend_policies(
         db=db,
         profile=profile,
