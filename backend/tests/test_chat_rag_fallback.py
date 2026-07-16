@@ -358,6 +358,21 @@ def test_out_of_scope_daily_question_wins_over_small_business_background():
     assert is_out_of_policy_scope("나 소상공인이고, 아침 메뉴 추천해줘") is True
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "자영업자인데 오늘 카페 추천해줘",
+        "사업자인데 주말 여행지 추천해줘",
+        "예비창업자인데 영화 뭐 볼까?",
+        "중소기업 대표인데 운동 루틴 추천해줘",
+        "청년 사업자인데 오늘 날씨 어때?",
+        "프리랜서인데 강아지 키워도 될까?",
+    ],
+)
+def test_daily_intent_wins_over_policy_target_background(query):
+    assert is_out_of_policy_scope(query) is True
+
+
 def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     policy_id = uuid.UUID("def4bdcb-9e7e-4dd5-a2be-875c14345e1b")
 
@@ -368,6 +383,19 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("소상공인인데 점심 장사 지원금 신청 가능해?", policy_id=None) is False
     assert is_out_of_policy_scope("그 정책 말고 오늘 점심 뭐 먹지?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "소상공인 카페 창업 지원금 신청 방법 알려줘",
+        "자영업자 대상 정책자금 대출 조건이 뭐야?",
+        "청년 사업자 지원사업 공고 찾아줘",
+        "중소기업 세제 감면 신청 서류 알려줘",
+    ],
+)
+def test_explicit_policy_request_wins_over_daily_topic_words(query):
+    assert is_out_of_policy_scope(query) is False
 
 
 @patch("app.services.chat_rag.get_chat_model")
