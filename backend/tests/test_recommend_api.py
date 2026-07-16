@@ -36,7 +36,7 @@ class RecommendationApiTests(unittest.TestCase):
         with patch("app.api.v1.recommend.recommend_policies") as recommend_mock:
             response = _client().post(
                 "/recommend/preview",
-                params={"source_query": "소상공인이 신청할 수 있는 점심 정책 추천해줘"},
+                params={"source_query": "소상공인이 신청할 수 있는 넷플릭스 추천해줘"},
                 json={},
             )
 

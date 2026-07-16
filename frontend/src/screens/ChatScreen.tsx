@@ -1024,7 +1024,10 @@ function cleanChatDisplayText(value: string) {
 
 function isRecommendationRequest(text: string) {
   const normalized = text.trim().toLowerCase()
-  const recommendationSignals = ['추천', '맞춤', '나에게', '내게', '내가 받을', '받을 수', '찾아줘', '찾아 줘']
+  const genericRecommendationRequests = ['추천해줘', '추천해 줘', '맞춤 추천', '정책 추천해줘', '정책 추천해 줘']
+  if (genericRecommendationRequests.includes(normalized)) return true
+
+  const recommendationSignals = ['추천', '맞춤', '찾아줘', '찾아 줘']
   const dailyLifeSignals = [
     '날씨', '기온', '비와', '눈와', '더워', '추워',
     '아침', '점심', '저녁', '야식', '브런치', '메뉴', '식사', '밥', '음식', '요리', '레시피',
@@ -1042,31 +1045,28 @@ function isRecommendationRequest(text: string) {
     '직원', '임대료', '시설', '장비', '판로', '수출', '업종', '미용실', '식당', '카페',
     '공장', '제조', '농업', '어업', '소공인',
   ]
-  const policyDomainSignals = [
+  const policyRecommendationAnchors = [
     '정책',
     '공고',
     '복지',
-    '지원',
     '지원금',
-    '현금',
-    '현금성',
-    '지급',
     '장려금',
-    '급여',
     '보조금',
     '혜택',
     '대출',
     '융자',
     '보증',
-    '소상공인',
-    '사업자',
-    '자영업',
-    '업종',
-    '매출',
+    '정책자금',
+    '바우처',
+    '지원사업',
+    '감면',
+    '손실보상',
+    '긴급자금',
+    '재난지원',
   ]
   const hasRecommendationSignal = recommendationSignals.some((keyword) => normalized.includes(keyword))
-  const hasPolicyDomainSignal = policyDomainSignals.some((keyword) => normalized.includes(keyword))
-  if (!hasRecommendationSignal || (!hasPolicyDomainSignal && normalized.length > 8)) return false
+  const hasPolicyRecommendationAnchor = policyRecommendationAnchors.some((keyword) => normalized.includes(keyword))
+  if (!hasRecommendationSignal || !hasPolicyRecommendationAnchor) return false
 
   const hasDailyLifeSignal = dailyLifeSignals.some((keyword) => normalized.includes(keyword))
   if (hasDailyLifeSignal) {

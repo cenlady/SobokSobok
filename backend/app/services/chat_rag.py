@@ -1693,6 +1693,44 @@ BUSINESS_CONTEXT_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+RECOMMENDATION_REQUEST_KEYWORDS: Tuple[str, ...] = (
+    "추천",
+    "맞춤",
+    "찾아줘",
+    "찾아 줘",
+)
+
+
+POLICY_RECOMMENDATION_ANCHORS: Tuple[str, ...] = (
+    "정책",
+    "공고",
+    "복지",
+    "지원금",
+    "보조금",
+    "장려금",
+    "대출",
+    "융자",
+    "보증",
+    "정책자금",
+    "혜택",
+    "바우처",
+    "지원사업",
+    "감면",
+    "손실보상",
+    "긴급자금",
+    "재난지원",
+)
+
+
+GENERIC_RECOMMENDATION_REQUESTS: Tuple[str, ...] = (
+    "추천해줘",
+    "추천해 줘",
+    "맞춤 추천",
+    "정책 추천해줘",
+    "정책 추천해 줘",
+)
+
+
 DETAIL_CONTEXT_KEYWORDS: Tuple[str, ...] = (
     "이거",
     "여기",
@@ -1889,6 +1927,19 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     # 소상공인·사업자 같은 대상자 배경정보만으로는 정책 요청으로 보지 않는다.
     # 명시적인 정책 요청이 없는 나머지 일반 질문은 RAG가 억지로 공고를 찾지 않게 한다.
     return True
+
+
+def is_policy_recommendation_request(query: str) -> bool:
+    normalized = _normalize_space(query).lower()
+    if not normalized:
+        return False
+    if normalized in GENERIC_RECOMMENDATION_REQUESTS:
+        return True
+    if not any(keyword in normalized for keyword in RECOMMENDATION_REQUEST_KEYWORDS):
+        return False
+    if not any(keyword in normalized for keyword in POLICY_RECOMMENDATION_ANCHORS):
+        return False
+    return not is_out_of_policy_scope(normalized)
 
 
 def build_out_of_scope_answer(query: str) -> str:

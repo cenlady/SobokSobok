@@ -14,6 +14,7 @@ from app.services.chat_rag import (
     clean_rag_evidence_text,
     generate_chat_answer,
     is_out_of_policy_scope,
+    is_policy_recommendation_request,
 )
 
 
@@ -401,6 +402,32 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
 )
 def test_explicit_policy_request_wins_over_daily_topic_words(query):
     assert is_out_of_policy_scope(query) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "추천해줘",
+        "맞춤 정책 추천해줘",
+        "소상공인 정책 추천해줘",
+        "자영업자 지원금 추천해줘",
+        "내 조건에 맞는 지원 정책 찾아줘",
+    ],
+)
+def test_policy_recommendation_request_requires_a_policy_anchor(query):
+    assert is_policy_recommendation_request(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "소상공인이 신청할 수 있는 넷플릭스 추천해줘",
+        "소상공인이 신청할 수 있는 점심 정책 추천해줘",
+        "사업자인데 영화 추천해줘",
+    ],
+)
+def test_non_policy_recommendation_does_not_reach_profile_recommender(query):
+    assert is_policy_recommendation_request(query) is False
 
 
 @patch("app.services.chat_rag.get_chat_model")

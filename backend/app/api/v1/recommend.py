@@ -19,7 +19,7 @@ from app.services.recommend import (
 )
 from app.services.chat_rag import (
     get_or_create_chat_session,
-    is_out_of_policy_scope,
+    is_policy_recommendation_request,
     record_recommendation_turn,
 )
 
@@ -47,7 +47,7 @@ def preview_recommendations(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if source_query is not None and is_out_of_policy_scope(source_query):
+    if source_query is not None and not is_policy_recommendation_request(source_query):
         raise HTTPException(
             status_code=422,
             detail="정책 추천과 관련된 질문을 입력해 주세요.",
