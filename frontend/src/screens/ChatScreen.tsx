@@ -683,7 +683,7 @@ export default function ChatScreen() {
       <TopBar />
       <h1 className="sr-only">정책 도우미</h1>
 
-      <div className="flex items-center justify-between gap-3 px-4 pb-2">
+      <div className="flex items-center justify-between gap-3 px-4 pb-2 pt-3">
         <button
           type="button"
           onClick={openChatHistory}

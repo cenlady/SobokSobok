@@ -29,15 +29,15 @@ export default function LoginScreen() {
     <main className="app-frame flex min-h-[100dvh] flex-col bg-cream px-5">
       <div className="flex flex-1 flex-col justify-center py-10">
         <section className="flex flex-col items-center text-center">
-          <BrandMark size={68} />
-          <p className="mt-4 text-2xl font-extrabold tracking-[-0.02em] text-brand">소복소복</p>
+          <BrandMark size={72} />
+          <p className="mt-3.5 text-[15px] font-extrabold tracking-[0.14em] text-brand">소복소복</p>
 
-          <h1 className="mt-6 text-[27px] font-bold leading-[1.35] tracking-[-0.03em] text-ink">
+          <h1 className="mt-7 text-[27px] font-bold leading-[1.36] tracking-[-0.03em] text-ink">
             사장님에게 맞는
             <br />
-            지원 정책을 찾아드려요
+            <span className="text-brand">지원 정책</span>을 찾아드려요
           </h1>
-          <p className="mt-3 text-sm leading-relaxed text-muted">
+          <p className="mt-3 text-[15px] leading-relaxed text-muted">
             흩어진 지원 공고를 사업장 조건과 비교해
             <br />
             신청할 만한 정책부터 보여드릴게요.

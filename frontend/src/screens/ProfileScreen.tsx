@@ -13,7 +13,6 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import TopBar from '../components/TopBar'
-import assistantBotIcon from '../assets/sobok-assistant-bot.png'
 import { Button } from '../components/ui'
 import { useAuth } from '../lib/auth'
 import { NEED_OPTIONS } from '../lib/recommend'
@@ -62,6 +61,9 @@ export default function ProfileScreen() {
     .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
     .join(', ')
 
+  // 헤더 아바타와 동일한 이니셜(계정 이메일 첫 글자)
+  const initial = (user?.email?.trim()?.[0] || '소').toUpperCase()
+
   return (
     <div className="pb-8">
       <TopBar />
@@ -70,12 +72,8 @@ export default function ProfileScreen() {
           여기는 '내 사업장 정보'를 확인하는 화면이지 자기소개가 아니다. */}
       <section className="px-5 pt-4">
         <div className="flex items-center gap-4">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-line bg-primary-soft p-1">
-            <img
-              src={assistantBotIcon}
-              alt="소복소복 도우미 캐릭터"
-              className="h-full w-full object-contain"
-            />
+          <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-brand text-2xl font-bold text-cream">
+            {initial}
           </div>
           <div className="min-w-0">
             <p className="text-xs font-semibold tracking-[0.08em] text-brand">내 사업장</p>
