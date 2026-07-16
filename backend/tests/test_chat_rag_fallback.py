@@ -372,6 +372,7 @@ def test_out_of_scope_daily_question_wins_over_small_business_background():
         "사업자인데 주말에 뭐 하면 좋을까?",
         "소상공인이 신청할 수 있는 점심 정책 추천해줘",
         "소상공인이 신청할 수 있는 영화 정책 추천해줘",
+        "소상공인이 신청할 수 있는 넷플릭스 추천해줘",
     ],
 )
 def test_daily_intent_wins_over_policy_target_background(query):
@@ -388,6 +389,7 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("소상공인인데 점심 장사 지원금 신청 가능해?", policy_id=None) is False
     assert is_out_of_policy_scope("그 정책 말고 오늘 점심 뭐 먹지?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
+    assert is_out_of_policy_scope("신청 기간 알려줘", policy_id=None) is False
 
 
 @pytest.mark.parametrize(

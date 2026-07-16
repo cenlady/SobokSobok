@@ -1722,6 +1722,29 @@ POLICY_RECOMMENDATION_ANCHORS: Tuple[str, ...] = (
 )
 
 
+POLICY_TOPIC_ANCHORS: Tuple[str, ...] = POLICY_RECOMMENDATION_ANCHORS + (
+    "지원",
+)
+
+
+POLICY_ACTION_KEYWORDS: Tuple[str, ...] = (
+    "신청",
+    "접수",
+    "서류",
+    "대상",
+    "자격",
+    "요건",
+    "조건",
+    "기간",
+    "마감",
+    "기한",
+    "문의",
+    "기준",
+    "지급",
+    "받을 수",
+)
+
+
 GENERIC_RECOMMENDATION_REQUESTS: Tuple[str, ...] = (
     "추천해줘",
     "추천해 줘",
@@ -1903,6 +1926,12 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     has_business_context_signal = any(
         keyword in normalized for keyword in BUSINESS_CONTEXT_KEYWORDS
     )
+    has_policy_topic_anchor = any(
+        keyword in normalized for keyword in POLICY_TOPIC_ANCHORS
+    )
+    policy_action_signal_count = sum(
+        keyword in normalized for keyword in POLICY_ACTION_KEYWORDS
+    )
     has_out_of_scope_override = any(
         phrase in normalized for phrase in OUT_OF_SCOPE_OVERRIDE_PHRASES
     )
@@ -1921,7 +1950,13 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
         if not (has_specific_policy_signal or has_business_context_signal):
             return True
 
-    if has_policy_request_signal or has_detail_context_signal:
+    if has_detail_context_signal:
+        return False
+    if has_specific_policy_signal or has_policy_topic_anchor:
+        return False
+    if has_business_context_signal and has_policy_request_signal:
+        return False
+    if policy_action_signal_count >= 2:
         return False
 
     # 소상공인·사업자 같은 대상자 배경정보만으로는 정책 요청으로 보지 않는다.
