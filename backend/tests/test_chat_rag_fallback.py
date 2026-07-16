@@ -369,6 +369,8 @@ def test_out_of_scope_daily_question_wins_over_small_business_background():
         "프리랜서인데 강아지 키워도 될까?",
         "소상공인인데 넷플릭스에서 뭐 볼까?",
         "사업자인데 주말에 뭐 하면 좋을까?",
+        "소상공인이 신청할 수 있는 점심 정책 추천해줘",
+        "소상공인이 신청할 수 있는 영화 정책 추천해줘",
     ],
 )
 def test_daily_intent_wins_over_policy_target_background(query):

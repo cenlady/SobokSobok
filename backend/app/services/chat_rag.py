@@ -1643,6 +1643,56 @@ POLICY_REQUEST_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+# 일상 주제와 정책 단어가 섞였을 때 실제 정책 질문임을 뒷받침하는 강한 신호다.
+# "점심 정책 추천"처럼 정책이라는 말만 붙인 문장은 여기에 해당하지 않는다.
+SPECIFIC_POLICY_KEYWORDS: Tuple[str, ...] = (
+    "복지",
+    "지원금",
+    "보조금",
+    "장려금",
+    "융자",
+    "대출",
+    "보증",
+    "정책자금",
+    "혜택",
+    "바우처",
+    "지원사업",
+    "감면",
+    "손실보상",
+    "긴급자금",
+    "재난지원",
+)
+
+
+BUSINESS_CONTEXT_KEYWORDS: Tuple[str, ...] = (
+    "창업",
+    "사업장",
+    "장사",
+    "영업",
+    "매장",
+    "점포",
+    "경영",
+    "운영",
+    "매출",
+    "고용",
+    "직원",
+    "임대료",
+    "시설",
+    "장비",
+    "판로",
+    "수출",
+    "업종",
+    "미용실",
+    "식당",
+    "카페",
+    "공장",
+    "제조",
+    "농업",
+    "어업",
+    "소공인",
+)
+
+
 DETAIL_CONTEXT_KEYWORDS: Tuple[str, ...] = (
     "이거",
     "여기",
@@ -1809,6 +1859,12 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     has_policy_request_signal = any(
         keyword in normalized for keyword in POLICY_REQUEST_KEYWORDS
     )
+    has_specific_policy_signal = any(
+        keyword in normalized for keyword in SPECIFIC_POLICY_KEYWORDS
+    )
+    has_business_context_signal = any(
+        keyword in normalized for keyword in BUSINESS_CONTEXT_KEYWORDS
+    )
     has_out_of_scope_override = any(
         phrase in normalized for phrase in OUT_OF_SCOPE_OVERRIDE_PHRASES
     )
@@ -1816,13 +1872,16 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
         keyword in normalized for keyword in DETAIL_CONTEXT_KEYWORDS
     )
 
-    # "나 소상공인인데 오늘 점심 메뉴 추천해줘"처럼 정책 대상자 배경정보와
-    # 일상 질문이 섞인 경우, 지원·신청·공고처럼 명시적인 정책 요청이 없으면
-    # 일상 질문을 우선한다. 선택된 정책 문맥도 이 우선순위를 뒤집지 않는다.
-    if has_out_of_scope_signal and (
-        has_out_of_scope_override or not has_policy_request_signal
-    ):
-        return True
+    # 일상 주제와 정책 단어가 섞이면, 구체적인 정책 수단이나 사업 맥락까지
+    # 있어야 정책 질문으로 인정한다. "점심 정책 추천"처럼 정책 단어만 붙여
+    # RAG가 억지로 공고를 찾는 것을 막는다.
+    if has_out_of_scope_signal:
+        if has_out_of_scope_override:
+            return True
+        if not has_policy_request_signal:
+            return True
+        if not (has_specific_policy_signal or has_business_context_signal):
+            return True
 
     if has_policy_request_signal or has_detail_context_signal:
         return False
