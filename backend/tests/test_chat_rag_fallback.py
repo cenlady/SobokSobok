@@ -355,6 +355,7 @@ def test_out_of_scope_daily_question_wins_over_small_business_background():
     assert response["sources"] == []
     assert "소상공인 정책 공고" in response["answer"]
     assert is_out_of_policy_scope("나 소상공인인데, 오늘 점심 메뉴 추천해줘") is True
+    assert is_out_of_policy_scope("나 소상공인이고, 아침 메뉴 추천해줘") is True
 
 
 def test_policy_scope_allows_detail_context_and_policy_domain_terms():
