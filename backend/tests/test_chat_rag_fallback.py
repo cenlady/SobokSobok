@@ -367,6 +367,8 @@ def test_out_of_scope_daily_question_wins_over_small_business_background():
         "중소기업 대표인데 운동 루틴 추천해줘",
         "청년 사업자인데 오늘 날씨 어때?",
         "프리랜서인데 강아지 키워도 될까?",
+        "소상공인인데 넷플릭스에서 뭐 볼까?",
+        "사업자인데 주말에 뭐 하면 좋을까?",
     ],
 )
 def test_daily_intent_wins_over_policy_target_background(query):
@@ -392,6 +394,7 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
         "자영업자 대상 정책자금 대출 조건이 뭐야?",
         "청년 사업자 지원사업 공고 찾아줘",
         "중소기업 세제 감면 신청 서류 알려줘",
+        "소상공인인데 받을 수 있는 혜택 알려줘",
     ],
 )
 def test_explicit_policy_request_wins_over_daily_topic_words(query):

@@ -1602,50 +1602,6 @@ def source_answer_text(source: Dict[str, Any]) -> str:
     return clean_rag_answer_text(source.get("raw_chunk_text") or source.get("chunk_text"))
 
 
-POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
-    "정책",
-    "공고",
-    "공고문",
-    "복지",
-    "지원",
-    "지원금",
-    "현금",
-    "현금성",
-    "지급",
-    "장려금",
-    "급여",
-    "혜택",
-    "보조금",
-    "융자",
-    "대출",
-    "보증",
-    "소상공인",
-    "사업자",
-    "사업장",
-    "업종",
-    "매출",
-    "직원",
-    "신청",
-    "접수",
-    "서류",
-    "대상",
-    "자격",
-    "요건",
-    "조건",
-    "해당",
-    "받을 수",
-    "마감",
-    "기간",
-    "문의",
-    "기관",
-    "지역",
-    "노란우산",
-    "손실보상",
-    "전기요금",
-    "냉난방",
-)
-
-
 # 소상공인·사업자처럼 사용자의 신분이나 상황만 나타내는 단어는 정책 요청의
 # 근거가 되지 않는다. 일상 화제와 함께 들어왔을 때에는 아래처럼 실제 정책
 # 내용이나 행동을 묻는 신호가 있어야 정책 검색으로 보낸다.
@@ -1674,6 +1630,11 @@ POLICY_REQUEST_KEYWORDS: Tuple[str, ...] = (
     "문의",
     "기준",
     "지급",
+    "받을 수",
+    "혜택",
+    "바우처",
+    "제도",
+    "지원사업",
     "감면",
     "예산",
     "손실보상",
@@ -1845,7 +1806,6 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
         return False
 
     has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
-    has_policy_signal = any(keyword in normalized for keyword in POLICY_DOMAIN_KEYWORDS)
     has_policy_request_signal = any(
         keyword in normalized for keyword in POLICY_REQUEST_KEYWORDS
     )
@@ -1864,11 +1824,11 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     ):
         return True
 
-    if has_policy_signal or has_detail_context_signal:
+    if has_policy_request_signal or has_detail_context_signal:
         return False
 
-    # RAG는 항상 뭔가를 찾아내므로, 정책 신호가 전혀 없는 일반 질문은 검색하지 않는다.
-    # 예: "나 머리 단발할까 기를까", "오늘 기분이 별로야", "뭐 하지?"
+    # 소상공인·사업자 같은 대상자 배경정보만으로는 정책 요청으로 보지 않는다.
+    # 명시적인 정책 요청이 없는 나머지 일반 질문은 RAG가 억지로 공고를 찾지 않게 한다.
     return True
 
 
