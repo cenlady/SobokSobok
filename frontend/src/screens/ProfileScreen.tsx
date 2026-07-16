@@ -1,15 +1,12 @@
 import { useState } from 'react'
 import {
-  Bell,
   Bot,
   BriefcaseBusiness,
-  CalendarSync,
   ChevronRight,
-  Lock,
   LogOut,
   MapPin,
+  Pencil,
   SlidersHorizontal,
-  User,
   Users,
   Utensils,
   Wallet,
@@ -24,18 +21,48 @@ import { useProfile } from '../lib/storage'
 export default function ProfileScreen() {
   const navigate = useNavigate()
   const { user, logout } = useAuth()
-  const { profile } = useProfile()
-  const [alarm, setAlarm] = useState(true)
+  const { profile, saveProfile } = useProfile()
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false)
+  const [ownerName, setOwnerName] = useState('')
+  const [storeName, setStoreName] = useState('')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [profileSaveError, setProfileSaveError] = useState<string | null>(null)
 
   const handleLogout = () => {
     logout()
     navigate('/login', { replace: true })
   }
 
-  const initial = profile.ownerName?.trim()?.[0] || null
+  const openProfileEditor = () => {
+    setOwnerName(profile.ownerName)
+    setStoreName(profile.storeName)
+    setProfileSaveError(null)
+    setProfileEditorOpen(true)
+  }
+
+  const saveBasicProfile = async () => {
+    setSavingProfile(true)
+    setProfileSaveError(null)
+    try {
+      await saveProfile({
+        ...profile,
+        ownerName: ownerName.trim(),
+        storeName: storeName.trim(),
+      })
+      setProfileEditorOpen(false)
+    } catch {
+      setProfileSaveError('프로필을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      setSavingProfile(false)
+    }
+  }
+
   const interestLabel = profile.needTags
     .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
     .join(', ')
+
+  // 헤더 아바타와 동일한 이니셜(계정 이메일 첫 글자)
+  const initial = (user?.email?.trim()?.[0] || '소').toUpperCase()
 
   return (
     <div className="pb-8">
@@ -45,10 +72,8 @@ export default function ProfileScreen() {
           여기는 '내 사업장 정보'를 확인하는 화면이지 자기소개가 아니다. */}
       <section className="px-5 pt-4">
         <div className="flex items-center gap-4">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-line bg-surface text-xl font-bold text-brand">
-            {/* 이름이 없으면 물음표(?) 대신 사람 아이콘.
-                물음표는 "데이터를 못 불러왔다"는 오류처럼 읽힌다. */}
-            {initial ?? <User size={26} strokeWidth={1.8} className="text-subtle" />}
+          <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-brand text-2xl font-bold text-cream">
+            {initial}
           </div>
           <div className="min-w-0">
             <p className="text-xs font-semibold tracking-[0.08em] text-brand">내 사업장</p>
@@ -59,6 +84,14 @@ export default function ProfileScreen() {
               {profile.storeName || '사업장 이름 미입력'}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={openProfileEditor}
+            className="ml-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold text-primary transition-colors hover:bg-primary-soft active:bg-primary-soft"
+          >
+            <Pencil size={15} strokeWidth={1.9} />
+            프로필 변경
+          </button>
         </div>
         {user?.email && (
           <p className="mt-4 border-t border-line pt-3 text-xs text-subtle">{user.email}</p>
@@ -101,41 +134,12 @@ export default function ProfileScreen() {
         <h3 className="text-section text-ink">설정 및 관리</h3>
 
         <div className="surface-panel mt-2 divide-y divide-line overflow-hidden">
-          <div className="flex items-center gap-3 px-4 py-3.5">
-            <Bell size={18} strokeWidth={1.8} className="shrink-0 text-brand" />
-            <span className="flex-1">
-              <span className="block text-sm font-medium text-ink">마감 알림</span>
-              <span className="mt-0.5 block text-xs text-muted">저장한 정책의 신청 마감 안내</span>
-            </span>
-            <button
-              onClick={() => setAlarm((value) => !value)}
-              role="switch"
-              aria-checked={alarm}
-              aria-label="마감 알림"
-              className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-                alarm ? 'bg-primary' : 'bg-line'
-              }`}
-            >
-              <span
-                className={`absolute top-1 h-4 w-4 rounded-full bg-surface shadow-sm transition-all ${
-                  alarm ? 'left-6' : 'left-1'
-                }`}
-              />
-            </button>
-          </div>
-
           <SettingRow
             icon={Bot}
             title="AI 사용 방식"
             description="기능별 클라우드·로컬 AI 설정"
             onClick={() => navigate('/profile/ai-settings')}
           />
-          <SettingRow
-            icon={CalendarSync}
-            title="Google Calendar"
-            description="정책 마감일 일정 등록"
-          />
-          <SettingRow icon={Lock} title="로그인 및 보안" description="계정과 로그인 정보 관리" />
         </div>
 
         {/* 로그아웃이 탈퇴보다 훨씬 흔한 동작인데, 탈퇴만 빨간 글씨면 그쪽이 먼저
@@ -150,6 +154,81 @@ export default function ProfileScreen() {
           </button>
         </div>
       </section>
+
+      {profileEditorOpen && (
+        <div
+          className="fixed inset-0 z-30 flex items-end bg-ink/35 p-0 sm:items-center sm:justify-center sm:p-5"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="profile-editor-title"
+        >
+          <button
+            type="button"
+            aria-label="프로필 변경 닫기"
+            onClick={() => setProfileEditorOpen(false)}
+            className="absolute inset-0 cursor-default"
+          />
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              void saveBasicProfile()
+            }}
+            className="relative w-full max-w-[430px] rounded-t-2xl bg-surface px-5 pb-6 pt-5 shadow-lift sm:rounded-2xl"
+          >
+            <div className="mx-auto mb-5 h-1.5 w-10 rounded-full bg-line sm:hidden" />
+            <h2 id="profile-editor-title" className="text-lg font-bold text-ink">
+              사용자 프로필 변경
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-muted">
+              마이 페이지에 표시되는 이름과 사업장 이름을 수정할 수 있어요.
+            </p>
+
+            <div className="mt-6 space-y-4">
+              <div>
+                <label htmlFor="profile-owner-name" className="mb-2 block text-sm font-semibold text-ink">
+                  이름
+                </label>
+                <input
+                  id="profile-owner-name"
+                  value={ownerName}
+                  onChange={(event) => setOwnerName(event.target.value)}
+                  autoComplete="name"
+                  placeholder="이름을 입력해 주세요"
+                  className="h-12 w-full rounded-xl border border-line bg-cream/50 px-4 text-[15px] text-ink outline-none placeholder:text-subtle focus:border-primary"
+                />
+              </div>
+              <div>
+                <label htmlFor="profile-store-name" className="mb-2 block text-sm font-semibold text-ink">
+                  사업장 이름
+                </label>
+                <input
+                  id="profile-store-name"
+                  value={storeName}
+                  onChange={(event) => setStoreName(event.target.value)}
+                  autoComplete="organization"
+                  placeholder="사업장 이름을 입력해 주세요"
+                  className="h-12 w-full rounded-xl border border-line bg-cream/50 px-4 text-[15px] text-ink outline-none placeholder:text-subtle focus:border-primary"
+                />
+              </div>
+            </div>
+
+            {profileSaveError && (
+              <p className="mt-3 text-sm font-medium text-status-red" aria-live="polite">
+                {profileSaveError}
+              </p>
+            )}
+
+            <div className="mt-6 grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => setProfileEditorOpen(false)} disabled={savingProfile}>
+                취소
+              </Button>
+              <Button type="submit" disabled={savingProfile}>
+                {savingProfile ? '저장 중...' : '저장하기'}
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

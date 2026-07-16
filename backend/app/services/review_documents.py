@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -385,11 +386,26 @@ def _diagnose_one(
     parsed = _parse_llm_json(_call_review_generate(prompt, model_mode=model_mode))
     if parsed is None:
         raise ModelResponseError("서류검토 모델 응답을 해석하지 못했습니다.")
+    # #64: LLM이 판정한 유형명이 정책 제목을 베끼면 가짜 '충족' 오탐이 된다. 대조 입력으로
+    # 넘기기 전에 검역한다.
+    parsed["document_type"] = _sanitize_document_type(
+        parsed["document_type"],
+        policy.title if policy else None,
+        upload.extracted_text or "",
+    )
     return parsed
 
 
 def _build_file_prompt(extracted: str, file_name: str, policy: NormalizedPolicy | None) -> str:
-    context = f"이 서류는 '{policy.title}' 신청용으로 추정됩니다.\n" if policy else ""
+    # 정책은 '참고 맥락'으로만 준다. "이 서류는 ○○ 신청용으로 추정됩니다"처럼 단정해서
+    # 주면 LLM이 document_type에 정책 제목을 그대로 베껴 적는다 — 파이썬 학습 정리 PDF가
+    # '지방세 불복청구 선정대리인 무료지원 신청 서류'로 판정된 실사고. 그 유형명이 요건명과
+    # 유사도를 넘겨 가짜 '충족'이 된다(정책 제목 → 유형명 → 요건 매칭으로 되도는 루프).
+    context = (
+        f"참고: 사용자는 '{policy.title}' 정책에 제출할 서류를 준비하고 있습니다.\n"
+        if policy
+        else ""
+    )
 
     return f"""당신은 소상공인 정책 신청 서류를 꼼꼼히 검토하는 전문가입니다.
 {context}업로드된 서류 한 건의 '완성도'를 검토하세요.
@@ -403,6 +419,12 @@ def _build_file_prompt(extracted: str, file_name: str, policy: NormalizedPolicy 
 다른 서류가 필요한지는 판단하지 마세요. 그건 별도로 처리합니다.
 "○○증명서도 필요합니다" 같은 말을 쓰지 마세요.
 
+[중요] document_type은 문서 내용에만 근거해 판정하세요.
+- 위 정책 이름을 document_type에 옮겨 적지 마세요.
+- 문서에 적힌 실제 양식명·서류명을 쓰세요(예: 사업자등록증, 소득금액증명, 선정대리인 신청서).
+- 행정 서류가 아니거나(기술 문서, 학습 자료 등) 유형을 확신할 수 없으면 "unknown"으로 두세요.
+- "(추정)" 같은 표현을 붙이지 마세요.
+
 [파일명] {file_name}
 [서류 원문(일부)]
 {extracted}
@@ -410,13 +432,65 @@ def _build_file_prompt(extracted: str, file_name: str, policy: NormalizedPolicy 
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명은 쓰지 마세요.
 해당 항목이 없으면 빈 배열([])로 두세요.
 {{
-  "document_type": "서류로 추정되는 유형(예: 사업자등록증, 사업계획서)",
+  "document_type": "문서에 실제로 나타난 서류 유형. 확신이 없으면 unknown",
   "typos": ["오타/맞춤법 지적"],
   "missing_fields": ["비어 있거나 미작성된 항목"],
   "format_issues": ["형식/양식 오류"],
   "improvement_points": ["보완이 필요한 점"],
   "overall": "1~2문장 진단"
 }}"""
+
+
+# "정책 신청 서류"처럼 서류의 정체를 말해주지 않는 유형명. 요건 대조의 입력으로 쓸 수 없다.
+# (document_names._PLACEHOLDERS와 같은 취지 — 그쪽은 공고의 요건명, 여기는 LLM의 판정을 거른다)
+_GENERIC_TYPES = {
+    "unknown",
+    "서류",
+    "문서",
+    "신청서",
+    "신청서류",
+    "정책신청서류",
+    "정책서류",
+    "제출서류",
+    "행정서류",
+}
+
+
+def _sanitize_document_type(
+    document_type: str,
+    policy_title: str | None,
+    extracted_text: str,
+) -> str:
+    """LLM이 판정한 서류 유형을 검역한다.
+
+    유형명은 요건 대조의 입력이다. 오염된 유형명은 곧바로 가짜 '충족'(오탐)이 되므로,
+    의심스러우면 unknown으로 되돌린다 — unknown은 대조에서 제외되어 '미확인'으로 남는다.
+    근거 없는 안심(가짜 ✓)보다 미확인이 낫다.
+
+    - "(추정)" 같은 괄호 부연을 벗기고, 추정·불명 표현이 남으면 unknown
+    - 정체를 말해주지 않는 일반명("정책 신청 서류" 등)은 unknown
+    - 정책 제목을 통째로 품은 유형명은 프롬프트의 정책 맥락을 베낀 의심 사례다.
+      단, 진짜 서식이라면 그 양식명이 문서 본문에 실제로 적혀 있으므로,
+      본문에서 확인될 때만 인정한다(공백 무시 부분일치).
+    """
+    name = re.sub(r"\([^)]*\)", " ", document_type or "")
+    name = re.sub(r"\s+", " ", name).strip()
+    if not name:
+        return "unknown"
+
+    packed_name = name.replace(" ", "")
+    if packed_name.lower() in _GENERIC_TYPES:
+        return "unknown"
+    if "추정" in name or "알 수 없" in name or "불명" in name:
+        return "unknown"
+
+    packed_title = (policy_title or "").replace(" ", "")
+    if packed_title and packed_title in packed_name:
+        packed_text = re.sub(r"\s+", "", extracted_text or "")
+        if packed_name not in packed_text:
+            return "unknown"
+
+    return name
 
 
 def _summarize(

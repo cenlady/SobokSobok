@@ -39,8 +39,10 @@ export default function AuthCallbackScreen() {
 
     login(token)
       .then(() => {
-        // 목적지 판단은 RequireAuth에 맡긴다. 여기서는 앱 안으로만 들여보낸다.
-        navigate('/', { replace: true })
+        // 로그인 직후엔 환영 화면으로 보낸다. 온보딩을 안 마친 신규 사용자는
+        // RequireAuth가 여기서 다시 /onboarding으로 돌려보내고, 온보딩을 마치면
+        // 그 화면이 다시 /welcome으로 데려온다.
+        navigate('/welcome', { replace: true })
       })
       .catch(() => setError('로그인 처리 중 문제가 발생했습니다.'))
   }, [params, login, navigate])

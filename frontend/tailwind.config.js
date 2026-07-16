@@ -75,7 +75,7 @@ export default {
         lift: '0 4px 16px rgba(41, 37, 36, 0.08)',
       },
       fontFamily: {
-        sans: ['Pretendard', 'system-ui', 'sans-serif'],
+        sans: ['"Noto Sans KR"', 'system-ui', 'sans-serif'],
       },
       fontSize: {
         // 타이포 위계. 예전에는 로고와 페이지 타이틀이 거의 같은 크기라 서로 싸웠고,

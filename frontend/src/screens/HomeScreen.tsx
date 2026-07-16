@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight, Compass } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Compass, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import TopBar from '../components/TopBar'
@@ -46,6 +46,7 @@ export default function HomeScreen() {
   // [이재혁 - 실시간 구글 캘린더 개인 일정 연동 상태]
   const [googleEvents, setGoogleEvents] = useState<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>([])
   const [googleEventsLoading, setGoogleEventsLoading] = useState(true)
+  const [googleEventsError, setGoogleEventsError] = useState<string | null>(null)
 
   useEffect(() => {
     let ignore = false
@@ -53,15 +54,20 @@ export default function HomeScreen() {
     // 기본 패치 헬퍼
     const fetchEvents = () => {
       setGoogleEventsLoading(true)
+      setGoogleEventsError(null)
       apiFetch<{ date: string; time: string | null; summary: string; policy_id: string | null }[]>('/api/v1/calendar/events')
         .then((data) => {
           if (!ignore) {
             setGoogleEvents(data)
+            setGoogleEventsError(null)
             sessionStorage.removeItem('sobok_calendar_dirty')
           }
         })
         .catch((err) => {
-          console.warn('구글 캘린더 일정을 조회할 수 없습니다 (인증 필요):', err)
+          if (!ignore) {
+            setGoogleEventsError(err instanceof Error ? err.message : 'Google Calendar 일정을 불러오지 못했습니다.')
+          }
+          console.warn('Google Calendar 일정을 조회할 수 없습니다:', err)
         })
         .finally(() => {
           if (!ignore) setGoogleEventsLoading(false)
@@ -102,6 +108,26 @@ export default function HomeScreen() {
   const [coachGuide, setCoachGuide] = useState<string | null>(null)
   const [loadingCoach, setLoadingCoach] = useState(false)
   const [isOpenCoachModal, setIsOpenCoachModal] = useState(false)
+  const modalCloseButtonRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!isOpenCoachModal) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpenCoachModal(false)
+    }
+    const previousOverflow = document.body.style.overflow
+    const frame = window.requestAnimationFrame(() => modalCloseButtonRef.current?.focus())
+
+    document.addEventListener('keydown', onKeyDown)
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = previousOverflow
+      window.cancelAnimationFrame(frame)
+    }
+  }, [isOpenCoachModal])
 
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
   const { dated, always, unknown } = useMemo(() => {
@@ -155,41 +181,33 @@ export default function HomeScreen() {
   const dayList = dated.filter((p) => toDateKey(p.apply_end) === selected)
   const todayKey = localDateKey(new Date())
   const isPastDate = selected < todayKey
+  const policySchedulesInRange = googleEvents
+    .filter((event) => Boolean(event.policy_id) && todayKey <= event.date && event.date <= selected)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
+  const hasPolicyScheduleInRange = policySchedulesInRange.length > 0
+  const selectedPolicySchedule =
+    policySchedulesInRange.find((event) => event.date === selected) ??
+    policySchedulesInRange[policySchedulesInRange.length - 1]
 
-  // 선택한 날짜와 연결된 정책을 기준으로 신청 일정 안내를 불러온다.
+  // 오늘부터 선택일까지의 정책 일정을 기준으로 신청 준비 순서를 불러온다.
   const handleCoachTimeline = async () => {
-    const selGoogleEvents = googleEventsMap[selected] || []
-
-    // 1순위: 선택한 날짜의 구글 일정(파란 점) 중 본문에 매핑된 지원사업 ID가 있는 일정을 역추적해 타겟팅
-    const calendarTarget = selGoogleEvents.find(ev => ev.policy_id)
-
-    let targetPolicyId: string | null = null
-
-    if (calendarTarget?.policy_id) {
-      targetPolicyId = calendarTarget.policy_id
-    } else {
-      // 선택한 날짜에 정책 일정이 없으면 연결된 일정 중 가장 가까운 마감 정책을 사용한다.
-      const calendarPolicies = googleEvents.filter(ev => ev.policy_id)
-      if (calendarPolicies.length === 0) {
-        alert('구글 캘린더에 연결된 정책 일정이 없습니다. 정책 상세에서 캘린더 등록을 먼저 진행해 주세요.')
-        return
-      }
-      // 연결된 일정 중 마감일이 가장 가까운 정책을 선택한다.
-      const urgentCalendarTarget = [...calendarPolicies].sort((a, b) => {
-        const da = new Date(a.date).getTime()
-        const db = new Date(b.date).getTime()
-        return da - db
-      })[0]
-      targetPolicyId = urgentCalendarTarget.policy_id
+    if (googleEventsError) {
+      alert('Google Calendar 일정을 불러오지 못해 신청 일정을 안내할 수 없습니다. Google 로그인을 다시 연결하거나 잠시 후 다시 시도해 주세요.')
+      return
     }
 
+    // 선택한 날짜의 정책 일정을 우선 사용하고, 없으면 기간 안에서 가장 가까운 정책으로 안내한다.
+    // 서버에는 목표일을 함께 보내 오늘부터 선택일까지 포함된 캘린더 일정을 고려하게 한다.
+    const targetPolicyId = selectedPolicySchedule?.policy_id
     if (!targetPolicyId) return
     if (loadingCoach) return
     setCoachGuide(null)
     setIsOpenCoachModal(true)
     setLoadingCoach(true)
     try {
-      const data = await apiFetch<{ coach_guide: string }>(`/api/v1/calendar/coach?policy_id=${targetPolicyId}&target_date=${selected}`)
+      const data = await apiFetch<{ coach_guide: string }>(
+        `/api/v1/calendar/coach?policy_id=${encodeURIComponent(targetPolicyId)}&target_date=${selected}`,
+      )
       setCoachGuide(data.coach_guide)
     } catch (e) {
       alert(e instanceof Error ? e.message : '일정 안내를 불러오지 못했어요. 캘린더 연동 상태를 확인해 주세요.')
@@ -200,7 +218,7 @@ export default function HomeScreen() {
   }
   const selDate = new Date(`${selected}T00:00:00`)
   const homeLoading = loading || profileLoading || googleEventsLoading
-  const isEmpty = !homeLoading && policies.length === 0 && googleEvents.length === 0
+  const isEmpty = !homeLoading && !googleEventsError && policies.length === 0 && googleEvents.length === 0
 
   if (homeLoading) return <HomeScreenSkeleton />
 
@@ -221,10 +239,22 @@ export default function HomeScreen() {
   }
 
   return (
-    <div className="pb-6">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <TopBar />
 
-      <PageIntro title="내 정책 달력" description={`저장한 정책 ${policies.length}건`} />
+      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
+        <PageIntro title="내 정책 달력" description={`저장한 정책 ${policies.length}건`} />
+
+      {googleEventsError && (
+        <section className="mt-4 px-5">
+          <div className="rounded-2xl border border-status-red/20 bg-status-red/5 px-4 py-3.5">
+            <p className="text-sm font-bold text-status-red">Google Calendar 일정을 불러오지 못했어요</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted">
+              일정 0건으로 처리하지 않았습니다. Google 로그인을 다시 연결하거나 잠시 후 화면을 다시 열어주세요.
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* 달력 */}
       <section className="mt-4 px-5">
@@ -290,23 +320,6 @@ export default function HomeScreen() {
             })}
           </div>
         </div>
-      </section>
-
-      {/* 저장한 일정과 정책을 바탕으로 신청 준비 순서를 확인한다. */}
-      <section className="mt-3 px-5">
-        <Button
-          onClick={handleCoachTimeline}
-          disabled={loadingCoach || isPastDate}
-          full
-          variant="secondary"
-        >
-          {loadingCoach ? (
-            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
-          ) : (
-            <CalendarDays size={16} />
-          )}
-          {isPastDate ? '오늘 이후 날짜만 안내받을 수 있어요' : '신청 일정 안내 받기'}
-        </Button>
       </section>
 
       {/* 선택한 날짜 */}
@@ -397,44 +410,73 @@ export default function HomeScreen() {
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
       </section>
+      </div>
+
+      <div className="shrink-0 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
+        <Button onClick={handleCoachTimeline} disabled={loadingCoach || isPastDate || !hasPolicyScheduleInRange} full>
+          {loadingCoach ? (
+            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+          ) : (
+            <CalendarDays size={16} />
+          )}
+          {isPastDate
+            ? '오늘 이후 날짜만 안내받을 수 있어요'
+            : !hasPolicyScheduleInRange
+              ? '해당 기간 내에 정책 일정이 없습니다'
+              : '신청 일정 안내 받기'}
+        </Button>
+      </div>
 
       {/* 신청 일정 안내 */}
       {isOpenCoachModal && (coachGuide || loadingCoach) && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-xs">
-          <div className="relative w-full max-w-md rounded-t-3xl sm:rounded-2xl bg-cream p-6 shadow-2xl max-h-[80vh] flex flex-col overflow-hidden border border-line">
-            <div className="flex items-center justify-between border-b border-line pb-3">
-              <h4 className="flex items-center gap-1.5 text-base font-bold text-ink">
-                <CalendarDays size={18} className="text-brand" /> 신청 일정 안내
-              </h4>
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={() => setIsOpenCoachModal(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="coach-modal-title"
+            className="relative flex max-h-[86dvh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl border border-line bg-cream shadow-2xl sm:max-h-[80vh] sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mx-auto mt-2.5 h-1 w-10 rounded-full bg-line sm:hidden" aria-hidden="true" />
+            <div className="flex items-start justify-between px-5 pb-4 pt-4 sm:px-6 sm:pt-6">
+              <div>
+                <p className="text-[11px] font-bold tracking-[0.08em] text-brand">APPLICATION COACH</p>
+                <h4 id="coach-modal-title" className="mt-1 flex items-center gap-2 text-[19px] font-bold tracking-tight text-ink">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent-soft text-brand">
+                    <CalendarDays size={17} strokeWidth={2} />
+                  </span>
+                  신청 일정 안내
+                </h4>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted">마감 전 필요한 일을 순서대로 정리했어요.</p>
+              </div>
               <button
+                ref={modalCloseButtonRef}
                 type="button"
                 onClick={() => setIsOpenCoachModal(false)}
-                className="text-sm font-semibold text-muted hover:text-ink active:scale-95"
+                aria-label="신청 일정 안내 닫기"
+                className="-mr-2 -mt-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-muted transition-colors hover:bg-line/50 hover:text-ink active:scale-95"
               >
-                닫기
+                <X size={20} strokeWidth={2} />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto mt-4 text-[14px] leading-relaxed text-ink/80 whitespace-pre-line pr-1 no-scrollbar">
+            <div className="flex-1 overflow-y-auto border-y border-line px-5 py-5 no-scrollbar sm:px-6">
               {loadingCoach ? (
-                <div className="space-y-4 animate-pulse py-2">
-                  <div className="h-4 bg-line/80 rounded-lg w-3/4" />
-                  <div className="space-y-2 mt-4">
-                    <div className="h-3 bg-line/60 rounded-md w-full" />
-                    <div className="h-3 bg-line/60 rounded-md w-5/6" />
-                    <div className="h-3 bg-line/60 rounded-md w-4/5" />
+                <div className="space-y-4 animate-pulse" aria-live="polite" aria-label="신청 일정 안내를 준비하고 있습니다">
+                  <div className="h-20 rounded-2xl bg-primary-soft" />
+                  <div className="space-y-3 border-l border-line pl-4">
+                    <div className="h-32 rounded-2xl bg-surface" />
+                    <div className="h-24 rounded-2xl bg-surface" />
                   </div>
-                  <div className="h-4 bg-line/80 rounded-lg w-1/2 mt-6" />
-                  <div className="space-y-2 mt-3">
-                    <div className="h-3 bg-line/60 rounded-md w-full" />
-                    <div className="h-3 bg-line/60 rounded-md w-2/3" />
-                  </div>
-                  <p className="mt-6 border-t border-line/40 pt-4 text-center text-xs font-medium text-subtle">
+                  <p className="pt-1 text-center text-xs font-medium text-subtle">
                     등록한 일정과 신청 단계를 확인하고 있습니다.
                   </p>
                 </div>
               ) : (
-                cleanMarkdown(coachGuide)
+                <CoachGuideContent guide={coachGuide} />
               )}
             </div>
 
@@ -442,30 +484,30 @@ export default function HomeScreen() {
               <button
                 type="button"
                 disabled
-                className="mt-5 w-full rounded-xl bg-line py-3 text-sm font-bold text-subtle cursor-not-allowed"
+                className="m-5 min-h-12 rounded-xl bg-line text-sm font-bold text-subtle cursor-not-allowed sm:m-6"
               >
                 확인 중
               </button>
             ) : (
-              <div className="mt-5 flex gap-3">
+              <div className="flex gap-2.5 p-5 sm:p-6">
                 <a
                   href="https://calendar.google.com"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-line bg-white py-3 text-sm font-bold text-ink hover:bg-line/20 active:scale-[0.98] transition-transform"
+                  className="flex min-h-12 flex-1 items-center justify-center gap-1.5 rounded-xl border border-line bg-surface px-3 text-sm font-bold text-ink transition-colors hover:bg-line/30 active:scale-[0.98]"
                 >
                   <CalendarDays size={15} /> 구글 캘린더 열기
                 </a>
                 <button
                   type="button"
                   onClick={() => setIsOpenCoachModal(false)}
-                  className="flex-1 rounded-xl bg-ink py-3 text-sm font-bold text-white hover:opacity-90 active:scale-[0.98] transition-transform"
+                  className="min-h-12 flex-1 rounded-xl bg-ink px-3 text-sm font-bold text-white transition-colors hover:bg-ink/90 active:scale-[0.98]"
                 >
                   확인했습니다
                 </button>
               </div>
             )}
-          </div>
+          </section>
         </div>
       )}
     </div>
@@ -592,6 +634,172 @@ function DeadlineCard({ policy }: { policy: SavedPolicy }) {
 }
 
 // 자동 정리 결과에 남은 마크다운 기호를 화면용 텍스트로 정리한다.
+type CoachAction = {
+  title: string
+  items: string[]
+}
+
+type CoachStep = {
+  day: string
+  date: string | null
+  label: string | null
+  actions: CoachAction[]
+}
+
+function normalizeCoachLine(line: string) {
+  return cleanMarkdown(line)
+    .replace(/^\s{0,3}#{1,6}\s+/, '')
+    .trim()
+}
+
+function isCoachDate(value: string) {
+  return /(?:\d{4}\s*(?:년|[-./])\s*\d{1,2}|\d{1,2}\s*월\s*\d{1,2}\s*일)/.test(value)
+}
+
+function parseCoachStepHeading(line: string): Pick<CoachStep, 'day' | 'date' | 'label'> | null {
+  const dayMatch = line.match(/^(D\s*(?:[-+]\s*\d+|[-\s]?DAY))\b/i)
+  if (!dayMatch) return null
+
+  const rawDay = dayMatch[1]
+  const day = /DAY$/i.test(rawDay) ? 'D-Day' : rawDay.replace(/\s/g, '').toUpperCase()
+  let rest = line.slice(dayMatch[0].length).trim()
+  let date: string | null = null
+  const labels: string[] = []
+
+  while (rest.startsWith('(')) {
+    const closingIndex = rest.indexOf(')')
+    if (closingIndex === -1) break
+
+    const value = rest.slice(1, closingIndex).trim()
+    if (value) {
+      if (!date && isCoachDate(value)) date = value
+      else labels.push(value)
+    }
+    rest = rest.slice(closingIndex + 1).trim()
+  }
+
+  rest = rest.replace(/^(?:[-\u2013\u2014:|])\s*/, '').trim()
+  if (rest) labels.push(rest)
+
+  return { day, date, label: labels.join(' · ') || null }
+}
+
+function parseCoachGuide(text: string | null): { intro: string[]; steps: CoachStep[]; fallback: string[] } {
+  const lines = (text ?? '')
+    .split('\n')
+    .map(normalizeCoachLine)
+    .filter(Boolean)
+
+  const intro: string[] = []
+  const steps: CoachStep[] = []
+  let currentStep: CoachStep | null = null
+  let currentAction: CoachAction | null = null
+
+  for (const line of lines) {
+    const stepHeading = parseCoachStepHeading(line)
+    if (stepHeading) {
+      currentStep = {
+        ...stepHeading,
+        actions: [],
+      }
+      steps.push(currentStep)
+      currentAction = null
+      continue
+    }
+
+    if (!currentStep) {
+      intro.push(line)
+      continue
+    }
+
+    const actionMatch = line.match(/^\s*(\d+)[.)]\s+(.+)$/)
+    if (actionMatch) {
+      currentAction = { title: actionMatch[2], items: [] }
+      currentStep.actions.push(currentAction)
+      continue
+    }
+
+    const itemMatch = line.match(/^\s*[•·*-]\s+(.+)$/)
+    if (itemMatch && currentAction) {
+      currentAction.items.push(itemMatch[1])
+      continue
+    }
+
+    if (currentAction) {
+      currentAction.title = `${currentAction.title} ${line}`
+    } else {
+      currentAction = { title: line, items: [] }
+      currentStep.actions.push(currentAction)
+    }
+  }
+
+  return { intro, steps, fallback: lines }
+}
+
+function CoachGuideContent({ guide }: { guide: string | null }) {
+  const { intro, steps, fallback } = parseCoachGuide(guide)
+  const introText = intro
+    .map((line) => line.replace(/^한\s*줄?\s*요약[:：]\s*/, '').trim())
+    .filter(Boolean)
+    .join(' ')
+
+  if (steps.length === 0) {
+    return <div className="whitespace-pre-line text-sm leading-7 text-muted">{fallback.join('\n')}</div>
+  }
+
+  return (
+    <div className="space-y-5">
+      {introText && (
+        <div className="rounded-2xl border border-primary/10 bg-primary-soft/70 p-4">
+          <p className="text-[11px] font-bold tracking-[0.08em] text-primary">이번 신청 전략</p>
+          <p className="mt-1.5 text-sm leading-6 text-ink">{introText}</p>
+        </div>
+      )}
+
+      <ol className="space-y-3 border-l border-brand/20 pl-4">
+        {steps.map((step) => (
+          <li key={`${step.day}-${step.date ?? ''}-${step.label ?? ''}`} className="relative">
+            <span className="absolute -left-[23px] top-5 h-3 w-3 rounded-full border-[3px] border-cream bg-brand" aria-hidden="true" />
+            <article className="overflow-hidden rounded-2xl border border-line bg-surface">
+              <header className="flex items-center gap-2.5 border-b border-line bg-cream/60 px-4 py-3">
+                <span className="inline-flex rounded-md bg-ink px-2 py-1 text-xs font-bold tabular-nums text-white">
+                  {step.day}
+                </span>
+                <div className="min-w-0">
+                  <h5 className="text-sm font-bold text-ink">{step.label ?? '신청 준비'}</h5>
+                  {step.date && <p className="mt-0.5 text-xs font-medium text-muted">{step.date}</p>}
+                </div>
+              </header>
+              <div className="space-y-4 p-4">
+                {step.actions.map((action, actionIndex) => (
+                  <div key={`${action.title}-${actionIndex}`} className="flex gap-3">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[11px] font-bold tabular-nums text-brand">
+                      {String(actionIndex + 1).padStart(2, '0')}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-6 text-ink">{action.title}</p>
+                      {action.items.length > 0 && (
+                        <ul className="mt-2 space-y-1.5 border-l border-line pl-3">
+                          {action.items.map((item) => (
+                            <li key={item} className="flex items-start gap-2 text-[13px] leading-5 text-muted">
+                              <CheckCircle2 size={14} strokeWidth={1.8} className="mt-0.5 shrink-0 text-brand" />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 function cleanMarkdown(text: string | null): string {
   if (!text) return ''
   return text

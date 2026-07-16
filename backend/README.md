@@ -98,6 +98,30 @@ docker compose exec api python -m app.jobs.build_prep_vectors_once
 덮어쓰지 않습니다. 캘린더 코치는 프로필의 cloud/local 설정과 같은 Prep 벡터 컬럼을
 검색한 뒤 같은 모드의 LLM으로 일정을 생성합니다.
 
+### 채팅 서비스 흐름
+
+- `POST /api/v1/chat/ask`: 일반 JSON 응답
+- `POST /api/v1/chat/ask/stream`: 근거 메타데이터와 답변 토큰을 SSE로 반환
+- 전체 정책 질문: 사용자 `chat_model_mode`에 따라 `policy_chunks.embedding_openai` 또는
+  `policy_chunks.embedding_ollama` 검색
+- 정책 선택 후 후속 질문: 선택한 정책의 `policy_documents` 부모 문서를 유형별로 조회
+- 일반 응답과 스트리밍 응답: 정책 선택, 대화 문맥, 짧은 속성 질문 답변 규칙을 동일하게 적용
+
+정책별 상세 질문은 부모 문서를 사용하므로 임베딩 모델 장애와 무관하게 근거를 구성할 수
+있습니다. 실제 답변 생성은 사용자 모드의 cloud/local 채팅 모델을 사용하며, 모델 장애를
+정적 답변으로 숨기지 않고 공통 모델 오류 응답으로 전달합니다.
+
+### 캘린더 서비스 흐름
+
+- `POST /api/v1/calendar/event`: 정책의 실제 `apply_end`를 Google Calendar 종일 일정으로 등록
+- `GET /api/v1/calendar/events`: 최근 30일부터 향후 1년간의 Google Calendar 일정 조회
+- `GET /api/v1/calendar/coach`: 정책 RAG, 발급 가이드, 준비 기간 안의 개인 일정을 조합해 코칭
+
+캘린더 코치의 `deadline`은 항상 `normalized_policies.apply_end`입니다. 선택적
+`target_date`는 오늘 이후이면서 실제 마감일 이전인 준비 완료 목표일만 허용합니다. Google
+Calendar의 0건 응답과 권한·통신·시간 초과 오류를 구분하며, 조회 장애를 빈 일정으로 바꿔
+코치 모델에 전달하지 않습니다.
+
 모델 호출 로그에는 feature/provider/model/stage/source, 입력·출력 길이, 결과 수, 차원,
 지연시간, 상태와 오류 타입만 한 줄로 남습니다. 프롬프트·응답 원문·벡터·키·파일명은
 출력하지 않습니다.
@@ -447,6 +471,7 @@ normalized_policies
 - is_active
 ```
 
+```text
 attachment_files
 - file_hash
 - storage_path
@@ -513,44 +538,28 @@ users (인증 공통)
 - hashed_password (VARCHAR)
 - is_active (BOOLEAN)
 
-user_profiles (추천 필터 공통)
+user_profiles (프로필·추천 필터·기능별 AI 선택 공통)
 - user_id (INTEGER FK)
-- industry (JSON)
-- region (VARCHAR)
-- sales (INTEGER)
-- employees (INTEGER)
-- available_time_preference (JSON)
+- owner_name / store_name
+- ai_model_mode (레거시 단일 선택 호환)
+- chat_model_mode
+- recommend_model_mode
+- policy_summary_model_mode
+- calendar_coach_model_mode
+- document_review_model_mode
+- region_sido / region_sigungu
+- industry_tags / business_status_tags / need_tags (ARRAY)
+- employees_min / employees_max
+- annual_sales_min / annual_sales_max
+- business_age_min / business_age_max
+- industry_label / business_status_label
+- annual_sales_label / employees_label / business_age_label
+- onboarded_at
 ```
 
 벡터 테이블은 공유 정규화 데이터를 읽어서 각 도메인이 채우는 영역입니다. 네 테이블 모두
 크롤러 주기에 자동 점검되고 원문·모델·벡터 상태가 달라진 항목만 갱신합니다. 사용자가
 업로드한 서류 원문은 `review_vectors`에 저장하거나 공유 임베딩하지 않습니다.
-
-첨부파일 실제 저장 위치:
-
-```text
-backend/storage/attachments/{pbanc_sn}/
-```
-
-첨부파일 bytes는 DB에 직접 넣지 않습니다. DB에는 `saved_path`, `file_hash`, 파일 메타데이터만 저장합니다.
-
-## 정책 API
-
-목록:
-
-```text
-GET /api/v1/policies/
-```
-
-상세:
-
-```text
-GET /api/v1/policies/{pbanc_sn}
-```
-
-SEMAS 지원사업 안내 페이지 목록:
-
-```text
 
 첨부파일 실제 저장 위치:
 
@@ -611,6 +620,9 @@ backend/
     ├── core/
     │   ├── config.py
     │   ├── database.py
+    │   ├── model_errors.py
+    │   ├── model_logging.py
+    │   ├── model_provider.py
     │   └── rag_utils.py
     ├── crawlers/
     │   ├── gov24_client.py
@@ -619,10 +631,14 @@ backend/
     ├── crud/
     │   └── policy.py
     ├── jobs/
+    │   ├── build_prep_vectors_once.py
+    │   ├── build_rec_vectors_once.py
+    │   ├── build_review_vectors_once.py
     │   ├── crawl_gov24_once.py
     │   ├── crawl_policy_sources_loop.py
     │   ├── crawl_sbiz24_once.py
     │   ├── crawl_semas_once.py
+    │   ├── embed_policy_chunks_once.py
     │   ├── evaluate_normalization_quality.py
     │   └── normalize_policies_once.py
     ├── models/
@@ -651,9 +667,27 @@ backend/
     │   │   ├── regions.py               # 시도·시군구·권역 정규화
     │   │   ├── source_documents.py      # 출처별 문서·섹션 구성
     │   │   └── sources.py               # Sbiz24·SEMAS·Gov24 변환 어댑터
+    │   ├── chat_rag.py
+    │   ├── prep_rag.py
     │   ├── policy_ingest.py
+    │   ├── recommend.py
+    │   ├── review_documents.py
     │   └── semas_ingest.py
     └── main.py
+```
+
+## 테스트
+
+프로젝트 루트에서 현재 소스를 컨테이너에 마운트해 전체 백엔드 테스트를 실행합니다.
+
+```powershell
+docker compose run --rm -T -v ./backend:/app api python -m pytest -q
+```
+
+캘린더 회귀 테스트만 확인할 때:
+
+```powershell
+docker compose run --rm -T -v ./backend:/app api python -m pytest tests/test_calendar.py -q
 ```
 
 ## DBeaver에서 확인
