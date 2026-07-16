@@ -16,11 +16,13 @@ from app.services.chat_rag import (
     build_recommendation_follow_up_answer,
     generate_chat_answer,
     generate_chat_answer_stream,
+    infer_intent_tags,
     record_chat_turn,
     retrieve_policy_chunk_sources,
     retrieve_policy_document_sources,
     resolve_session_policy_context,
 )
+from app.services.policy_title_matcher import resolve_policy_title_from_db
 
 
 class PolicyChatState(TypedDict, total=False):
@@ -66,20 +68,55 @@ def _resolve_request(state: PolicyChatState) -> Dict[str, Any]:
             "answer": follow_up_answer,
         }
 
-    context_policy_id = state.get("requested_policy_id") or resolve_session_policy_context(
-        state["query"],
-        session=state["session"],
-        recent_messages=state["recent_messages"],
-        selected_policy_id=state.get("selected_policy_id"),
-    )
     return {
-        "context_policy_id": context_policy_id,
+        "context_policy_id": state.get("requested_policy_id"),
         "recommendation_follow_up": False,
     }
 
 
-def _route_after_context(state: PolicyChatState) -> Literal["retrieve", "update_context"]:
-    return "update_context" if state.get("response_data") is not None else "retrieve"
+def _route_after_context(state: PolicyChatState) -> Literal["match_title", "retrieve", "update_context"]:
+    if state.get("response_data") is not None:
+        return "update_context"
+    if state.get("context_policy_id") is not None:
+        return "retrieve"
+    return "match_title"
+
+
+def _match_policy_title(state: PolicyChatState) -> Dict[str, Any]:
+    resolution = resolve_policy_title_from_db(state["db"], state["query"])
+    if resolution.status == "matched":
+        return {"context_policy_id": resolution.policy_id}
+    if resolution.status == "ambiguous":
+        return {
+            "response_data": {
+                "query": state["query"],
+                "expanded_query": state["query"],
+                "intent_tags": infer_intent_tags(None, None, state["query"]),
+                "response_mode": "policy_selection",
+                "candidates": list(resolution.candidates),
+                "sources": [],
+            }
+        }
+    return {}
+
+
+def _route_after_title_match(state: PolicyChatState) -> Literal["retrieve", "resolve_session", "update_context"]:
+    if state.get("response_data") is not None:
+        return "update_context"
+    if state.get("context_policy_id") is not None:
+        return "retrieve"
+    return "resolve_session"
+
+
+def _resolve_session_context(state: PolicyChatState) -> Dict[str, Any]:
+    return {
+        "context_policy_id": resolve_session_policy_context(
+            state["query"],
+            session=state["session"],
+            recent_messages=state["recent_messages"],
+            selected_policy_id=state.get("selected_policy_id"),
+        )
+    }
 
 
 def _retrieve_sources(state: PolicyChatState) -> Dict[str, Any]:
@@ -224,6 +261,8 @@ def _persist_turn(state: PolicyChatState) -> Dict[str, Any]:
 def _build_policy_chat_graph():
     builder = StateGraph(PolicyChatState)
     builder.add_node("resolve_context", _resolve_request)
+    builder.add_node("match_title", _match_policy_title)
+    builder.add_node("resolve_session", _resolve_session_context)
     builder.add_node("retrieve", _retrieve_sources)
     builder.add_node("update_context", _update_session_context)
     builder.add_node("emit_metadata", _emit_metadata)
@@ -236,8 +275,22 @@ def _build_policy_chat_graph():
     builder.add_conditional_edges(
         "resolve_context",
         _route_after_context,
-        {"retrieve": "retrieve", "update_context": "update_context"},
+        {
+            "match_title": "match_title",
+            "retrieve": "retrieve",
+            "update_context": "update_context",
+        },
     )
+    builder.add_conditional_edges(
+        "match_title",
+        _route_after_title_match,
+        {
+            "retrieve": "retrieve",
+            "resolve_session": "resolve_session",
+            "update_context": "update_context",
+        },
+    )
+    builder.add_edge("resolve_session", "retrieve")
     builder.add_edge("retrieve", "update_context")
     builder.add_edge("update_context", "emit_metadata")
     builder.add_edge("emit_metadata", "prepare_answer")
