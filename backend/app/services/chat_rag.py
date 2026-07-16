@@ -1646,6 +1646,42 @@ POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+# 소상공인·사업자처럼 사용자의 신분이나 상황만 나타내는 단어는 정책 요청의
+# 근거가 되지 않는다. 일상 화제와 함께 들어왔을 때에는 아래처럼 실제 정책
+# 내용이나 행동을 묻는 신호가 있어야 정책 검색으로 보낸다.
+POLICY_REQUEST_KEYWORDS: Tuple[str, ...] = (
+    "정책",
+    "공고",
+    "공고문",
+    "복지",
+    "지원",
+    "지원금",
+    "보조금",
+    "융자",
+    "대출",
+    "보증",
+    "정책자금",
+    "신청",
+    "접수",
+    "서류",
+    "대상",
+    "자격",
+    "요건",
+    "조건",
+    "기간",
+    "마감",
+    "기한",
+    "문의",
+    "기준",
+    "지급",
+    "감면",
+    "예산",
+    "손실보상",
+    "긴급자금",
+    "재난지원",
+)
+
+
 DETAIL_CONTEXT_KEYWORDS: Tuple[str, ...] = (
     "이거",
     "여기",
@@ -1748,18 +1784,37 @@ WEATHER_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+OUT_OF_SCOPE_OVERRIDE_PHRASES: Tuple[str, ...] = (
+    "정책 말고",
+    "공고 말고",
+    "지원금 말고",
+    "지원 말고",
+)
+
+
 def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None) -> bool:
     normalized = _normalize_space(query).lower()
     if not normalized:
         return False
 
+    has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
     has_policy_signal = any(keyword in normalized for keyword in POLICY_DOMAIN_KEYWORDS)
+    has_policy_request_signal = any(
+        keyword in normalized for keyword in POLICY_REQUEST_KEYWORDS
+    )
+    has_out_of_scope_override = any(
+        phrase in normalized for phrase in OUT_OF_SCOPE_OVERRIDE_PHRASES
+    )
     has_detail_context_signal = policy_id is not None and any(
         keyword in normalized for keyword in DETAIL_CONTEXT_KEYWORDS
     )
-    has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
 
-    if has_out_of_scope_signal and not has_policy_signal:
+    # "나 소상공인인데 오늘 점심 메뉴 추천해줘"처럼 정책 대상자 배경정보와
+    # 일상 질문이 섞인 경우, 지원·신청·공고처럼 명시적인 정책 요청이 없으면
+    # 일상 질문을 우선한다. 선택된 정책 문맥도 이 우선순위를 뒤집지 않는다.
+    if has_out_of_scope_signal and (
+        has_out_of_scope_override or not has_policy_request_signal
+    ):
         return True
 
     if has_policy_signal or has_detail_context_signal:

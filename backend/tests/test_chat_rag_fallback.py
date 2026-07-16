@@ -344,6 +344,19 @@ def test_out_of_scope_personal_style_question_does_not_search_policy_chunks():
     assert "소상공인 정책 공고" in response["answer"]
 
 
+def test_out_of_scope_daily_question_wins_over_small_business_background():
+    response = answer_policy_question(
+        db=None,
+        query="나 소상공인인데, 오늘 점심 메뉴 추천해줘",
+        limit=6,
+    )
+
+    assert response["intent_tags"] == ["out_of_scope"]
+    assert response["sources"] == []
+    assert "소상공인 정책 공고" in response["answer"]
+    assert is_out_of_policy_scope("나 소상공인인데, 오늘 점심 메뉴 추천해줘") is True
+
+
 def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     policy_id = uuid.UUID("def4bdcb-9e7e-4dd5-a2be-875c14345e1b")
 
@@ -351,6 +364,8 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("미용실 지원금 있어?", policy_id=None) is False
     assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
+    assert is_out_of_policy_scope("소상공인인데 점심 장사 지원금 신청 가능해?", policy_id=None) is False
+    assert is_out_of_policy_scope("그 정책 말고 오늘 점심 뭐 먹지?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
 
 
