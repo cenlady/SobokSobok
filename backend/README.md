@@ -26,47 +26,30 @@ DB_USER="edu"
 DB_PASSWORD="<개인/팀 DB 비밀번호>"
 ```
 
-로컬 Python 실행에서는 호스트 포트로 노출된 compose DB에 접속합니다.
-
-```env
-DB_HOST="localhost"
-DB_PORT="5431"
-DB_NAME="soboksobok"
-DB_USER="edu"
-DB_PASSWORD="<개인/팀 DB 비밀번호>"
-```
-
 `DATABASE_URL`을 직접 설정하면 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`보다 우선합니다.
 
 ```env
-DATABASE_URL="postgresql://edu:<password>@localhost:5431/soboksobok"
+DATABASE_URL="postgresql://edu:<password>@db:5432/soboksobok"
 ```
 
 ## 민감정보 관리
 
 실제 비밀번호와 시크릿은 Git에 커밋하지 않습니다.
 
-Docker Compose 실행용 환경변수는 프로젝트 루트의 `.env`에서 관리합니다.
+환경변수는 프로젝트 루트의 `.env`에서만 관리합니다.
 
 ```powershell
 cd C:\education\SobokSobok
 Copy-Item .env.example .env
 ```
 
-로컬 Python 실행용 환경변수는 `backend/.env`에서 관리할 수 있습니다.
-
-```powershell
-cd C:\education\SobokSobok\backend
-Copy-Item .env.example .env
-```
-
-Docker Compose로 실행할 때는 프로젝트 루트의 `.env`가 기준입니다. `backend/.env`는 `uvicorn app.main:app --reload`처럼 백엔드를 로컬 Python으로 직접 실행할 때 사용합니다.
+백엔드도 Docker Compose로 실행하며 `backend/.env`는 별도로 두지 않습니다.
 
 ### 기능별 AI 설정과 사용자 선택
 
-모든 모델 생성은 `app/core/model_provider.py`의 중앙 factory를 통과합니다. `.env`의
-기능별 provider는 `openai`, `ollama`, `gemini` 중에서 고를 수 있고, 모델명과 임베딩
-차원을 함께 설정해야 합니다.
+모든 모델 생성은 `app/core/model_provider.py`의 중앙 factory를 통과합니다. 사용자 선택
+기능은 `cloud=OpenAI`, `local=Ollama`로 동작하며 기능별 cloud/local 모델명과 임베딩
+차원을 함께 설정합니다.
 
 사용자 프로필에는 챗봇·추천·정책 요약·캘린더 코치·서류검토의 `cloud`/`local`
 선택을 각각 저장합니다. 일반 기능 기본값은 `cloud`, 서류검토 기본값은 `local`입니다.
@@ -164,17 +147,6 @@ DB 볼륨까지 지우고 새 데이터베이스로 다시 시작:
 ```powershell
 docker compose down -v --remove-orphans
 docker compose up -d --build
-```
-
-## 로컬 Python 실행
-
-백엔드 디렉토리에서 실행합니다.
-
-```powershell
-cd C:\education\SobokSobok\backend
-Copy-Item .env.example .env
-pip install -r requirements.txt
-uvicorn app.main:app --reload
 ```
 
 API 문서:
