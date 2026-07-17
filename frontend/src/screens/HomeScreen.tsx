@@ -130,15 +130,13 @@ export default function HomeScreen() {
   }, [isOpenCoachModal])
 
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
-  const { always, unknown } = useMemo(() => {
-    const groups: Record<'always' | 'unknown', SavedPolicy[]> = {
-      always: [],
+  const { unknown } = useMemo(() => {
+    const groups: Record<'unknown', SavedPolicy[]> = {
       unknown: [],
     }
     for (const policy of policies) {
       const kind = getDeadlineInfo(policy).kind
-      if (kind === 'always') groups.always.push(policy)
-      else if (kind !== 'urgent' && kind !== 'dated') groups.unknown.push(policy)
+      if (kind !== 'urgent' && kind !== 'dated' && kind !== 'always') groups.unknown.push(policy)
     }
     return groups
   }, [policies])
@@ -345,21 +343,6 @@ export default function HomeScreen() {
           })()}
         </div>
       </section>
-
-      {/* 상시 접수 — 마감이 없다는 건 나쁜 소식이 아니라 좋은 소식이다 */}
-      {always.length > 0 && (
-        <section className="mt-7 px-5">
-          <h3 className="text-section text-ink">상시 접수 가능</h3>
-          <p className="mt-1 text-sm text-muted">
-            마감 걱정 없이 언제든 신청할 수 있어요. {always.length}건
-          </p>
-          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
-            {always.map((policy) => (
-              <DeadlineCard key={policy.policy_id} policy={policy} />
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* 기간을 우리가 모르는 것들. '상시'라고 둘러대지 않는다. */}
       {unknown.length > 0 && (
