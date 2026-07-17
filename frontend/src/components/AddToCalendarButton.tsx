@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CalendarPlus, CalendarX, Loader2 } from 'lucide-react'
+import { CalendarOff, CalendarPlus, CalendarX, Loader2 } from 'lucide-react'
 import { apiFetch } from '../lib/api'
 
 interface Props {
@@ -153,7 +153,11 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
             : 'bg-status-green/10 text-status-green hover:bg-status-green/20 active:bg-status-green/30'
         }`}
       >
-        {state === 'loading' ? (
+        {noDeadline ? (
+          <>
+            <CalendarOff size={iconSize} /> 등록 불가
+          </>
+        ) : state === 'loading' ? (
           <>
             <Loader2 size={iconSize} className="animate-spin" /> 등록 중…
           </>
