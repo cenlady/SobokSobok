@@ -1602,29 +1602,21 @@ def source_answer_text(source: Dict[str, Any]) -> str:
     return clean_rag_answer_text(source.get("raw_chunk_text") or source.get("chunk_text"))
 
 
-POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
+# 소상공인·사업자처럼 사용자의 신분이나 상황만 나타내는 단어는 정책 요청의
+# 근거가 되지 않는다. 일상 화제와 함께 들어왔을 때에는 아래처럼 실제 정책
+# 내용이나 행동을 묻는 신호가 있어야 정책 검색으로 보낸다.
+POLICY_REQUEST_KEYWORDS: Tuple[str, ...] = (
     "정책",
     "공고",
     "공고문",
     "복지",
     "지원",
     "지원금",
-    "현금",
-    "현금성",
-    "지급",
-    "장려금",
-    "급여",
-    "혜택",
     "보조금",
     "융자",
     "대출",
     "보증",
-    "소상공인",
-    "사업자",
-    "사업장",
-    "업종",
-    "매출",
-    "직원",
+    "정책자금",
     "신청",
     "접수",
     "서류",
@@ -1632,17 +1624,133 @@ POLICY_DOMAIN_KEYWORDS: Tuple[str, ...] = (
     "자격",
     "요건",
     "조건",
-    "해당",
-    "받을 수",
-    "마감",
     "기간",
+    "마감",
+    "기한",
     "문의",
-    "기관",
-    "지역",
-    "노란우산",
+    "기준",
+    "지급",
+    "받을 수",
+    "혜택",
+    "바우처",
+    "제도",
+    "지원사업",
+    "감면",
+    "예산",
     "손실보상",
-    "전기요금",
-    "냉난방",
+    "긴급자금",
+    "재난지원",
+)
+
+
+# 일상 주제와 정책 단어가 섞였을 때 실제 정책 질문임을 뒷받침하는 강한 신호다.
+# "점심 정책 추천"처럼 정책이라는 말만 붙인 문장은 여기에 해당하지 않는다.
+SPECIFIC_POLICY_KEYWORDS: Tuple[str, ...] = (
+    "복지",
+    "지원금",
+    "보조금",
+    "장려금",
+    "융자",
+    "대출",
+    "보증",
+    "정책자금",
+    "혜택",
+    "바우처",
+    "지원사업",
+    "감면",
+    "손실보상",
+    "긴급자금",
+    "재난지원",
+)
+
+
+BUSINESS_CONTEXT_KEYWORDS: Tuple[str, ...] = (
+    "창업",
+    "사업장",
+    "장사",
+    "영업",
+    "매장",
+    "점포",
+    "경영",
+    "운영",
+    "매출",
+    "고용",
+    "직원",
+    "임대료",
+    "시설",
+    "장비",
+    "판로",
+    "수출",
+    "업종",
+    "미용실",
+    "식당",
+    "카페",
+    "공장",
+    "제조",
+    "농업",
+    "어업",
+    "소공인",
+)
+
+
+RECOMMENDATION_REQUEST_KEYWORDS: Tuple[str, ...] = (
+    "추천",
+    "맞춤",
+    "찾아줘",
+    "찾아 줘",
+)
+
+
+POLICY_RECOMMENDATION_ANCHORS: Tuple[str, ...] = (
+    "정책",
+    "공고",
+    "복지",
+    "지원금",
+    "보조금",
+    "장려금",
+    "대출",
+    "융자",
+    "보증",
+    "정책자금",
+    "혜택",
+    "바우처",
+    "지원사업",
+    "감면",
+    "손실보상",
+    "긴급자금",
+    "재난지원",
+)
+
+
+POLICY_TOPIC_ANCHORS: Tuple[str, ...] = POLICY_RECOMMENDATION_ANCHORS + (
+    "지원",
+)
+
+
+POLICY_ACTION_KEYWORDS: Tuple[str, ...] = (
+    "신청",
+    "접수",
+    "서류",
+    "대상",
+    "자격",
+    "요건",
+    "조건",
+    "기간",
+    "마감",
+    "기한",
+    "문의",
+    "기준",
+    "지급",
+    "받을 수",
+)
+
+
+GENERIC_RECOMMENDATION_REQUESTS: Tuple[str, ...] = (
+    "추천해줘",
+    "추천해 줘",
+    "맞춤 추천",
+    "정책 추천해줘",
+    "정책 추천해 줘",
 )
 
 
@@ -1692,11 +1800,30 @@ OUT_OF_SCOPE_KEYWORDS: Tuple[str, ...] = (
     "춥냐",
     "우산 챙",
     "우산 가져",
+    # 식사·외식
+    "아침",
     "점심",
     "저녁",
-    "아침 뭐",
+    "야식",
+    "브런치",
+    "조식",
+    "메뉴",
+    "식사",
+    "밥",
+    "음식",
+    "요리",
+    "레시피",
+    "간식",
     "뭐 먹",
+    "먹을까",
+    "먹지",
     "맛집",
+    "식당",
+    "카페",
+    "커피",
+    "디저트",
+    "배달",
+    # 일상·취미·건강
     "머리",
     "단발",
     "기를까",
@@ -1708,6 +1835,11 @@ OUT_OF_SCOPE_KEYWORDS: Tuple[str, ...] = (
     "옷",
     "입을까",
     "코디",
+    "패션",
+    "신발",
+    "화장",
+    "화장품",
+    "피부",
     "연애",
     "남친",
     "여친",
@@ -1717,9 +1849,32 @@ OUT_OF_SCOPE_KEYWORDS: Tuple[str, ...] = (
     "졸려",
     "피곤",
     "농담",
+    "운세",
+    "사주",
     "노래",
     "영화",
     "드라마",
+    "음악",
+    "게임",
+    "웹툰",
+    "독서",
+    "여행",
+    "휴가",
+    "숙소",
+    "취미",
+    "운동",
+    "헬스",
+    "다이어트",
+    "건강",
+    "병원",
+    "증상",
+    "약 먹",
+    "청소",
+    "세탁",
+    "반려동물",
+    "강아지",
+    "고양이",
+    "육아",
     "스포츠",
     "연예",
     "주식",
@@ -1748,26 +1903,78 @@ WEATHER_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+OUT_OF_SCOPE_OVERRIDE_PHRASES: Tuple[str, ...] = (
+    "정책 말고",
+    "공고 말고",
+    "지원금 말고",
+    "지원 말고",
+)
+
+
 def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None) -> bool:
     normalized = _normalize_space(query).lower()
     if not normalized:
         return False
 
-    has_policy_signal = any(keyword in normalized for keyword in POLICY_DOMAIN_KEYWORDS)
+    has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
+    has_policy_request_signal = any(
+        keyword in normalized for keyword in POLICY_REQUEST_KEYWORDS
+    )
+    has_specific_policy_signal = any(
+        keyword in normalized for keyword in SPECIFIC_POLICY_KEYWORDS
+    )
+    has_business_context_signal = any(
+        keyword in normalized for keyword in BUSINESS_CONTEXT_KEYWORDS
+    )
+    has_policy_topic_anchor = any(
+        keyword in normalized for keyword in POLICY_TOPIC_ANCHORS
+    )
+    policy_action_signal_count = sum(
+        keyword in normalized for keyword in POLICY_ACTION_KEYWORDS
+    )
+    has_out_of_scope_override = any(
+        phrase in normalized for phrase in OUT_OF_SCOPE_OVERRIDE_PHRASES
+    )
     has_detail_context_signal = policy_id is not None and any(
         keyword in normalized for keyword in DETAIL_CONTEXT_KEYWORDS
     )
-    has_out_of_scope_signal = any(keyword in normalized for keyword in OUT_OF_SCOPE_KEYWORDS)
 
-    if has_out_of_scope_signal and not has_policy_signal:
-        return True
+    # 일상 주제와 정책 단어가 섞이면, 구체적인 정책 수단이나 사업 맥락까지
+    # 있어야 정책 질문으로 인정한다. "점심 정책 추천"처럼 정책 단어만 붙여
+    # RAG가 억지로 공고를 찾는 것을 막는다.
+    if has_out_of_scope_signal:
+        if has_out_of_scope_override:
+            return True
+        if not has_policy_request_signal:
+            return True
+        if not (has_specific_policy_signal or has_business_context_signal):
+            return True
 
-    if has_policy_signal or has_detail_context_signal:
+    if has_detail_context_signal:
+        return False
+    if has_specific_policy_signal or has_policy_topic_anchor:
+        return False
+    if has_business_context_signal and has_policy_request_signal:
+        return False
+    if policy_action_signal_count >= 2:
         return False
 
-    # RAG는 항상 뭔가를 찾아내므로, 정책 신호가 전혀 없는 일반 질문은 검색하지 않는다.
-    # 예: "나 머리 단발할까 기를까", "오늘 기분이 별로야", "뭐 하지?"
+    # 소상공인·사업자 같은 대상자 배경정보만으로는 정책 요청으로 보지 않는다.
+    # 명시적인 정책 요청이 없는 나머지 일반 질문은 RAG가 억지로 공고를 찾지 않게 한다.
     return True
+
+
+def is_policy_recommendation_request(query: str) -> bool:
+    normalized = _normalize_space(query).lower()
+    if not normalized:
+        return False
+    if normalized in GENERIC_RECOMMENDATION_REQUESTS:
+        return True
+    if not any(keyword in normalized for keyword in RECOMMENDATION_REQUEST_KEYWORDS):
+        return False
+    if not any(keyword in normalized for keyword in POLICY_RECOMMENDATION_ANCHORS):
+        return False
+    return not is_out_of_policy_scope(normalized)
 
 
 def build_out_of_scope_answer(query: str) -> str:

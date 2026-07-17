@@ -14,6 +14,7 @@ from app.services.chat_rag import (
     clean_rag_evidence_text,
     generate_chat_answer,
     is_out_of_policy_scope,
+    is_policy_recommendation_request,
 )
 
 
@@ -344,6 +345,40 @@ def test_out_of_scope_personal_style_question_does_not_search_policy_chunks():
     assert "소상공인 정책 공고" in response["answer"]
 
 
+def test_out_of_scope_daily_question_wins_over_small_business_background():
+    response = answer_policy_question(
+        db=None,
+        query="나 소상공인인데, 오늘 점심 메뉴 추천해줘",
+        limit=6,
+    )
+
+    assert response["intent_tags"] == ["out_of_scope"]
+    assert response["sources"] == []
+    assert "소상공인 정책 공고" in response["answer"]
+    assert is_out_of_policy_scope("나 소상공인인데, 오늘 점심 메뉴 추천해줘") is True
+    assert is_out_of_policy_scope("나 소상공인이고, 아침 메뉴 추천해줘") is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "자영업자인데 오늘 카페 추천해줘",
+        "사업자인데 주말 여행지 추천해줘",
+        "예비창업자인데 영화 뭐 볼까?",
+        "중소기업 대표인데 운동 루틴 추천해줘",
+        "청년 사업자인데 오늘 날씨 어때?",
+        "프리랜서인데 강아지 키워도 될까?",
+        "소상공인인데 넷플릭스에서 뭐 볼까?",
+        "사업자인데 주말에 뭐 하면 좋을까?",
+        "소상공인이 신청할 수 있는 점심 정책 추천해줘",
+        "소상공인이 신청할 수 있는 영화 정책 추천해줘",
+        "소상공인이 신청할 수 있는 넷플릭스 추천해줘",
+    ],
+)
+def test_daily_intent_wins_over_policy_target_background(query):
+    assert is_out_of_policy_scope(query) is True
+
+
 def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     policy_id = uuid.UUID("def4bdcb-9e7e-4dd5-a2be-875c14345e1b")
 
@@ -351,7 +386,50 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("미용실 지원금 있어?", policy_id=None) is False
     assert is_out_of_policy_scope("나는 현금으로 지급해주는 복지 받고싶어. 추천해줘", policy_id=None) is False
     assert is_out_of_policy_scope("현금으로 지급해주는 복지 추천해줘", policy_id=None) is False
+    assert is_out_of_policy_scope("소상공인인데 점심 장사 지원금 신청 가능해?", policy_id=None) is False
+    assert is_out_of_policy_scope("그 정책 말고 오늘 점심 뭐 먹지?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
+    assert is_out_of_policy_scope("신청 기간 알려줘", policy_id=None) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "소상공인 카페 창업 지원금 신청 방법 알려줘",
+        "자영업자 대상 정책자금 대출 조건이 뭐야?",
+        "청년 사업자 지원사업 공고 찾아줘",
+        "중소기업 세제 감면 신청 서류 알려줘",
+        "소상공인인데 받을 수 있는 혜택 알려줘",
+    ],
+)
+def test_explicit_policy_request_wins_over_daily_topic_words(query):
+    assert is_out_of_policy_scope(query) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "추천해줘",
+        "맞춤 정책 추천해줘",
+        "소상공인 정책 추천해줘",
+        "자영업자 지원금 추천해줘",
+        "내 조건에 맞는 지원 정책 찾아줘",
+    ],
+)
+def test_policy_recommendation_request_requires_a_policy_anchor(query):
+    assert is_policy_recommendation_request(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "소상공인이 신청할 수 있는 넷플릭스 추천해줘",
+        "소상공인이 신청할 수 있는 점심 정책 추천해줘",
+        "사업자인데 영화 추천해줘",
+    ],
+)
+def test_non_policy_recommendation_does_not_reach_profile_recommender(query):
+    assert is_policy_recommendation_request(query) is False
 
 
 @patch("app.services.chat_rag.get_chat_model")

@@ -32,6 +32,18 @@ def _result(status: str) -> RecommendationResult:
 
 
 class RecommendationApiTests(unittest.TestCase):
+    def test_preview_rejects_out_of_scope_source_query_before_embedding(self):
+        with patch("app.api.v1.recommend.recommend_policies") as recommend_mock:
+            response = _client().post(
+                "/recommend/preview",
+                params={"source_query": "소상공인이 신청할 수 있는 넷플릭스 추천해줘"},
+                json={},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"], "정책 추천과 관련된 질문을 입력해 주세요.")
+        recommend_mock.assert_not_called()
+
     def test_preview_accepts_multiple_status_filters_and_returns_their_union(self):
         results = [_result("eligible"), _result("needs_review"), _result("near_match")]
         with (
