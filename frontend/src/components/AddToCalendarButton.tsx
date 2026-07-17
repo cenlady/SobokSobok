@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CalendarCheck, CalendarPlus, Loader2 } from 'lucide-react'
+import { CalendarOff, CalendarPlus, CalendarX, Loader2 } from 'lucide-react'
 import { apiFetch } from '../lib/api'
 
 interface Props {
@@ -17,20 +17,13 @@ interface CalendarEventResponse {
 }
 
 /**
- * 정책 마감일을 사용자의 구글 캘린더에 등록한다.
- *
- * 예전에는 구글 캘린더의 "일정 추가" 화면을 새 탭으로 여는 TEMPLATE URL을 썼다.
- * 그 방식은 사용자가 새 탭에서 '저장'을 한 번 더 눌러야 실제로 등록됐다.
- * 이제 서버가 Calendar API로 직접 등록한다 — 버튼 한 번이면 끝난다.
- * (구글 토큰은 users 테이블에 있고 서버 밖으로 나가지 않는다.)
+ * 정책 마감일을 사용자의 구글 캘린더에 등록 및 삭제(연동 해제)한다.
  */
 export default function AddToCalendarButton({ policyId, applyEnd, variant = 'compact' }: Props) {
-  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
-  const [message, setMessage] = useState<string | null>(null)
-  const [link, setLink] = useState<string | null>(null)
-
-  // 마감일이 없는 정책은 캘린더에 넣을 날짜가 없다. 눌러봐야 서버가 400을 낸다.
   const noDeadline = !applyEnd
+  const [state, setState] = useState<'idle' | 'loading' | 'deleting' | 'done' | 'error'>('idle')
+  const [checking, setChecking] = useState(!noDeadline)
+  const [message, setMessage] = useState<string | null>(null)
 
   // [이재혁 - 사전 등록 여부 실시간 비동기 검증]
   useEffect(() => {
@@ -42,12 +35,14 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         if (ignore) return
         const matched = events.find(ev => ev.policy_id === policyId)
         if (matched) {
-          setLink(matched.html_link ?? null)
           setState('done')
         }
       })
       .catch((err) => {
         console.warn('사전 캘린더 등록 여부 검증 실패:', err)
+      })
+      .finally(() => {
+        if (!ignore) setChecking(false)
       })
 
     return () => {
@@ -60,11 +55,10 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
     setState('loading')
     setMessage(null)
     try {
-      const data = await apiFetch<CalendarEventResponse>('/api/v1/calendar/event', {
+      await apiFetch<CalendarEventResponse>('/api/v1/calendar/event', {
         method: 'POST',
         json: { policy_id: policyId },
       })
-      setLink(data.html_link)
       setState('done')
       // [이재혁 - 실시간 동기화용 변경 플래그 주입]
       sessionStorage.setItem('sobok_calendar_dirty', 'true')
@@ -83,6 +77,23 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
     }
   }
 
+  const remove = async () => {
+    if (noDeadline || state === 'deleting') return
+    setState('deleting')
+    setMessage(null)
+    try {
+      await apiFetch('/api/v1/calendar/event', {
+        method: 'DELETE',
+        json: { policy_id: policyId },
+      })
+      setState('idle')
+      sessionStorage.setItem('sobok_calendar_dirty', 'true')
+    } catch (e) {
+      setState('done')
+      alert(e instanceof Error ? e.message : '구글 캘린더 일정 삭제에 실패했어요.')
+    }
+  }
+
   const full = variant === 'full'
   // 공용 Button과 같은 치수를 쓴다. 나란히 놓이는 버튼끼리 높이가 다르면 그것만으로도
   // 화면이 어수선해진다.
@@ -91,16 +102,41 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
     : 'inline-flex items-center justify-center gap-1 h-11 px-3 rounded-lg text-[13px] font-semibold'
   const iconSize = full ? 16 : 14
 
-  if (state === 'done') {
+  if (checking) {
     return (
-      <a
-        href={link ?? '#'}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`${base} shrink-0 bg-status-green/10 text-status-green`}
-      >
-        <CalendarCheck size={iconSize} /> 등록됨
-      </a>
+      <div className={full ? 'w-full' : 'shrink-0'}>
+        <button
+          type="button"
+          disabled
+          className={`${base} border border-line bg-surface/60 text-subtle animate-pulse cursor-wait`}
+        >
+          <Loader2 size={iconSize} className="animate-spin text-subtle" /> 확인 중…
+        </button>
+      </div>
+    )
+  }
+
+  if (state === 'done' || state === 'deleting') {
+    return (
+      <div className={full ? 'w-full' : 'shrink-0'}>
+        <button
+          type="button"
+          onClick={remove}
+          disabled={state === 'deleting'}
+          title="구글 캘린더에서 일정을 삭제합니다"
+          className={`${base} transition-colors active:scale-[0.99] bg-status-red/10 text-status-red hover:bg-status-red/20 active:bg-status-red/30`}
+        >
+          {state === 'deleting' ? (
+            <>
+              <Loader2 size={iconSize} className="animate-spin text-status-red" /> 삭제 중…
+            </>
+          ) : (
+            <>
+              <CalendarX size={iconSize} /> 일정 삭제
+            </>
+          )}
+        </button>
+      </div>
     )
   }
 
@@ -114,18 +150,20 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         className={`${base} transition-colors active:scale-[0.99] ${
           noDeadline
             ? 'cursor-not-allowed bg-line/60 text-subtle'
-            : full
-              ? 'bg-accent-soft text-brand active:bg-accent-soft/70'
-              : 'border border-line bg-surface text-muted active:bg-line/40'
+            : 'bg-status-green/10 text-status-green hover:bg-status-green/20 active:bg-status-green/30'
         }`}
       >
-        {state === 'loading' ? (
+        {noDeadline ? (
+          <>
+            <CalendarOff size={iconSize} /> 등록 불가
+          </>
+        ) : state === 'loading' ? (
           <>
             <Loader2 size={iconSize} className="animate-spin" /> 등록 중…
           </>
         ) : (
           <>
-            <CalendarPlus size={iconSize} /> 캘린더
+            <CalendarPlus size={iconSize} /> 일정 등록
           </>
         )}
       </button>

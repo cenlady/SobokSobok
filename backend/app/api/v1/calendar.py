@@ -191,9 +191,71 @@ async def get_google_calendar_events(access_token: str) -> List[dict]:
             "date": date_str,
             "time": time_str,
             "summary": summary,
-            "policy_id": policy_id_str
+            "policy_id": policy_id_str,
+            "event_id": item.get("id"),
+            "html_link": item.get("htmlLink")
         })
     return schedules
+
+class CalendarEventDeleteRequest(BaseModel):
+    policy_id: UUID4
+
+@router.delete("/event", summary="구글 캘린더 일정 삭제 (연동 해제)")
+async def delete_policy_calendar_event(
+    payload: CalendarEventDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    [이재혁 - 캘린더 영역]
+    - 특정 지원사업 ID(policy_id)로 등록된 구글 캘린더 마감 일정을 삭제(연동 해제)합니다.
+    """
+    access_token = await get_valid_google_token(current_user, db)
+    existing_events = await get_google_calendar_events(access_token)
+
+    target_event = None
+    for ev in existing_events:
+        if ev.get("policy_id") == str(payload.policy_id):
+            target_event = ev
+            break
+
+    if not target_event or not target_event.get("event_id"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="구글 캘린더에서 해당 공고 일정을 찾을 수 없습니다."
+        )
+
+    google_event_id = target_event["event_id"]
+    url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{google_event_id}"
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.delete(url, headers=headers, timeout=10.0)
+            if response.status_code not in (200, 204):
+                error_detail = "Google Calendar API error"
+                try:
+                    error_detail = response.json().get("error", {}).get("message", error_detail)
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=response.status_code if response.status_code >= 400 else status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Google Calendar Delete Failed: {error_detail}"
+                )
+
+            return {
+                "message": "Policy deadline event successfully deleted from Google Calendar",
+                "policy_id": str(payload.policy_id)
+            }
+        except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to connect to Google Calendar API: {e}"
+            )
 
 @router.post("/event", summary="구글 캘린더 일정 등록")
 async def register_policy_calendar_event(

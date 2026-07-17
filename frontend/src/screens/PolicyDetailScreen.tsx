@@ -144,6 +144,12 @@ export default function PolicyDetailScreen() {
   const contactText = formatContactPoints(policy.contact_points)
   const eligibilityText = formatEligibility(policy.eligibility)
 
+  const targetApplyUrl = policy.apply_url
+    ? /^https?:\/\//i.test(policy.apply_url)
+      ? policy.apply_url
+      : `https://${policy.apply_url}`
+    : null
+
   return (
     <div className="app-frame flex h-[100dvh] flex-col bg-cream">
       <ScreenHeader
@@ -284,9 +290,9 @@ export default function PolicyDetailScreen() {
           </Button>
           <AddToCalendarButton policyId={policy.id} applyEnd={policy.apply_end} variant="full" />
           <Button
-            disabled={!policy.apply_url}
+            disabled={!targetApplyUrl}
             onClick={() =>
-              policy.apply_url && window.open(policy.apply_url, '_blank', 'noopener,noreferrer')
+              targetApplyUrl && window.open(targetApplyUrl, '_blank', 'noopener,noreferrer')
             }
             size="sm"
             full

@@ -168,7 +168,7 @@ export function ChoiceChip({
         className={`inline-flex min-h-11 items-center justify-center text-xs font-semibold ${className}`}
       >
         <span
-          className={`inline-flex h-9 w-full items-center justify-center rounded-xl border px-2 text-center leading-tight transition-colors ${
+          className={`inline-flex h-9 w-full items-center justify-center whitespace-nowrap rounded-xl border px-2 text-center leading-tight transition-colors ${
             selected
               ? 'border-primary bg-primary-soft text-primary'
               : 'border-line bg-surface text-muted active:bg-line/40'
