@@ -161,7 +161,7 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
           </>
         ) : (
           <>
-            <CalendarPlus size={iconSize} /> 캘린더
+            <CalendarPlus size={iconSize} /> 일정 등록
           </>
         )}
       </button>
