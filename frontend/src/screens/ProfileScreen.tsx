@@ -3,6 +3,7 @@ import {
   Bot,
   BriefcaseBusiness,
   ChevronRight,
+  HeartHandshake,
   LogOut,
   MapPin,
   Pencil,
@@ -57,9 +58,12 @@ export default function ProfileScreen() {
     }
   }
 
-  const interestLabel = profile.needTags
+  const interestLabels = profile.needTags
     .map((tag) => NEED_OPTIONS.find((item) => item.tag === tag)?.label || tag)
-    .join(', ')
+  const interestSummary = [interestLabels.slice(0, 2).join(' · ')]
+    .concat(interestLabels.length > 2 ? `외 ${interestLabels.length - 2}개` : [])
+    .filter(Boolean)
+    .join(' ')
 
   // 헤더 아바타와 동일한 이니셜(계정 이메일 첫 글자)
   const initial = (user?.email?.trim()?.[0] || '소').toUpperCase()
@@ -122,7 +126,9 @@ export default function ProfileScreen() {
           <InfoRow icon={SlidersHorizontal} label="업력" value={profile.businessAge} />
           <InfoRow icon={Wallet} label="매출 규모" value={profile.revenue} />
           <InfoRow icon={Users} label="직원 수" value={profile.employees} />
-          {interestLabel && <InfoRow label="관심 지원" value={interestLabel} />}
+          {interestSummary && (
+            <InfoRow icon={HeartHandshake} label="관심 지원" value={interestSummary} />
+          )}
         </dl>
 
         <p className="mt-3 border-l-2 border-status-green pl-3 text-xs leading-relaxed text-muted">
