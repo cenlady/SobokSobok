@@ -313,24 +313,48 @@ export default function HomeScreen() {
               <>
                 {selGoogleEvents.length > 0 && (
                   <div className="surface-panel divide-y divide-line overflow-hidden">
-                    {selGoogleEvents.map((ev, i) => (
-                      <div key={`${ev.summary}-${i}`} className="flex items-center gap-3 px-4 py-3.5">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-brand">
-                          <CalendarDays size={16} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-semibold text-subtle">캘린더 일정</span>
-                            {ev.time && (
-                              <span className="rounded-md bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
-                                {ev.time}
-                              </span>
-                            )}
+                    {selGoogleEvents.map((ev, i) => {
+                      const isPolicy = Boolean(ev.policy_id)
+                      return (
+                        <div
+                          key={`${ev.summary}-${i}`}
+                          role={isPolicy ? 'link' : undefined}
+                          tabIndex={isPolicy ? 0 : undefined}
+                          onClick={() => {
+                            if (ev.policy_id) navigate(`/policy/${ev.policy_id}`)
+                          }}
+                          onKeyDown={(event) => {
+                            if (ev.policy_id && (event.key === 'Enter' || event.key === ' ')) {
+                              event.preventDefault()
+                              navigate(`/policy/${ev.policy_id}`)
+                            }
+                          }}
+                          className={`flex items-start gap-3 px-4 py-3.5 ${
+                            isPolicy
+                              ? 'cursor-pointer outline-none transition-colors hover:bg-cream/60 focus-visible:bg-cream/60 active:bg-cream'
+                              : ''
+                          }`}
+                        >
+                          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-brand">
+                            <CalendarDays size={16} />
                           </div>
-                          <p className="mt-1 truncate text-sm font-semibold leading-snug text-ink">{ev.summary}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-semibold text-subtle">
+                                {isPolicy ? '정책 캘린더 일정' : '캘린더 일정'}
+                              </span>
+                              {ev.time && (
+                                <span className="rounded-md bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+                                  {ev.time}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-ink">{ev.summary}</p>
+                          </div>
+                          {isPolicy && <ChevronRight size={18} className="mt-1.5 shrink-0 text-subtle" />}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
                 {hasNoEvents ? (
