@@ -133,7 +133,10 @@ def _normalize_sbiz24(db: Session) -> dict[str, int]:
             "status": _normalize_status(row.status),
             "apply_start": _parse_datetime(row.apply_start),
             "apply_end": _parse_datetime(row.apply_end, end_of_day=True),
-            "apply_url": row.detail_url,
+            "apply_url": _first_text(
+                (row.raw_detail_json or {}).get("data", {}).get("default", {}).get("bizAplySiteUrlAddr"),
+                row.detail_url,
+            ),
             "industry_tags": metadata["industry_tags"],
             "business_status_tags": _merge_unique_lists(_business_tags_from_text(row.target or ""), metadata["business_status_tags"]),
             "eligibility": {
