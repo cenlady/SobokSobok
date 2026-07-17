@@ -359,14 +359,12 @@ export default function HomeScreen() {
         </section>
       )}
 
-      <section className="mt-8 px-5">
+      </div>
+
+      <div className="shrink-0 space-y-2 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
         <Button variant="secondary" full onClick={() => navigate('/policies')}>
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
-      </section>
-      </div>
-
-      <div className="shrink-0 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
         <Button onClick={handleCoachTimeline} disabled={loadingCoach || isPastDate || !hasPolicyScheduleInRange} full>
           {loadingCoach ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
