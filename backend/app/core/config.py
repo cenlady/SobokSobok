@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     RECOMMEND_LOCAL_EMBEDDING_DIMENSIONS: int = 1024
 
     # 정책 상세 요약. 사용자 cloud/local 선택에 맞춰 모델을 고른다.
-    POLICY_SUMMARY_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
+    POLICY_SUMMARY_CLOUD_LLM_MODEL: str = "gpt-5.4-mini"
     POLICY_SUMMARY_LOCAL_LLM_MODEL: str = "exaone3.5"
     POLICY_SUMMARY_ALLOW_EXTERNAL: bool = True
 
@@ -105,7 +105,7 @@ class Settings(BaseSettings):
     PREP_LOCAL_EMBEDDING_DIMENSIONS: int = 1024
 
     # 캘린더 일반 CRUD에는 적용되지 않고 AI 코칭에만 적용된다.
-    CALENDAR_COACH_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
+    CALENDAR_COACH_CLOUD_LLM_MODEL: str = "gpt-5.4-mini"
     CALENDAR_COACH_LOCAL_LLM_MODEL: str = "exaone3.5"
     CALENDAR_COACH_ALLOW_EXTERNAL: bool = True
 
