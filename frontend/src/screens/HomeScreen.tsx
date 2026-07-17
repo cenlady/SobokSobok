@@ -251,7 +251,10 @@ export default function HomeScreen() {
     return (
       <div>
         <TopBar />
-        <PageIntro title="내 정책 달력" description={todayLabel} />
+        <PageIntro
+          title="내 정책 달력"
+          description={<strong className="font-semibold text-primary">{todayLabel}</strong>}
+        />
         <EmptyState
           icon={CalendarDays}
           title="아직 저장한 정책이 없어요"
@@ -270,7 +273,11 @@ export default function HomeScreen() {
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
         <PageIntro
           title="내 정책 달력"
-          description={`${todayLabel} · 저장한 정책 ${policies.length}건`}
+          description={
+            <span>
+              <strong className="font-semibold text-primary">{todayLabel}</strong> 저장한 정책 {policies.length}건
+            </span>
+          }
         />
 
       {googleEventsError && (
