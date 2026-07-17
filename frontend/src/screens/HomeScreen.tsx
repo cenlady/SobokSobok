@@ -184,32 +184,44 @@ export default function HomeScreen() {
 
   const hasUpcomingPolicies = upcomingGoogleEvents.length > 0 || upcomingSavedPolicies.length > 0
 
-  // AI 코치 타깃 결정 (선택 날짜에 해당하는 정책이 있으면 해당 날짜를 쓰고, 없거나 과거일이면 가장 가까운 미래 마감 정책으로 자동 선택)
-  const resolvedCoachTarget = useMemo<{ policyId: string; targetDate: string } | null>(() => {
+  // AI 코치 타깃 결정
+  // 1) 미래 날짜(selected >= todayKey)를 클릭했고 오늘부터 선택 날짜 사이에 정책이 포함된 경우:
+  //    -> 해당 기간 내 정책 공고들을 묶어서 통합 AI 코칭 (공통 서류 일괄 발급 + 마감순 타임라인)
+  // 2) 날짜 미선택, 과거 날짜, 또는 선택 기간 내 정책이 없는 경우:
+  //    -> 가장 가까운 미래 마감 정책 1개만 단일 코칭
+  const resolvedCoachTarget = useMemo<{ policyIds: string[]; targetDate: string; isMulti: boolean } | null>(() => {
     if (!hasUpcomingPolicies) return null
 
     if (selected >= todayKey) {
-      const selectedEv = upcomingGoogleEvents.find((ev) => ev.date === selected)
-      if (selectedEv?.policy_id) {
-        return { policyId: selectedEv.policy_id, targetDate: selected }
-      }
-      const selectedPolicy = upcomingSavedPolicies.find((p) => toDateKey(p.apply_end) === selected)
-      if (selectedPolicy?.policy_id) {
-        return { policyId: selectedPolicy.policy_id, targetDate: selected }
-      }
-      const inRangeEv = upcomingGoogleEvents.filter((ev) => ev.date <= selected).pop()
-      if (inRangeEv?.policy_id) {
-        return { policyId: inRangeEv.policy_id, targetDate: selected }
+      const googleEvsInRange = upcomingGoogleEvents.filter((ev) => ev.date <= selected && Boolean(ev.policy_id))
+      const savedPoliciesInRange = upcomingSavedPolicies.filter((p) => {
+        const key = toDateKey(p.apply_end)
+        return Boolean(key && key <= selected)
+      })
+
+      const inRangePolicyIds = Array.from(
+        new Set([
+          ...googleEvsInRange.map((ev) => ev.policy_id!),
+          ...savedPoliciesInRange.map((p) => p.policy_id),
+        ]),
+      )
+
+      if (inRangePolicyIds.length > 0) {
+        return {
+          policyIds: inRangePolicyIds,
+          targetDate: selected,
+          isMulti: inRangePolicyIds.length > 1,
+        }
       }
     }
 
     if (upcomingGoogleEvents.length > 0) {
       const nearest = upcomingGoogleEvents[0]
-      return { policyId: nearest.policy_id!, targetDate: nearest.date }
+      return { policyIds: [nearest.policy_id!], targetDate: nearest.date, isMulti: false }
     }
     if (upcomingSavedPolicies.length > 0) {
       const nearest = upcomingSavedPolicies[0]
-      return { policyId: nearest.policy_id, targetDate: toDateKey(nearest.apply_end)! }
+      return { policyIds: [nearest.policy_id], targetDate: toDateKey(nearest.apply_end)!, isMulti: false }
     }
 
     return null
@@ -221,15 +233,18 @@ export default function HomeScreen() {
       return
     }
 
-    if (!resolvedCoachTarget) return
+    if (!resolvedCoachTarget || resolvedCoachTarget.policyIds.length === 0) return
     if (loadingCoach) return
 
     setCoachGuide(null)
     setIsOpenCoachModal(true)
     setLoadingCoach(true)
     try {
+      const queryParams = resolvedCoachTarget.policyIds
+        .map((pid) => `policy_ids=${encodeURIComponent(pid)}`)
+        .join('&')
       const data = await apiFetch<{ coach_guide: string }>(
-        `/api/v1/calendar/coach?policy_id=${encodeURIComponent(resolvedCoachTarget.policyId)}&target_date=${resolvedCoachTarget.targetDate}`,
+        `/api/v1/calendar/coach?${queryParams}&target_date=${resolvedCoachTarget.targetDate}`,
       )
       setCoachGuide(data.coach_guide)
     } catch (e) {
