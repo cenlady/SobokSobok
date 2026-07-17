@@ -11,8 +11,8 @@ import {
   StatusBadge,
   TagList,
 } from '../components/ui'
-import { localDateKey, toDateKey } from '../lib/calendar'
-import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
+import { localDateKey } from '../lib/calendar'
+import { getDeadlineInfo, formatPeriod } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
 import { useProfile, useSavedPolicies } from '../lib/storage'
@@ -130,30 +130,18 @@ export default function HomeScreen() {
   }, [isOpenCoachModal])
 
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
-  const { dated, always, unknown } = useMemo(() => {
-    const groups: Record<'dated' | 'always' | 'unknown', SavedPolicy[]> = {
-      dated: [],
+  const { always, unknown } = useMemo(() => {
+    const groups: Record<'always' | 'unknown', SavedPolicy[]> = {
       always: [],
       unknown: [],
     }
     for (const policy of policies) {
       const kind = getDeadlineInfo(policy).kind
-      if (kind === 'urgent' || kind === 'dated') groups.dated.push(policy)
-      else if (kind === 'always') groups.always.push(policy)
-      else groups.unknown.push(policy)
+      if (kind === 'always') groups.always.push(policy)
+      else if (kind !== 'urgent' && kind !== 'dated') groups.unknown.push(policy)
     }
     return groups
   }, [policies])
-
-  const dots = useMemo(() => {
-    const map: Record<string, DeadlineKind[]> = {}
-    for (const policy of dated) {
-      const key = toDateKey(policy.apply_end)
-      if (!key) continue
-      ;(map[key] ??= []).push(getDeadlineInfo(policy).kind)
-    }
-    return map
-  }, [dated])
 
   const { year, month } = cursor
   const startDow = new Date(year, month, 1).getDay()
@@ -178,7 +166,6 @@ export default function HomeScreen() {
     setCursor({ year: year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 })
   }
 
-  const dayList = dated.filter((p) => toDateKey(p.apply_end) === selected)
   const todayKey = localDateKey(new Date())
   const isPastDate = selected < todayKey
   const policySchedulesInRange = googleEvents
@@ -279,7 +266,6 @@ export default function HomeScreen() {
             {cells.map((c, idx) => {
               const isSel = c.dateKey === selected
               const isToday = c.dateKey === TODAY
-              const dayDots = c.dateKey ? dots[c.dateKey] : undefined
               const hasGoogle = c.dateKey ? Boolean(googleEventsMap[c.dateKey]) : false
               return (
                 <button
@@ -305,14 +291,6 @@ export default function HomeScreen() {
                     {c.day}
                   </span>
                   <span className="mt-0.5 flex h-1.5 gap-0.5">
-                    {dayDots?.slice(0, 2).map((kind, i) => (
-                      <span
-                        key={i}
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          kind === 'urgent' ? 'bg-status-red' : 'bg-muted'
-                        }`}
-                      />
-                    ))}
                     {hasGoogle && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
                   </span>
                 </button>
@@ -331,7 +309,7 @@ export default function HomeScreen() {
         <div className="mt-3 space-y-2.5">
           {(() => {
             const selGoogleEvents = googleEventsMap[selected] || []
-            const hasNoEvents = dayList.length === 0 && selGoogleEvents.length === 0
+            const hasNoEvents = selGoogleEvents.length === 0
 
             return (
               <>
@@ -362,13 +340,6 @@ export default function HomeScreen() {
                     이 날 등록된 일정이 없어요
                   </p>
                 ) : null}
-                {dayList.length > 0 && (
-                  <div className="surface-panel divide-y divide-line overflow-hidden">
-                    {dayList.map((policy) => (
-                      <DeadlineCard key={policy.policy_id} policy={policy} />
-                    ))}
-                  </div>
-                )}
               </>
             )
           })()}
