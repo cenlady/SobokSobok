@@ -37,7 +37,7 @@ export function getKstTodayLabel(date = new Date()) {
   const day = parts.find((p) => p.type === 'day')?.value
   const weekday = parts.find((p) => p.type === 'weekday')?.value
 
-  return `${year} ${month} ${day} (${weekday})`
+  return `${year}년 ${month} ${day}(${weekday})`
 }
 
 export function toDateKey(value?: string | null) {

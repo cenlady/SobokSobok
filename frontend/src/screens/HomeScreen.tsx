@@ -251,7 +251,7 @@ export default function HomeScreen() {
     return (
       <div>
         <TopBar />
-        <PageIntro title="내 정책 달력" description={`오늘 ${todayLabel}`} />
+        <PageIntro title="내 정책 달력" description={todayLabel} />
         <EmptyState
           icon={CalendarDays}
           title="아직 저장한 정책이 없어요"
@@ -270,11 +270,7 @@ export default function HomeScreen() {
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
         <PageIntro
           title="내 정책 달력"
-          description={
-            <span>
-              오늘 <strong className="font-semibold text-primary">{todayLabel}</strong> · 저장한 정책 {policies.length}건
-            </span>
-          }
+          description={`${todayLabel} · 저장한 정책 ${policies.length}건`}
         />
 
       {googleEventsError && (
@@ -292,27 +288,11 @@ export default function HomeScreen() {
       <section className="mt-4 px-5">
         <div className="surface-panel p-5">
           <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-section text-ink">
-                {year}년 {month + 1}월
-              </p>
-              <p className="mt-0.5 text-xs font-semibold text-primary">
-                오늘 {todayLabel}
-              </p>
-            </div>
+            <p className="text-section text-ink">
+              {year}년 {month + 1}월
+            </p>
             {/* 터치 영역 44×44 — 달력 넘김은 자주 쓰는데 화살표가 작아 누르기 어려웠다 */}
-            <div className="-mr-1 flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => {
-                  const t = new Date()
-                  setCursor({ year: t.getFullYear(), month: t.getMonth() })
-                  setSelected(TODAY)
-                }}
-                className="h-8 rounded-lg bg-primary/10 px-2.5 text-xs font-bold text-primary transition-colors hover:bg-primary/20 active:scale-95"
-              >
-                오늘
-              </button>
+            <div className="-mr-2 flex">
               <IconButton icon={ChevronLeft} onClick={() => shift(-1)} label="이전 달" />
               <IconButton icon={ChevronRight} onClick={() => shift(1)} label="다음 달" />
             </div>
@@ -337,15 +317,17 @@ export default function HomeScreen() {
                   className="relative flex h-11 flex-col items-center justify-center"
                 >
                   <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm ${
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition-colors ${
                       isSel
-                        ? 'bg-ink font-bold text-white'
+                        ? isToday
+                          ? 'bg-ink font-bold text-white ring-2 ring-primary ring-offset-1'
+                          : 'bg-ink font-bold text-white'
                         : !c.inMonth
                           ? // 지난달/다음달 날짜. 흐리게 두되 읽을 수는 있어야 한다.
                             // faint(2.4:1)는 텍스트에 쓰면 사실상 안 보인다.
                             'text-subtle/70'
                           : isToday
-                            ? 'font-bold text-primary'
+                            ? 'border-2 border-primary font-bold text-primary bg-primary/5'
                             : 'text-ink'
                     }`}
                   >
