@@ -399,7 +399,7 @@ def create_embedding_model(
     """
     설정값 기반으로 챗봇 RAG 임베딩 모델을 생성합니다.
     - provider: openai | gemini | ollama
-    - model_name을 생략하면 settings.CHAT_EMBEDDING_MODEL을 사용합니다.
+    - provider/model_name을 생략하면 챗봇의 기본 cloud 임베딩 설정을 사용합니다.
     """
     from app.core.model_provider import get_embedding_model
 

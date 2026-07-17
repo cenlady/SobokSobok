@@ -48,24 +48,6 @@ def _feature_name(feature: str) -> str:
     return _FEATURE_ALIASES.get(normalized, normalized)
 
 
-def _provider_value(value: str, default: str) -> str:
-    return (value.strip() or default.strip()).lower()
-
-
-def _default_model(provider: str, task: str) -> str:
-    if task == "embedding":
-        return {
-            "openai": settings.OPENAI_EMBEDDING_MODEL,
-            "ollama": settings.OLLAMA_EMBEDDING_MODEL,
-            "gemini": settings.GEMINI_EMBEDDING_MODEL,
-        }.get(provider, "")
-    return {
-        "openai": settings.OPENAI_CHAT_MODEL,
-        "ollama": settings.OLLAMA_CHAT_MODEL,
-        "gemini": settings.GEMINI_TEXT_MODEL,
-    }.get(provider, "")
-
-
 def normalize_model_mode(model_mode: str | None) -> str | None:
     if model_mode is None:
         return None
@@ -83,6 +65,21 @@ _USER_MODE_FIELDS = {
     "policy_summary": ("policy_summary_model_mode", "cloud"),
     "calendar_coach": ("calendar_coach_model_mode", "cloud"),
     "document_review": ("document_review_model_mode", "local"),
+}
+
+_CHAT_DEFAULT_MODES = {
+    "chat": "cloud",
+    "recommendation": "cloud",
+    "policy_summary": "cloud",
+    "calendar_coach": "cloud",
+    "document_review": "local",
+}
+
+_EMBEDDING_DEFAULT_MODES = {
+    "chat": "cloud",
+    "recommendation": "cloud",
+    "document_review": "local",
+    "prep": "local",
 }
 
 
@@ -103,84 +100,6 @@ def get_user_model_mode(user: Any, feature: str | None = None) -> str:
     return normalize_model_mode(getattr(profile, field_name, None)) or default_mode
 
 
-def _spec_for_model_mode(spec: ModelSpec, model_mode: str | None) -> ModelSpec:
-    normalized = normalize_model_mode(model_mode)
-    if normalized is None:
-        return spec
-    provider = "openai" if normalized == "cloud" else "ollama"
-    dimensions = spec.dimensions
-    model = _default_model(provider, spec.task)
-    if spec.task == "chat":
-        feature_models = {
-            "chat": (settings.CHAT_CLOUD_LLM_MODEL, settings.CHAT_LOCAL_LLM_MODEL),
-            "recommendation": (
-                settings.RECOMMEND_CLOUD_LLM_MODEL,
-                settings.RECOMMEND_LOCAL_LLM_MODEL,
-            ),
-            "policy_summary": (
-                settings.POLICY_SUMMARY_CLOUD_LLM_MODEL,
-                settings.POLICY_SUMMARY_LOCAL_LLM_MODEL,
-            ),
-            "calendar_coach": (
-                settings.CALENDAR_COACH_CLOUD_LLM_MODEL,
-                settings.CALENDAR_COACH_LOCAL_LLM_MODEL,
-            ),
-            "document_review": (
-                settings.DOCUMENT_REVIEW_CLOUD_LLM_MODEL,
-                settings.DOCUMENT_REVIEW_LOCAL_LLM_MODEL,
-            ),
-        }
-        if spec.feature in feature_models:
-            model = feature_models[spec.feature][0 if normalized == "cloud" else 1]
-    else:
-        feature_embeddings = {
-            "chat": (
-                settings.CHAT_CLOUD_EMBEDDING_MODEL,
-                settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS,
-                settings.CHAT_LOCAL_EMBEDDING_MODEL,
-                settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS,
-            ),
-            "recommendation": (
-                settings.RECOMMEND_CLOUD_EMBEDDING_MODEL,
-                settings.RECOMMEND_CLOUD_EMBEDDING_DIMENSIONS,
-                settings.RECOMMEND_LOCAL_EMBEDDING_MODEL,
-                settings.RECOMMEND_LOCAL_EMBEDDING_DIMENSIONS,
-            ),
-            "document_review": (
-                settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_MODEL,
-                settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS,
-                settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_MODEL,
-                settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS,
-            ),
-            "prep": (
-                settings.PREP_CLOUD_EMBEDDING_MODEL,
-                settings.PREP_CLOUD_EMBEDDING_DIMENSIONS,
-                settings.PREP_LOCAL_EMBEDDING_MODEL,
-                settings.PREP_LOCAL_EMBEDDING_DIMENSIONS,
-            ),
-        }
-        if spec.feature in feature_embeddings:
-            cloud_model, cloud_dim, local_model, local_dim = feature_embeddings[spec.feature]
-            if normalized == "cloud":
-                model, dimensions = cloud_model, cloud_dim
-            else:
-                model, dimensions = local_model, local_dim
-        else:
-            dimensions = (
-                settings.OPENAI_EMBEDDING_DIMENSIONS
-                if normalized == "cloud"
-                else settings.OLLAMA_EMBEDDING_DIMENSIONS
-            )
-    return _validate_spec(
-        replace(
-            spec,
-            provider=provider,
-            model=model,
-            dimensions=dimensions,
-        )
-    )
-
-
 def _validate_spec(spec: ModelSpec) -> ModelSpec:
     if spec.provider not in SUPPORTED_PROVIDERS:
         raise ModelConfigurationError(
@@ -198,107 +117,138 @@ def _validate_spec(spec: ModelSpec) -> ModelSpec:
     return spec
 
 
-def resolve_chat_model_spec(feature: str) -> ModelSpec:
-    feature = _feature_name(feature)
+def _resolve_chat_mode_spec(feature: str, model_mode: str) -> ModelSpec:
+    normalized = normalize_model_mode(model_mode)
+    if normalized is None:  # pragma: no cover - 내부 호출 계약 방어
+        raise ModelConfigurationError("LLM model_mode가 필요합니다.")
     values = {
         "chat": (
-            settings.CHAT_LLM_PROVIDER,
-            settings.CHAT_LLM_MODEL,
+            settings.CHAT_CLOUD_LLM_MODEL,
+            settings.CHAT_LOCAL_LLM_MODEL,
             settings.CHAT_ALLOW_EXTERNAL,
         ),
         "recommendation": (
-            settings.RECOMMEND_LLM_PROVIDER,
-            settings.RECOMMEND_LLM_MODEL,
+            settings.RECOMMEND_CLOUD_LLM_MODEL,
+            settings.RECOMMEND_LOCAL_LLM_MODEL,
             settings.RECOMMEND_ALLOW_EXTERNAL,
         ),
         "policy_summary": (
-            settings.POLICY_SUMMARY_LLM_PROVIDER,
-            settings.POLICY_SUMMARY_LLM_MODEL,
+            settings.POLICY_SUMMARY_CLOUD_LLM_MODEL,
+            settings.POLICY_SUMMARY_LOCAL_LLM_MODEL,
             settings.POLICY_SUMMARY_ALLOW_EXTERNAL,
         ),
-        "normalization": (
-            settings.NORMALIZATION_LLM_PROVIDER,
-            settings.NORMALIZATION_LLM_MODEL,
-            settings.NORMALIZATION_ALLOW_EXTERNAL,
+        "calendar_coach": (
+            settings.CALENDAR_COACH_CLOUD_LLM_MODEL,
+            settings.CALENDAR_COACH_LOCAL_LLM_MODEL,
+            settings.CALENDAR_COACH_ALLOW_EXTERNAL,
         ),
         "document_review": (
-            settings.DOCUMENT_REVIEW_LLM_PROVIDER,
-            settings.DOCUMENT_REVIEW_LLM_MODEL,
+            settings.DOCUMENT_REVIEW_CLOUD_LLM_MODEL,
+            settings.DOCUMENT_REVIEW_LOCAL_LLM_MODEL,
             True,
-        ),
-        "calendar_coach": (
-            settings.CALENDAR_COACH_LLM_PROVIDER,
-            settings.CALENDAR_COACH_LLM_MODEL,
-            settings.CALENDAR_COACH_ALLOW_EXTERNAL,
         ),
     }
     if feature not in values:
-        raise ModelConfigurationError(f"알 수 없는 LLM 기능입니다: {feature}")
-    provider, model, allow_external = values[feature]
-    provider = _provider_value(provider, settings.DEFAULT_LLM_PROVIDER)
-    model = model.strip() or _default_model(provider, "chat")
+        raise ModelConfigurationError(f"cloud/local 모드를 지원하지 않는 LLM 기능입니다: {feature}")
+    cloud_model, local_model, allow_external = values[feature]
     return _validate_spec(
         ModelSpec(
             feature=feature,
             task="chat",
-            provider=provider,
-            model=model,
+            provider="openai" if normalized == "cloud" else "ollama",
+            model=cloud_model if normalized == "cloud" else local_model,
             allow_external=allow_external,
         )
     )
 
 
-def resolve_embedding_model_spec(feature: str) -> ModelSpec:
-    feature = _feature_name(feature)
+def _resolve_embedding_mode_spec(feature: str, model_mode: str) -> ModelSpec:
+    normalized = normalize_model_mode(model_mode)
+    if normalized is None:  # pragma: no cover - 내부 호출 계약 방어
+        raise ModelConfigurationError("embedding model_mode가 필요합니다.")
     values = {
         "chat": (
-            settings.CHAT_EMBEDDING_PROVIDER,
-            settings.CHAT_EMBEDDING_MODEL,
-            settings.CHAT_EMBEDDING_DIMENSIONS,
+            settings.CHAT_CLOUD_EMBEDDING_MODEL,
+            settings.CHAT_CLOUD_EMBEDDING_DIMENSIONS,
+            settings.CHAT_LOCAL_EMBEDDING_MODEL,
+            settings.CHAT_LOCAL_EMBEDDING_DIMENSIONS,
             settings.CHAT_ALLOW_EXTERNAL,
         ),
         "recommendation": (
-            settings.RECOMMEND_EMBEDDING_PROVIDER,
-            settings.RECOMMEND_EMBEDDING_MODEL,
-            settings.RECOMMEND_EMBEDDING_DIMENSIONS,
+            settings.RECOMMEND_CLOUD_EMBEDDING_MODEL,
+            settings.RECOMMEND_CLOUD_EMBEDDING_DIMENSIONS,
+            settings.RECOMMEND_LOCAL_EMBEDDING_MODEL,
+            settings.RECOMMEND_LOCAL_EMBEDDING_DIMENSIONS,
             settings.RECOMMEND_ALLOW_EXTERNAL,
         ),
         "document_review": (
-            settings.DOCUMENT_REVIEW_EMBEDDING_PROVIDER,
-            settings.DOCUMENT_REVIEW_EMBEDDING_MODEL,
-            settings.DOCUMENT_REVIEW_EMBEDDING_DIMENSIONS,
+            settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_MODEL,
+            settings.DOCUMENT_REVIEW_CLOUD_EMBEDDING_DIMENSIONS,
+            settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_MODEL,
+            settings.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS,
             True,
         ),
         "prep": (
-            settings.PREP_EMBEDDING_PROVIDER,
-            settings.PREP_EMBEDDING_MODEL,
-            settings.PREP_EMBEDDING_DIMENSIONS,
+            settings.PREP_CLOUD_EMBEDDING_MODEL,
+            settings.PREP_CLOUD_EMBEDDING_DIMENSIONS,
+            settings.PREP_LOCAL_EMBEDDING_MODEL,
+            settings.PREP_LOCAL_EMBEDDING_DIMENSIONS,
             settings.PREP_ALLOW_EXTERNAL,
         ),
     }
     if feature not in values:
-        raise ModelConfigurationError(f"알 수 없는 임베딩 기능입니다: {feature}")
-    provider, model, dimensions, allow_external = values[feature]
-    provider = _provider_value(provider, settings.DEFAULT_EMBEDDING_PROVIDER)
-    model = model.strip() or _default_model(provider, "embedding")
+        raise ModelConfigurationError(f"cloud/local 모드를 지원하지 않는 임베딩 기능입니다: {feature}")
+    cloud_model, cloud_dim, local_model, local_dim, allow_external = values[feature]
     return _validate_spec(
         ModelSpec(
             feature=feature,
             task="embedding",
-            provider=provider,
-            model=model,
-            dimensions=dimensions,
+            provider="openai" if normalized == "cloud" else "ollama",
+            model=cloud_model if normalized == "cloud" else local_model,
+            dimensions=cloud_dim if normalized == "cloud" else local_dim,
             allow_external=allow_external,
         )
     )
 
 
+def resolve_chat_model_spec(feature: str) -> ModelSpec:
+    feature = _feature_name(feature)
+    if feature == "normalization":
+        return _validate_spec(
+            ModelSpec(
+                feature=feature,
+                task="chat",
+                provider=settings.NORMALIZATION_LLM_PROVIDER.strip().lower(),
+                model=settings.NORMALIZATION_LLM_MODEL.strip(),
+                allow_external=settings.NORMALIZATION_ALLOW_EXTERNAL,
+            )
+        )
+    default_mode = _CHAT_DEFAULT_MODES.get(feature)
+    if default_mode is None:
+        raise ModelConfigurationError(f"알 수 없는 LLM 기능입니다: {feature}")
+    return _resolve_chat_mode_spec(feature, default_mode)
+
+
+def resolve_embedding_model_spec(feature: str) -> ModelSpec:
+    feature = _feature_name(feature)
+    default_mode = _EMBEDDING_DEFAULT_MODES.get(feature)
+    if default_mode is None:
+        raise ModelConfigurationError(f"알 수 없는 임베딩 기능입니다: {feature}")
+    return _resolve_embedding_mode_spec(feature, default_mode)
+
+
 def resolve_chat_model_spec_for_mode(feature: str, model_mode: str | None) -> ModelSpec:
-    return _spec_for_model_mode(resolve_chat_model_spec(feature), model_mode)
+    feature = _feature_name(feature)
+    if model_mode is None:
+        return resolve_chat_model_spec(feature)
+    return _resolve_chat_mode_spec(feature, model_mode)
 
 
 def resolve_embedding_model_spec_for_mode(feature: str, model_mode: str | None) -> ModelSpec:
-    return _spec_for_model_mode(resolve_embedding_model_spec(feature), model_mode)
+    feature = _feature_name(feature)
+    if model_mode is None:
+        return resolve_embedding_model_spec(feature)
+    return _resolve_embedding_mode_spec(feature, model_mode)
 
 
 class ChatModel:

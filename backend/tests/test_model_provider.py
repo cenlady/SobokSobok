@@ -16,7 +16,9 @@ from app.core.model_provider import (
     get_chat_model,
     get_embedding_model,
     get_user_model_mode,
+    resolve_chat_model_spec,
     resolve_chat_model_spec_for_mode,
+    resolve_embedding_model_spec,
     resolve_embedding_model_spec_for_mode,
 )
 from app.models.chat import PolicyChunk
@@ -36,6 +38,15 @@ class FakeOllamaResponse:
 
 
 class ModelProviderTests(unittest.TestCase):
+    def test_omitted_mode_uses_each_feature_default(self) -> None:
+        self.assertEqual(resolve_chat_model_spec("chat").provider, "openai")
+        self.assertEqual(resolve_chat_model_spec("recommendation").provider, "openai")
+        self.assertEqual(resolve_chat_model_spec("document_review").provider, "ollama")
+        self.assertEqual(resolve_embedding_model_spec("chat").provider, "openai")
+        self.assertEqual(resolve_embedding_model_spec("recommendation").provider, "openai")
+        self.assertEqual(resolve_embedding_model_spec("document_review").provider, "ollama")
+        self.assertEqual(resolve_embedding_model_spec("prep").provider, "ollama")
+
     def test_user_cloud_and_local_modes_choose_expected_chat_provider(self) -> None:
         cloud = resolve_chat_model_spec_for_mode("chat", "cloud")
         local = resolve_chat_model_spec_for_mode("chat", "local")
