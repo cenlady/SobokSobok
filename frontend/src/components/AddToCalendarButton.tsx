@@ -150,9 +150,7 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
         className={`${base} transition-colors active:scale-[0.99] ${
           noDeadline
             ? 'cursor-not-allowed bg-line/60 text-subtle'
-            : full
-              ? 'bg-accent-soft text-brand active:bg-accent-soft/70'
-              : 'border border-line bg-surface text-muted active:bg-line/40'
+            : 'bg-status-green/10 text-status-green hover:bg-status-green/20 active:bg-status-green/30'
         }`}
       >
         {state === 'loading' ? (
