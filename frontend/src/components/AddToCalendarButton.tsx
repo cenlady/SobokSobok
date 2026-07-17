@@ -25,12 +25,11 @@ interface CalendarEventResponse {
  * (구글 토큰은 users 테이블에 있고 서버 밖으로 나가지 않는다.)
  */
 export default function AddToCalendarButton({ policyId, applyEnd, variant = 'compact' }: Props) {
+  const noDeadline = !applyEnd
   const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
+  const [checking, setChecking] = useState(!noDeadline)
   const [message, setMessage] = useState<string | null>(null)
   const [link, setLink] = useState<string | null>(null)
-
-  // 마감일이 없는 정책은 캘린더에 넣을 날짜가 없다. 눌러봐야 서버가 400을 낸다.
-  const noDeadline = !applyEnd
 
   // [이재혁 - 사전 등록 여부 실시간 비동기 검증]
   useEffect(() => {
@@ -48,6 +47,9 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
       })
       .catch((err) => {
         console.warn('사전 캘린더 등록 여부 검증 실패:', err)
+      })
+      .finally(() => {
+        if (!ignore) setChecking(false)
       })
 
     return () => {
@@ -90,6 +92,20 @@ export default function AddToCalendarButton({ policyId, applyEnd, variant = 'com
     ? 'inline-flex h-11 w-full items-center justify-center gap-1 rounded-lg px-3.5 text-[13px] font-semibold'
     : 'inline-flex items-center justify-center gap-1 h-11 px-3 rounded-lg text-[13px] font-semibold'
   const iconSize = full ? 16 : 14
+
+  if (checking) {
+    return (
+      <div className={full ? 'w-full' : 'shrink-0'}>
+        <button
+          type="button"
+          disabled
+          className={`${base} border border-line bg-surface/60 text-subtle animate-pulse cursor-wait`}
+        >
+          <Loader2 size={iconSize} className="animate-spin text-subtle" /> 확인 중…
+        </button>
+      </div>
+    )
+  }
 
   if (state === 'done') {
     return (
