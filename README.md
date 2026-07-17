@@ -51,12 +51,12 @@ cp .env.example .env
 
 | 기능 | 기본/클라우드 AI | 로컬 AI | 비고 |
 | --- | --- | --- | --- |
-| 챗봇 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
-| 정책 추천 설명 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
+| 챗봇 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
+| 정책 추천 설명 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
 | 정책 상세 요약 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
-| 정책 정규화 | OpenAI `gpt-4o-mini` | `.env`로 변경 가능 | 사용자와 무관한 배치 작업 |
-| 캘린더 AI 코치 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 캘린더 CRUD에는 LLM 미사용 |
-| 서류검토 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 프로필 기본값은 로컬, 파일 파싱은 항상 로컬 |
+| 정책 정규화 | OpenAI `gpt-5.4-nano` | `.env`로 변경 가능 | 사용자와 무관한 배치 작업 |
+| 캘린더 AI 코치 | OpenAI `gpt-5-mini` | Ollama `exaone3.5` | 캘린더 CRUD에는 LLM 미사용 |
+| 서류검토 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 프로필 기본값은 로컬, 파일 파싱은 항상 로컬 |
 
 챗봇·추천·서류 요건·서류 발급 가이드 검색은 사용자 선택을 즉시 바꿀 수 있도록 두 임베딩을 모두 저장합니다.
 OpenAI `text-embedding-3-small` 1536차원과 Ollama `bge-m3` 1024차원은 각각 별도
@@ -192,7 +192,7 @@ docker compose logs -f crawler    # 크롤러
 모델 호출은 다음처럼 한 줄 메타데이터로 출력됩니다.
 
 ```text
-model_call service=api feature=chat task=chat stage=answer_generation provider=openai model=gpt-4o-mini source=app.services.chat_rag:generate_chat_answer input_type=text input_count=1 input_chars=1820 output_chars=420 result_count=1 dimensions=- latency_ms=812 status=success retry_count=0 error_type=-
+model_call service=api feature=chat task=chat stage=answer_generation provider=openai model=gpt-5.4-mini source=app.services.chat_rag:generate_chat_answer input_type=text input_count=1 input_chars=1820 output_chars=420 result_count=1 dimensions=- latency_ms=812 status=success retry_count=0 error_type=-
 ```
 
 프롬프트·응답 원문·벡터·API 키·토큰·원본 파일명은 로그에 기록하지 않습니다.

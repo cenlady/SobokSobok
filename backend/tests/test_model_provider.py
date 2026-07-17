@@ -93,7 +93,10 @@ class ModelProviderTests(unittest.TestCase):
         cloud_embedding = resolve_embedding_model_spec_for_mode("document_review", "cloud")
         local_embedding = resolve_embedding_model_spec_for_mode("document_review", "local")
 
-        self.assertEqual((cloud_chat.provider, cloud_chat.model), ("openai", "gpt-4o-mini"))
+        self.assertEqual(
+            (cloud_chat.provider, cloud_chat.model),
+            ("openai", settings.DOCUMENT_REVIEW_CLOUD_LLM_MODEL),
+        )
         self.assertEqual((local_chat.provider, local_chat.model), ("ollama", "exaone3.5"))
         self.assertEqual((cloud_embedding.provider, cloud_embedding.dimensions), ("openai", 1536))
         self.assertEqual((local_embedding.provider, local_embedding.dimensions), ("ollama", 1024))

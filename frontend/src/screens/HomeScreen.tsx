@@ -11,8 +11,8 @@ import {
   StatusBadge,
   TagList,
 } from '../components/ui'
-import { localDateKey, toDateKey } from '../lib/calendar'
-import { getDeadlineInfo, formatPeriod, type DeadlineKind } from '../lib/deadline'
+import { getKstTodayLabel, localDateKey, toDateKey } from '../lib/calendar'
+import { getDeadlineInfo, formatPeriod } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
 import { useProfile, useSavedPolicies } from '../lib/storage'
@@ -130,30 +130,16 @@ export default function HomeScreen() {
   }, [isOpenCoachModal])
 
   // 마감일이 있는 것만 달력에 찍힌다. 나머지는 성격에 따라 아래 섹션으로 나뉜다.
-  const { dated, always, unknown } = useMemo(() => {
-    const groups: Record<'dated' | 'always' | 'unknown', SavedPolicy[]> = {
-      dated: [],
-      always: [],
+  const { unknown } = useMemo(() => {
+    const groups: Record<'unknown', SavedPolicy[]> = {
       unknown: [],
     }
     for (const policy of policies) {
       const kind = getDeadlineInfo(policy).kind
-      if (kind === 'urgent' || kind === 'dated') groups.dated.push(policy)
-      else if (kind === 'always') groups.always.push(policy)
-      else groups.unknown.push(policy)
+      if (kind !== 'urgent' && kind !== 'dated' && kind !== 'always') groups.unknown.push(policy)
     }
     return groups
   }, [policies])
-
-  const dots = useMemo(() => {
-    const map: Record<string, DeadlineKind[]> = {}
-    for (const policy of dated) {
-      const key = toDateKey(policy.apply_end)
-      if (!key) continue
-      ;(map[key] ??= []).push(getDeadlineInfo(policy).kind)
-    }
-    return map
-  }, [dated])
 
   const { year, month } = cursor
   const startDow = new Date(year, month, 1).getDay()
@@ -178,35 +164,87 @@ export default function HomeScreen() {
     setCursor({ year: year + Math.floor(m / 12), month: ((m % 12) + 12) % 12 })
   }
 
-  const dayList = dated.filter((p) => toDateKey(p.apply_end) === selected)
   const todayKey = localDateKey(new Date())
-  const isPastDate = selected < todayKey
-  const policySchedulesInRange = googleEvents
-    .filter((event) => Boolean(event.policy_id) && todayKey <= event.date && event.date <= selected)
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
-  const hasPolicyScheduleInRange = policySchedulesInRange.length > 0
-  const selectedPolicySchedule =
-    policySchedulesInRange.find((event) => event.date === selected) ??
-    policySchedulesInRange[policySchedulesInRange.length - 1]
 
-  // 오늘부터 선택일까지의 정책 일정을 기준으로 신청 준비 순서를 불러온다.
+  // 마감일이 지나지 않은 (오늘 이후 마감인) 정책 일정 수집
+  const upcomingGoogleEvents = useMemo(() => {
+    return googleEvents
+      .filter((ev) => Boolean(ev.policy_id) && ev.date >= todayKey)
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
+  }, [googleEvents, todayKey])
+
+  const upcomingSavedPolicies = useMemo(() => {
+    return policies
+      .filter((p) => {
+        const key = toDateKey(p.apply_end)
+        return Boolean(key && key >= todayKey)
+      })
+      .sort((a, b) => (toDateKey(a.apply_end) || '').localeCompare(toDateKey(b.apply_end) || ''))
+  }, [policies, todayKey])
+
+  const hasUpcomingPolicies = upcomingGoogleEvents.length > 0 || upcomingSavedPolicies.length > 0
+
+  // AI 코치 타깃 결정
+  // 1) 미래 날짜(selected >= todayKey)를 클릭했고 오늘부터 선택 날짜 사이에 정책이 포함된 경우:
+  //    -> 해당 기간 내 정책 공고들을 묶어서 통합 AI 코칭 (공통 서류 일괄 발급 + 마감순 타임라인)
+  // 2) 날짜 미선택, 과거 날짜, 또는 선택 기간 내 정책이 없는 경우:
+  //    -> 가장 가까운 미래 마감 정책 1개만 단일 코칭
+  const resolvedCoachTarget = useMemo<{ policyIds: string[]; targetDate: string; isMulti: boolean } | null>(() => {
+    if (!hasUpcomingPolicies) return null
+
+    if (selected >= todayKey) {
+      const googleEvsInRange = upcomingGoogleEvents.filter((ev) => ev.date <= selected && Boolean(ev.policy_id))
+      const savedPoliciesInRange = upcomingSavedPolicies.filter((p) => {
+        const key = toDateKey(p.apply_end)
+        return Boolean(key && key <= selected)
+      })
+
+      const inRangePolicyIds = Array.from(
+        new Set([
+          ...googleEvsInRange.map((ev) => ev.policy_id!),
+          ...savedPoliciesInRange.map((p) => p.policy_id),
+        ]),
+      )
+
+      if (inRangePolicyIds.length > 0) {
+        return {
+          policyIds: inRangePolicyIds,
+          targetDate: selected,
+          isMulti: inRangePolicyIds.length > 1,
+        }
+      }
+    }
+
+    if (upcomingGoogleEvents.length > 0) {
+      const nearest = upcomingGoogleEvents[0]
+      return { policyIds: [nearest.policy_id!], targetDate: nearest.date, isMulti: false }
+    }
+    if (upcomingSavedPolicies.length > 0) {
+      const nearest = upcomingSavedPolicies[0]
+      return { policyIds: [nearest.policy_id], targetDate: toDateKey(nearest.apply_end)!, isMulti: false }
+    }
+
+    return null
+  }, [hasUpcomingPolicies, selected, todayKey, upcomingGoogleEvents, upcomingSavedPolicies])
+
   const handleCoachTimeline = async () => {
     if (googleEventsError) {
       alert('Google Calendar 일정을 불러오지 못해 신청 일정을 안내할 수 없습니다. Google 로그인을 다시 연결하거나 잠시 후 다시 시도해 주세요.')
       return
     }
 
-    // 선택한 날짜의 정책 일정을 우선 사용하고, 없으면 기간 안에서 가장 가까운 정책으로 안내한다.
-    // 서버에는 목표일을 함께 보내 오늘부터 선택일까지 포함된 캘린더 일정을 고려하게 한다.
-    const targetPolicyId = selectedPolicySchedule?.policy_id
-    if (!targetPolicyId) return
+    if (!resolvedCoachTarget || resolvedCoachTarget.policyIds.length === 0) return
     if (loadingCoach) return
+
     setCoachGuide(null)
     setIsOpenCoachModal(true)
     setLoadingCoach(true)
     try {
+      const queryParams = resolvedCoachTarget.policyIds
+        .map((pid) => `policy_ids=${encodeURIComponent(pid)}`)
+        .join('&')
       const data = await apiFetch<{ coach_guide: string }>(
-        `/api/v1/calendar/coach?policy_id=${encodeURIComponent(targetPolicyId)}&target_date=${selected}`,
+        `/api/v1/calendar/coach?${queryParams}&target_date=${resolvedCoachTarget.targetDate}`,
       )
       setCoachGuide(data.coach_guide)
     } catch (e) {
@@ -220,13 +258,18 @@ export default function HomeScreen() {
   const homeLoading = loading || profileLoading || googleEventsLoading
   const isEmpty = !homeLoading && !googleEventsError && policies.length === 0 && googleEvents.length === 0
 
+  const todayLabel = getKstTodayLabel()
+
   if (homeLoading) return <HomeScreenSkeleton />
 
   if (isEmpty) {
     return (
       <div>
         <TopBar />
-        <PageIntro title="내 정책 달력" />
+        <PageIntro
+          title="내 정책 달력"
+          description={<strong className="font-semibold text-primary">{todayLabel}</strong>}
+        />
         <EmptyState
           icon={CalendarDays}
           title="아직 저장한 정책이 없어요"
@@ -243,7 +286,14 @@ export default function HomeScreen() {
       <TopBar />
 
       <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
-        <PageIntro title="내 정책 달력" description={`저장한 정책 ${policies.length}건`} />
+        <PageIntro
+          title="내 정책 달력"
+          description={
+            <span>
+              <strong className="font-semibold text-primary">{todayLabel}</strong> 저장한 정책 {policies.length}건
+            </span>
+          }
+        />
 
       {googleEventsError && (
         <section className="mt-4 px-5">
@@ -279,7 +329,6 @@ export default function HomeScreen() {
             {cells.map((c, idx) => {
               const isSel = c.dateKey === selected
               const isToday = c.dateKey === TODAY
-              const dayDots = c.dateKey ? dots[c.dateKey] : undefined
               const hasGoogle = c.dateKey ? Boolean(googleEventsMap[c.dateKey]) : false
               return (
                 <button
@@ -290,29 +339,23 @@ export default function HomeScreen() {
                   className="relative flex h-11 flex-col items-center justify-center"
                 >
                   <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm ${
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg text-sm transition-colors ${
                       isSel
-                        ? 'bg-ink font-bold text-white'
+                        ? isToday
+                          ? 'bg-ink font-bold text-white ring-2 ring-primary ring-offset-1'
+                          : 'bg-ink font-bold text-white'
                         : !c.inMonth
                           ? // 지난달/다음달 날짜. 흐리게 두되 읽을 수는 있어야 한다.
                             // faint(2.4:1)는 텍스트에 쓰면 사실상 안 보인다.
                             'text-subtle/70'
                           : isToday
-                            ? 'font-bold text-primary'
+                            ? 'border-2 border-primary font-bold text-primary bg-primary/5'
                             : 'text-ink'
                     }`}
                   >
                     {c.day}
                   </span>
                   <span className="mt-0.5 flex h-1.5 gap-0.5">
-                    {dayDots?.slice(0, 2).map((kind, i) => (
-                      <span
-                        key={i}
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          kind === 'urgent' ? 'bg-status-red' : 'bg-muted'
-                        }`}
-                      />
-                    ))}
                     {hasGoogle && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
                   </span>
                 </button>
@@ -331,30 +374,54 @@ export default function HomeScreen() {
         <div className="mt-3 space-y-2.5">
           {(() => {
             const selGoogleEvents = googleEventsMap[selected] || []
-            const hasNoEvents = dayList.length === 0 && selGoogleEvents.length === 0
+            const hasNoEvents = selGoogleEvents.length === 0
 
             return (
               <>
                 {selGoogleEvents.length > 0 && (
                   <div className="surface-panel divide-y divide-line overflow-hidden">
-                    {selGoogleEvents.map((ev, i) => (
-                      <div key={`${ev.summary}-${i}`} className="flex items-center gap-3 px-4 py-3.5">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-brand">
-                          <CalendarDays size={16} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-semibold text-subtle">캘린더 일정</span>
-                            {ev.time && (
-                              <span className="rounded-md bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
-                                {ev.time}
-                              </span>
-                            )}
+                    {selGoogleEvents.map((ev, i) => {
+                      const isPolicy = Boolean(ev.policy_id)
+                      return (
+                        <div
+                          key={`${ev.summary}-${i}`}
+                          role={isPolicy ? 'link' : undefined}
+                          tabIndex={isPolicy ? 0 : undefined}
+                          onClick={() => {
+                            if (ev.policy_id) navigate(`/policy/${ev.policy_id}`)
+                          }}
+                          onKeyDown={(event) => {
+                            if (ev.policy_id && (event.key === 'Enter' || event.key === ' ')) {
+                              event.preventDefault()
+                              navigate(`/policy/${ev.policy_id}`)
+                            }
+                          }}
+                          className={`flex items-start gap-3 px-4 py-3.5 ${
+                            isPolicy
+                              ? 'cursor-pointer outline-none transition-colors hover:bg-cream/60 focus-visible:bg-cream/60 active:bg-cream'
+                              : ''
+                          }`}
+                        >
+                          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-brand">
+                            <CalendarDays size={16} />
                           </div>
-                          <p className="mt-1 truncate text-sm font-semibold leading-snug text-ink">{ev.summary}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-semibold text-subtle">
+                                {isPolicy ? '정책 캘린더 일정' : '캘린더 일정'}
+                              </span>
+                              {ev.time && (
+                                <span className="rounded-md bg-line px-2 py-0.5 text-[11px] font-semibold text-muted">
+                                  {ev.time}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-sm font-semibold leading-snug text-ink">{ev.summary}</p>
+                          </div>
+                          {isPolicy && <ChevronRight size={18} className="mt-1.5 shrink-0 text-subtle" />}
                         </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 )}
                 {hasNoEvents ? (
@@ -362,33 +429,11 @@ export default function HomeScreen() {
                     이 날 등록된 일정이 없어요
                   </p>
                 ) : null}
-                {dayList.length > 0 && (
-                  <div className="surface-panel divide-y divide-line overflow-hidden">
-                    {dayList.map((policy) => (
-                      <DeadlineCard key={policy.policy_id} policy={policy} />
-                    ))}
-                  </div>
-                )}
               </>
             )
           })()}
         </div>
       </section>
-
-      {/* 상시 접수 — 마감이 없다는 건 나쁜 소식이 아니라 좋은 소식이다 */}
-      {always.length > 0 && (
-        <section className="mt-7 px-5">
-          <h3 className="text-section text-ink">상시 접수 가능</h3>
-          <p className="mt-1 text-sm text-muted">
-            마감 걱정 없이 언제든 신청할 수 있어요. {always.length}건
-          </p>
-          <div className="surface-panel mt-3 divide-y divide-line overflow-hidden">
-            {always.map((policy) => (
-              <DeadlineCard key={policy.policy_id} policy={policy} />
-            ))}
-          </div>
-        </section>
-      )}
 
       {/* 기간을 우리가 모르는 것들. '상시'라고 둘러대지 않는다. */}
       {unknown.length > 0 && (
@@ -405,25 +450,21 @@ export default function HomeScreen() {
         </section>
       )}
 
-      <section className="mt-8 px-5">
+      </div>
+
+      <div className="shrink-0 space-y-2 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
         <Button variant="secondary" full onClick={() => navigate('/policies')}>
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
-      </section>
-      </div>
-
-      <div className="shrink-0 border-t border-line bg-cream/95 px-5 py-3 backdrop-blur">
-        <Button onClick={handleCoachTimeline} disabled={loadingCoach || isPastDate || !hasPolicyScheduleInRange} full>
+        <Button onClick={handleCoachTimeline} disabled={loadingCoach || !hasUpcomingPolicies} full>
           {loadingCoach ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
           ) : (
             <CalendarDays size={16} />
           )}
-          {isPastDate
-            ? '오늘 이후 날짜만 안내받을 수 있어요'
-            : !hasPolicyScheduleInRange
-              ? '해당 기간 내에 정책 일정이 없습니다'
-              : '신청 일정 안내 받기'}
+          {!hasUpcomingPolicies
+            ? '안내 가능한 남은 정책 일정이 없습니다'
+            : '신청 일정 안내 받기'}
         </Button>
       </div>
 

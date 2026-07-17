@@ -64,9 +64,9 @@ export default function PolicySearchScreen() {
     hasNext: boolean
     statusCounts: RecommendationPreviewResponse['status_counts']
   } | null>(null)
-  // 아무 상태도 선택하지 않으면 전체 추천을 보여준다. 여러 상태를 동시에
-  // 선택하면 선택한 상태들의 합집합을 한 목록으로 보여준다.
-  const [recFilters, setRecFilters] = useState<RecommendationStatus[]>([])
+  // 기본값으로 '바로 확인 가능'('eligible') 상태를 선택해 둔다. 아무 상태도 선택하지 않으면
+  // 전체 추천을 보여주며, 여러 상태를 동시에 선택하면 선택한 상태들의 합집합을 한 목록으로 보여준다.
+  const [recFilters, setRecFilters] = useState<RecommendationStatus[]>(['eligible'])
   const [recPage, setRecPage] = useState(0)
   const [recPageInput, setRecPageInput] = useState('1')
   const [profileWarnings, setProfileWarnings] = useState<string[]>([])

@@ -6,10 +6,38 @@
 // → components/AddToCalendarButton.tsx, POST /api/v1/calendar/event
 
 export function localDateKey(date = new Date()) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+
+  const year = parts.find((p) => p.type === 'year')?.value
+  const month = parts.find((p) => p.type === 'month')?.value
+  const day = parts.find((p) => p.type === 'day')?.value
+
+  if (year && month && day) {
+    return `${year}-${month}-${day}`
+  }
+  return date.toISOString().slice(0, 10)
+}
+
+export function getKstTodayLabel(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).formatToParts(date)
+
+  const year = parts.find((p) => p.type === 'year')?.value
+  const month = parts.find((p) => p.type === 'month')?.value
+  const day = parts.find((p) => p.type === 'day')?.value
+  const weekday = parts.find((p) => p.type === 'weekday')?.value
+
+  return `${year}년 ${month} ${day}(${weekday})`
 }
 
 export function toDateKey(value?: string | null) {

@@ -419,7 +419,7 @@ class OpenAIChatModel(ChatModel):
             "temperature": kwargs["temperature"],
         }
         if kwargs["max_output_tokens"] is not None:
-            request["max_tokens"] = kwargs["max_output_tokens"]
+            request["max_completion_tokens"] = kwargs["max_output_tokens"]
         if response_schema is not None:
             request["response_format"] = {
                 "type": "json_schema",
@@ -445,7 +445,7 @@ class OpenAIChatModel(ChatModel):
             "stream": True,
         }
         if kwargs["max_output_tokens"] is not None:
-            request["max_tokens"] = kwargs["max_output_tokens"]
+            request["max_completion_tokens"] = kwargs["max_output_tokens"]
         if response_schema is not None:
             request["response_format"] = {
                 "type": "json_schema",
