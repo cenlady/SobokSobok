@@ -11,7 +11,7 @@ import {
   StatusBadge,
   TagList,
 } from '../components/ui'
-import { localDateKey } from '../lib/calendar'
+import { localDateKey, toDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
@@ -165,33 +165,71 @@ export default function HomeScreen() {
   }
 
   const todayKey = localDateKey(new Date())
-  const isPastDate = selected < todayKey
-  const policySchedulesInRange = googleEvents
-    .filter((event) => Boolean(event.policy_id) && todayKey <= event.date && event.date <= selected)
-    .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
-  const hasPolicyScheduleInRange = policySchedulesInRange.length > 0
-  const selectedPolicySchedule =
-    policySchedulesInRange.find((event) => event.date === selected) ??
-    policySchedulesInRange[policySchedulesInRange.length - 1]
 
-  // 오늘부터 선택일까지의 정책 일정을 기준으로 신청 준비 순서를 불러온다.
+  // 마감일이 지나지 않은 (오늘 이후 마감인) 정책 일정 수집
+  const upcomingGoogleEvents = useMemo(() => {
+    return googleEvents
+      .filter((ev) => Boolean(ev.policy_id) && ev.date >= todayKey)
+      .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
+  }, [googleEvents, todayKey])
+
+  const upcomingSavedPolicies = useMemo(() => {
+    return policies
+      .filter((p) => {
+        const key = toDateKey(p.apply_end)
+        return Boolean(key && key >= todayKey)
+      })
+      .sort((a, b) => (toDateKey(a.apply_end) || '').localeCompare(toDateKey(b.apply_end) || ''))
+  }, [policies, todayKey])
+
+  const hasUpcomingPolicies = upcomingGoogleEvents.length > 0 || upcomingSavedPolicies.length > 0
+
+  // AI 코치 타깃 결정 (선택 날짜에 해당하는 정책이 있으면 해당 날짜를 쓰고, 없거나 과거일이면 가장 가까운 미래 마감 정책으로 자동 선택)
+  const resolvedCoachTarget = useMemo<{ policyId: string; targetDate: string } | null>(() => {
+    if (!hasUpcomingPolicies) return null
+
+    if (selected >= todayKey) {
+      const selectedEv = upcomingGoogleEvents.find((ev) => ev.date === selected)
+      if (selectedEv?.policy_id) {
+        return { policyId: selectedEv.policy_id, targetDate: selected }
+      }
+      const selectedPolicy = upcomingSavedPolicies.find((p) => toDateKey(p.apply_end) === selected)
+      if (selectedPolicy?.policy_id) {
+        return { policyId: selectedPolicy.policy_id, targetDate: selected }
+      }
+      const inRangeEv = upcomingGoogleEvents.filter((ev) => ev.date <= selected).pop()
+      if (inRangeEv?.policy_id) {
+        return { policyId: inRangeEv.policy_id, targetDate: selected }
+      }
+    }
+
+    if (upcomingGoogleEvents.length > 0) {
+      const nearest = upcomingGoogleEvents[0]
+      return { policyId: nearest.policy_id!, targetDate: nearest.date }
+    }
+    if (upcomingSavedPolicies.length > 0) {
+      const nearest = upcomingSavedPolicies[0]
+      return { policyId: nearest.policy_id, targetDate: toDateKey(nearest.apply_end)! }
+    }
+
+    return null
+  }, [hasUpcomingPolicies, selected, todayKey, upcomingGoogleEvents, upcomingSavedPolicies])
+
   const handleCoachTimeline = async () => {
     if (googleEventsError) {
       alert('Google Calendar 일정을 불러오지 못해 신청 일정을 안내할 수 없습니다. Google 로그인을 다시 연결하거나 잠시 후 다시 시도해 주세요.')
       return
     }
 
-    // 선택한 날짜의 정책 일정을 우선 사용하고, 없으면 기간 안에서 가장 가까운 정책으로 안내한다.
-    // 서버에는 목표일을 함께 보내 오늘부터 선택일까지 포함된 캘린더 일정을 고려하게 한다.
-    const targetPolicyId = selectedPolicySchedule?.policy_id
-    if (!targetPolicyId) return
+    if (!resolvedCoachTarget) return
     if (loadingCoach) return
+
     setCoachGuide(null)
     setIsOpenCoachModal(true)
     setLoadingCoach(true)
     try {
       const data = await apiFetch<{ coach_guide: string }>(
-        `/api/v1/calendar/coach?policy_id=${encodeURIComponent(targetPolicyId)}&target_date=${selected}`,
+        `/api/v1/calendar/coach?policy_id=${encodeURIComponent(resolvedCoachTarget.policyId)}&target_date=${resolvedCoachTarget.targetDate}`,
       )
       setCoachGuide(data.coach_guide)
     } catch (e) {
@@ -389,17 +427,15 @@ export default function HomeScreen() {
         <Button variant="secondary" full onClick={() => navigate('/policies')}>
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
-        <Button onClick={handleCoachTimeline} disabled={loadingCoach || isPastDate || !hasPolicyScheduleInRange} full>
+        <Button onClick={handleCoachTimeline} disabled={loadingCoach || !hasUpcomingPolicies} full>
           {loadingCoach ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
           ) : (
             <CalendarDays size={16} />
           )}
-          {isPastDate
-            ? '오늘 이후 날짜만 안내받을 수 있어요'
-            : !hasPolicyScheduleInRange
-              ? '해당 기간 내에 정책 일정이 없습니다'
-              : '신청 일정 안내 받기'}
+          {!hasUpcomingPolicies
+            ? '안내 가능한 남은 정책 일정이 없습니다'
+            : '신청 일정 안내 받기'}
         </Button>
       </div>
 
