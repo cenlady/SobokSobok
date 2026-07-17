@@ -17,24 +17,10 @@ class Settings(BaseSettings):
     DB_PASSWORD: str = ""
     SQL_ECHO: bool = False
 
-    # 레거시 기본값. 신규 코드는 기능별 *_EMBEDDING_DIMENSIONS를 사용한다.
-    EMBEDDING_DIM: int = 1024
-
-    # 공통 모델 설정. 기능별 값이 비어 있을 때만 사용한다.
-    DEFAULT_LLM_PROVIDER: str = "openai"
-    DEFAULT_EMBEDDING_PROVIDER: str = "openai"
+    # 공급자 접속 설정. 모델과 임베딩 차원은 기능별 cloud/local 설정에서 관리한다.
     OPENAI_API_KEY: str | None = None
-    OPENAI_CHAT_MODEL: str = "gpt-4o-mini"
-    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    OPENAI_EMBEDDING_DIMENSIONS: int = 1536
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
-    OLLAMA_CHAT_MODEL: str = "exaone3.5"
-    OLLAMA_EMBEDDING_MODEL: str = "bge-m3"
-    OLLAMA_EMBEDDING_DIMENSIONS: int = 1024
     GEMINI_API_KEY: str | None = None
-    GEMINI_TEXT_MODEL: str = "gemini-2.5-flash"
-    GEMINI_EMBEDDING_MODEL: str = "text-embedding-004"
-    GEMINI_EMBEDDING_DIMENSIONS: int = 768
 
     # 모델 호출 로그. 원문/응답 본문은 기본적으로 절대 기록하지 않는다.
     LLM_CALL_LOGGING_ENABLED: bool = True
@@ -46,20 +32,9 @@ class Settings(BaseSettings):
 
     # 챗봇 RAG 설정 (policy_documents → policy_chunks 청킹/임베딩)
     # OLLAMA_BASE_URL은 아래 공용 설정을 사용한다.
-    CHAT_LLM_PROVIDER: str = Field(
-        default="openai",
-        validation_alias=AliasChoices("CHAT_LLM_PROVIDER", "CHAT_COMPLETION_PROVIDER"),
-    )
-    CHAT_LLM_MODEL: str = Field(
-        default="gpt-4o-mini",
-        validation_alias=AliasChoices("CHAT_LLM_MODEL", "CHAT_COMPLETION_MODEL"),
-    )
     CHAT_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
     CHAT_LOCAL_LLM_MODEL: str = "exaone3.5"
     CHAT_ALLOW_EXTERNAL: bool = True
-    CHAT_EMBEDDING_PROVIDER: str = "openai"
-    CHAT_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    CHAT_EMBEDDING_DIMENSIONS: int = 1536
     CHAT_CLOUD_EMBEDDING_MODEL: str = "text-embedding-3-small"
     CHAT_CLOUD_EMBEDDING_DIMENSIONS: int = 1536
     CHAT_LOCAL_EMBEDDING_MODEL: str = "bge-m3"
@@ -78,28 +53,15 @@ class Settings(BaseSettings):
     )
 
     # 추천 설명 LLM + 추천 검색 임베딩.
-    RECOMMEND_LLM_PROVIDER: str = "openai"
-    RECOMMEND_LLM_MODEL: str = "gpt-4o-mini"
     RECOMMEND_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
     RECOMMEND_LOCAL_LLM_MODEL: str = "exaone3.5"
     RECOMMEND_ALLOW_EXTERNAL: bool = True
-    RECOMMEND_EMBEDDING_PROVIDER: str = Field(
-        default="openai",
-        validation_alias=AliasChoices("RECOMMEND_EMBEDDING_PROVIDER", "REC_EMBEDDING_PROVIDER"),
-    )
-    RECOMMEND_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    RECOMMEND_EMBEDDING_DIMENSIONS: int = Field(
-        default=1536,
-        validation_alias=AliasChoices("RECOMMEND_EMBEDDING_DIMENSIONS", "REC_EMBEDDING_DIM"),
-    )
     RECOMMEND_CLOUD_EMBEDDING_MODEL: str = "text-embedding-3-small"
     RECOMMEND_CLOUD_EMBEDDING_DIMENSIONS: int = 1536
     RECOMMEND_LOCAL_EMBEDDING_MODEL: str = "bge-m3"
     RECOMMEND_LOCAL_EMBEDDING_DIMENSIONS: int = 1024
 
-    # 정책 상세 요약. 현재 호출부가 없는 환경에서도 설정 계약은 유지한다.
-    POLICY_SUMMARY_LLM_PROVIDER: str = "openai"
-    POLICY_SUMMARY_LLM_MODEL: str = "gpt-4o-mini"
+    # 정책 상세 요약. 사용자 cloud/local 선택에 맞춰 모델을 고른다.
     POLICY_SUMMARY_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
     POLICY_SUMMARY_LOCAL_LLM_MODEL: str = "exaone3.5"
     POLICY_SUMMARY_ALLOW_EXTERNAL: bool = True
@@ -115,23 +77,6 @@ class Settings(BaseSettings):
     NORMALIZE_LLM_MAX_CONTEXT_CHARS: int = 800
 
     # 서류 검토는 로컬이 기본이지만, 사용자가 프로필에서 cloud/local을 선택할 수 있다.
-    DOCUMENT_REVIEW_LLM_PROVIDER: str = "ollama"
-    DOCUMENT_REVIEW_LLM_MODEL: str = Field(
-        default="exaone3.5",
-        validation_alias=AliasChoices("DOCUMENT_REVIEW_LLM_MODEL", "REVIEW_LLM_MODEL"),
-    )
-    DOCUMENT_REVIEW_EMBEDDING_PROVIDER: str = "ollama"
-    DOCUMENT_REVIEW_EMBEDDING_MODEL: str = Field(
-        default="bge-m3",
-        validation_alias=AliasChoices("DOCUMENT_REVIEW_EMBEDDING_MODEL", "REVIEW_EMBEDDING_MODEL"),
-    )
-    DOCUMENT_REVIEW_EMBEDDING_DIMENSIONS: int = Field(
-        default=1024,
-        validation_alias=AliasChoices(
-            "DOCUMENT_REVIEW_EMBEDDING_DIMENSIONS",
-            "REVIEW_EMBEDDING_DIM",
-        ),
-    )
     DOCUMENT_REVIEW_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
     DOCUMENT_REVIEW_LOCAL_LLM_MODEL: str = "exaone3.5"
     DOCUMENT_REVIEW_CLOUD_EMBEDDING_MODEL: str = "text-embedding-3-small"
@@ -153,9 +98,6 @@ class Settings(BaseSettings):
 
     # 서류 발급 가이드(prep_vectors)는 공유 지식이므로 두 임베딩을 미리 생성한다.
     # 실제 검색에서는 호출 기능의 cloud/local 선택에 맞는 컬럼만 사용한다.
-    PREP_EMBEDDING_PROVIDER: str = "ollama"
-    PREP_EMBEDDING_MODEL: str = "bge-m3"
-    PREP_EMBEDDING_DIMENSIONS: int = 1024
     PREP_ALLOW_EXTERNAL: bool = True
     PREP_CLOUD_EMBEDDING_MODEL: str = "text-embedding-3-small"
     PREP_CLOUD_EMBEDDING_DIMENSIONS: int = 1536
@@ -163,8 +105,6 @@ class Settings(BaseSettings):
     PREP_LOCAL_EMBEDDING_DIMENSIONS: int = 1024
 
     # 캘린더 일반 CRUD에는 적용되지 않고 AI 코칭에만 적용된다.
-    CALENDAR_COACH_LLM_PROVIDER: str = "openai"
-    CALENDAR_COACH_LLM_MODEL: str = "gpt-4o-mini"
     CALENDAR_COACH_CLOUD_LLM_MODEL: str = "gpt-4o-mini"
     CALENDAR_COACH_LOCAL_LLM_MODEL: str = "exaone3.5"
     CALENDAR_COACH_ALLOW_EXTERNAL: bool = True
@@ -230,38 +170,30 @@ class Settings(BaseSettings):
             raise ValueError("DB_PASSWORD must be set in .env or environment variables.")
         return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
-    # 기존 코드/환경변수 이름을 읽는 외부 작업을 위한 호환 속성.
+    # 기존 코드가 읽는 이름만 유지한다. 환경설정은 cloud/local 변수가 단일 기준이다.
     @property
     def CHAT_COMPLETION_PROVIDER(self) -> str:
-        return self.CHAT_LLM_PROVIDER
+        return "openai"
 
     @property
     def CHAT_COMPLETION_MODEL(self) -> str:
-        return self.CHAT_LLM_MODEL
+        return self.CHAT_CLOUD_LLM_MODEL
 
     @property
     def REC_EMBEDDING_PROVIDER(self) -> str:
-        return self.RECOMMEND_EMBEDDING_PROVIDER
+        return "openai"
 
     @property
     def REC_EMBEDDING_DIM(self) -> int:
-        return self.RECOMMEND_EMBEDDING_DIMENSIONS
+        return self.RECOMMEND_CLOUD_EMBEDDING_DIMENSIONS
 
     @property
     def REC_OPENAI_MODEL(self) -> str:
-        return (
-            self.RECOMMEND_EMBEDDING_MODEL
-            if self.RECOMMEND_EMBEDDING_PROVIDER.lower() == "openai"
-            else self.OPENAI_EMBEDDING_MODEL
-        )
+        return self.RECOMMEND_CLOUD_EMBEDDING_MODEL
 
     @property
     def REC_OLLAMA_MODEL(self) -> str:
-        return (
-            self.RECOMMEND_EMBEDDING_MODEL
-            if self.RECOMMEND_EMBEDDING_PROVIDER.lower() == "ollama"
-            else self.OLLAMA_EMBEDDING_MODEL
-        )
+        return self.RECOMMEND_LOCAL_EMBEDDING_MODEL
 
     @property
     def REC_OLLAMA_BASE_URL(self) -> str:
@@ -273,15 +205,15 @@ class Settings(BaseSettings):
 
     @property
     def REVIEW_EMBEDDING_DIM(self) -> int:
-        return self.DOCUMENT_REVIEW_EMBEDDING_DIMENSIONS
+        return self.DOCUMENT_REVIEW_LOCAL_EMBEDDING_DIMENSIONS
 
     @property
     def REVIEW_EMBEDDING_MODEL(self) -> str:
-        return self.DOCUMENT_REVIEW_EMBEDDING_MODEL
+        return self.DOCUMENT_REVIEW_LOCAL_EMBEDDING_MODEL
 
     @property
     def REVIEW_LLM_MODEL(self) -> str:
-        return self.DOCUMENT_REVIEW_LLM_MODEL
+        return self.DOCUMENT_REVIEW_LOCAL_LLM_MODEL
 
 
 settings = Settings()

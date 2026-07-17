@@ -1289,11 +1289,7 @@ def retrieve_policy_chunk_sources(
 
     selected_mode = normalize_model_mode(model_mode)
     if selected_mode is None:
-        selected_mode = (
-            "local"
-            if settings.CHAT_EMBEDDING_PROVIDER.strip().lower() == "ollama"
-            else "cloud"
-        )
+        selected_mode = "cloud"
     model = embedding_model or get_embedding_model("chat", model_mode=selected_mode)
     vector_column = (
         PolicyChunk.embedding_ollama

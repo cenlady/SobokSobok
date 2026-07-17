@@ -627,7 +627,7 @@ def source_hash(source_text: str) -> str:
 
 
 def fit_embedding_dim(vector: list[float], dim: int | None = None) -> list[float]:
-    target_dim = dim or settings.RECOMMEND_EMBEDDING_DIMENSIONS
+    target_dim = dim or settings.RECOMMEND_CLOUD_EMBEDDING_DIMENSIONS
     if len(vector) != target_dim:
         raise ModelResponseError(
             f"추천 임베딩 차원 불일치: expected={target_dim}, actual={len(vector)}. "
@@ -654,11 +654,7 @@ def _vector_scores(
 ) -> tuple[dict[UUID, float], bool]:
     selected_mode = normalize_model_mode(model_mode)
     if selected_mode is None:
-        selected_mode = (
-            "local"
-            if settings.RECOMMEND_EMBEDDING_PROVIDER.strip().lower() == "ollama"
-            else "cloud"
-        )
+        selected_mode = "cloud"
     vector_column = (
         RecommendationVector.embedding_ollama
         if selected_mode == "local"

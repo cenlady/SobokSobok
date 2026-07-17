@@ -57,16 +57,15 @@ class CalendarCoachingDateTests(unittest.TestCase):
         self.assertEqual(actual, date(2026, 7, 31))
         self.assertEqual(target, date(2026, 7, 25))
 
-    def test_target_after_actual_deadline_is_rejected(self) -> None:
-        with self.assertRaises(HTTPException) as raised:
-            _resolve_coaching_dates(
-                date(2026, 7, 31),
-                "2026-08-01",
-                today=date(2026, 7, 15),
-            )
+    def test_target_after_actual_deadline_is_clamped(self) -> None:
+        actual, target = _resolve_coaching_dates(
+            date(2026, 7, 31),
+            "2026-08-01",
+            today=date(2026, 7, 15),
+        )
 
-        self.assertEqual(raised.exception.status_code, 400)
-        self.assertIn("실제 신청 마감일", raised.exception.detail)
+        self.assertEqual(actual, date(2026, 7, 31))
+        self.assertEqual(target, actual)
 
     def test_past_policy_and_invalid_target_are_rejected(self) -> None:
         with self.assertRaises(HTTPException) as past_policy:
