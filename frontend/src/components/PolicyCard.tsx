@@ -1,6 +1,6 @@
 import { AlertCircle, Bookmark, BookmarkCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { getDeadlineInfo } from '../lib/deadline'
+import { formatPeriod, getDeadlineInfo } from '../lib/deadline'
 import { getPolicyLabels } from '../lib/policyLabels'
 import { StatusBadge, TagList } from './ui'
 
@@ -10,6 +10,7 @@ export interface PolicyCardData {
   summary?: string | null
   support_type?: string | null
   categories?: string[]
+  apply_start?: string | null
   apply_end?: string | null
   /** 상시 접수인지 기간 미상인지를 가른다 (open | notice | closed) */
   status?: string | null
@@ -45,10 +46,12 @@ interface Props {
 export default function PolicyCard({ policy, saved, onToggleSave, savePending }: Props) {
   const navigate = useNavigate()
   const deadline = getDeadlineInfo(policy)
+  const period = formatPeriod(policy)
   const needsReview =
     policy.eligibility_status === 'needs_review' || policy.match_status === 'needs_review'
   const isPreferenceMismatch =
     policy.preference_match === 'none' || policy.match_status === 'near_match'
+  const recommendationLabel = needsReview ? '확인 필요' : isPreferenceMismatch ? '유사 정책' : null
 
   const categoryLabels = getPolicyLabels(policy)
 
@@ -74,9 +77,29 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <StatusBadge info={deadline} />
+          <div className="flex flex-wrap items-center gap-1.5">
+            {policy.rank_score !== undefined && (
+              <span className="inline-flex items-center rounded-md bg-primary-soft px-2 py-0.5 text-[11px] font-bold tracking-tight text-primary">
+                추천 {Math.round(policy.rank_score)}점
+              </span>
+            )}
+            <StatusBadge info={deadline} />
+            {recommendationLabel && (
+              <span
+                className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] font-semibold ${
+                  needsReview
+                    ? 'border-accent/40 bg-accent-soft/50 text-brand'
+                    : 'border-line bg-surface text-muted'
+                }`}
+              >
+                {recommendationLabel}
+              </span>
+            )}
+          </div>
 
           <h4 className="mt-2 line-clamp-2 text-card text-ink">{policy.title}</h4>
+
+          {period && <p className="mt-1 text-xs font-semibold text-muted">신청 {period}</p>}
 
           {categoryLabels.length > 0 && (
             <div className="mt-1.5">
@@ -119,12 +142,10 @@ export default function PolicyCard({ policy, saved, onToggleSave, savePending }:
         </p>
       )}
 
-      {(needsReview || isPreferenceMismatch) && (
+      {isPreferenceMismatch && (
         <p className="mt-2 flex items-start gap-1.5 text-[13px] font-medium text-muted">
           <AlertCircle size={13} className="mt-px shrink-0 text-subtle" />
-          {needsReview
-            ? policy.warnings?.[0] || '지원 자격 조건을 다시 확인해보세요'
-            : policy.unmet_conditions?.[0] || '선택한 관심 분야와 직접 일치하지 않습니다'}
+          {policy.unmet_conditions?.[0] || '선택한 관심 분야와 직접 일치하지 않습니다'}
         </p>
       )}
     </article>
