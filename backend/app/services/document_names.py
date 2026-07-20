@@ -350,13 +350,33 @@ def find_canonical_names_in_text(
     ``동의서``처럼 너무 짧고 범용적인 별칭은 오탐을 만들 수 있으므로, 짧은
     이름은 그 자체가 표준명일 때만 허용한다.
     """
+    return [
+        canonical
+        for _matched_name, canonical in find_canonical_name_matches_in_text(
+            text,
+            allowed_names=allowed_names,
+        )
+    ]
+
+
+def find_canonical_name_matches_in_text(
+    text: str,
+    *,
+    allowed_names: Collection[str] | None = None,
+) -> list[tuple[str, str]]:
+    """질문에 실제로 쓰인 서류명과 내부 표준명을 함께 반환한다.
+
+    내부 검색에는 ``신청서식`` 같은 표준명이 필요하지만 사용자 답변에는
+    ``융자신청서``처럼 질문에서 사용한 이름을 그대로 보여줘야 한다.
+    """
     normalized_text = _match_key(text)
     if not normalized_text:
         return []
 
     allowed = set(allowed_names) if allowed_names is not None else None
-    matches: list[tuple[int, int, str]] = []
-    for alias, canonical in _CANONICAL.items():
+    original_text = (text or "").lower()
+    matches: list[tuple[int, int, int, int, str, str]] = []
+    for order, (alias, canonical) in enumerate(_CANONICAL.items()):
         if allowed is not None and canonical not in allowed:
             continue
 
@@ -369,16 +389,18 @@ def find_canonical_names_in_text(
 
         start = normalized_text.find(alias_key)
         if start >= 0:
-            matches.append((start, -len(alias_key), canonical))
+            # 같은 정규화 키라면 사용자가 실제로 입력한 띄어쓰기·구두점 형태를 우선한다.
+            surface_priority = 0 if alias.lower() in original_text else 1
+            matches.append((start, -len(alias_key), surface_priority, order, alias, canonical))
 
     matches.sort()
-    result: list[str] = []
+    result: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for _start, _negative_length, canonical in matches:
+    for _start, _negative_length, _surface_priority, _order, alias, canonical in matches:
         if canonical in seen:
             continue
         seen.add(canonical)
-        result.append(canonical)
+        result.append((alias, canonical))
     return result
 
 

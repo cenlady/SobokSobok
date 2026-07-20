@@ -11,7 +11,10 @@ from app.core.model_provider import get_embedding_model, normalize_model_mode
 from app.core.rag_utils import search_generic_vectors
 from app.models.prep import PrepVector
 from app.services.document_guides import GUIDE_BY_NAME, DocumentGuide
-from app.services.document_names import find_canonical_names_in_text
+from app.services.document_names import (
+    find_canonical_name_matches_in_text,
+    find_canonical_names_in_text,
+)
 
 
 DOCUMENT_GUIDE_ACTIONS = (
@@ -71,6 +74,7 @@ PREP_VECTOR_MIN_SIMILARITY = 0.45
 @dataclass(frozen=True)
 class DocumentGuideMatch:
     document_name: str
+    display_name: str
     guide_text: str
     similarity: float
     exact: bool
@@ -168,8 +172,16 @@ def find_document_guide_matches(
     limit: int = 3,
 ) -> list[DocumentGuideMatch]:
     """정확한 서류명은 직접 찾고, 표현이 다를 때만 prep_vectors를 검색한다."""
-    exact_names = exact_document_guide_names(query)[:limit]
-    if exact_names:
+    exact_name_matches = find_canonical_name_matches_in_text(
+        query,
+        allowed_names=GUIDE_BY_NAME.keys(),
+    )[:limit]
+    if exact_name_matches:
+        exact_names = [canonical for _display_name, canonical in exact_name_matches]
+        display_names = {
+            canonical: display_name
+            for display_name, canonical in exact_name_matches
+        }
         rows = (
             db.query(PrepVector)
             .filter(PrepVector.document_name.in_(exact_names))
@@ -188,6 +200,7 @@ def find_document_guide_matches(
             matches.append(
                 DocumentGuideMatch(
                     document_name=name,
+                    display_name=display_names.get(name, name),
                     guide_text=guide_text,
                     similarity=1.0,
                     exact=True,
@@ -212,6 +225,7 @@ def find_document_guide_matches(
         matches.append(
             DocumentGuideMatch(
                 document_name=row.document_name,
+                display_name=row.document_name,
                 guide_text=row.guide_text,
                 similarity=similarity,
                 exact=False,
@@ -251,9 +265,10 @@ def resolve_document_guide_question(
 
 def _format_document_guide(match: DocumentGuideMatch) -> str:
     guide = match.guide
+    display_name = match.display_name or match.document_name
     if guide is None:
         prefix = (
-            f"질문과 가장 가까운 서류는 '{match.document_name}'이에요. "
+            f"질문과 가장 가까운 서류는 '{display_name}'이에요. "
             "서류명이 맞는지 먼저 확인해 주세요."
         )
         details = [part.strip() for part in match.guide_text.split(" / ") if part.strip()]
@@ -262,28 +277,46 @@ def _format_document_guide(match: DocumentGuideMatch) -> str:
     uncertainty_lines = []
     if not match.exact:
         uncertainty_lines.append(
-            f"질문과 가장 가까운 서류는 '{match.document_name}'이에요. "
+            f"질문과 가장 가까운 서류는 '{display_name}'이에요. "
             "서류명이 맞는지 먼저 확인해 주세요."
         )
 
-    if guide.issuer == "본인 작성":
+    if guide.preparation_type == "template":
         lines = [
             *uncertainty_lines,
-            f"{guide.name}는 기관에서 발급받는 서류가 아니라, 신청자가 직접 작성하는 문서예요.",
+            f"{display_name}{_topic_particle(display_name)} 기관에서 발급받는 서류가 아니라, "
+            "해당 공고에서 제공하는 양식을 내려받아 직접 작성하는 서류예요.",
+        ]
+        if guide.online:
+            lines.append(f"• 양식 받는 곳: {guide.online}")
+        lines.append(f"• 준비 방법: 공고에 첨부된 양식을 그대로 작성해 주세요.")
+    elif guide.preparation_type == "self_written":
+        lines = [
+            *uncertainty_lines,
+            f"{display_name}{_topic_particle(display_name)} 기관에서 발급받는 서류가 아니라, "
+            "신청자가 직접 작성하는 문서예요.",
         ]
         if guide.online:
             lines.append(f"• 준비 방법: {guide.online}")
+    elif guide.preparation_type == "owned":
+        lines = [
+            *uncertainty_lines,
+            f"{display_name}{_topic_particle(display_name)} 새로 발급받기보다 현재 가지고 있는 것을 준비하면 돼요.",
+        ]
+        if guide.offline:
+            lines.append(f"• 준비 가능한 종류: {guide.offline}")
     else:
         lines = [
             *uncertainty_lines,
-            f"{guide.name}{_topic_particle(guide.name)} {guide.issuer}에서 준비하거나 발급받는 서류예요.",
+            f"{display_name}{_topic_particle(display_name)} {guide.issuer}에서 발급받는 서류예요.",
         ]
         if guide.online:
             lines.append(f"• 온라인: {guide.online}")
         if guide.offline:
             lines.append(f"• 방문: {guide.offline}")
 
-    lines.append(f"• 예상 시간: {guide.duration}")
+    duration_label = "준비 시간" if guide.preparation_type in {"template", "self_written", "owned"} else "예상 시간"
+    lines.append(f"• {duration_label}: {guide.duration}")
     lines.append(f"• 비용: {guide.fee}")
     if guide.tip:
         lines.append(f"• 꼭 확인할 점: {guide.tip}")

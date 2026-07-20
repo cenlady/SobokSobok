@@ -20,6 +20,10 @@ LLM에게 물어 생성할 수도 있지만, 발급처를 틀리게 알려주면
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+
+DocumentPreparationType = Literal["issued", "template", "self_written", "owned"]
 
 
 @dataclass(frozen=True)
@@ -33,14 +37,23 @@ class DocumentGuide:
     offline: str | None  # 방문 발급처
     duration: str  # 소요 시간
     fee: str  # 수수료
+    preparation_type: DocumentPreparationType = "issued"
     tip: str | None = None  # 실무 팁
 
     def to_text(self) -> str:
         """임베딩·표시용 한 덩어리 텍스트."""
-        parts = [f"{self.name} — {self.issuer}에서 발급합니다."]
+        if self.preparation_type == "template":
+            parts = [f"{self.name} — 발급 서류가 아니라 공고 양식을 내려받아 직접 작성합니다."]
+        elif self.preparation_type == "self_written":
+            parts = [f"{self.name} — 기관 발급 없이 신청자가 직접 작성합니다."]
+        elif self.preparation_type == "owned":
+            parts = [f"{self.name} — 새로 발급받기보다 현재 소지한 서류나 신분증을 준비합니다."]
+        else:
+            parts = [f"{self.name} — {self.issuer}에서 발급합니다."]
         if self.online:
-            parts.append(f"온라인: {self.online}")
-        if self.offline:
+            label = "양식 받는 곳" if self.preparation_type == "template" else "온라인"
+            parts.append(f"{label}: {self.online}")
+        if self.offline and self.preparation_type not in {"template", "owned"}:
             parts.append(f"방문: {self.offline}")
         parts.append(f"소요 시간: {self.duration}")
         parts.append(f"수수료: {self.fee}")
@@ -309,6 +322,7 @@ GUIDES: list[DocumentGuide] = [
         offline="주민등록증·운전면허증·여권",
         duration="즉시",
         fee="무료",
+        preparation_type="owned",
         tip="사본 제출을 요구하면 앞뒤 모두 복사하세요.",
     ),
     # ── 기관 양식 (발급이 아니라 작성) ──────────────────────────────
@@ -318,9 +332,10 @@ GUIDES: list[DocumentGuide] = [
         online="해당 공고문 첨부파일",
         online_url=None,
         offline="공고 기관 방문",
-        duration="즉시",
+        duration="양식 다운로드는 즉시 / 작성 시간은 별도",
         fee="무료",
-        tip="발급받는 서류가 아니라 공고에 첨부된 양식을 내려받아 작성하는 것입니다. 공고문 하단 첨부파일을 확인하세요.",
+        preparation_type="template",
+        tip="공고마다 양식이 다를 수 있으므로 해당 공고문 하단의 첨부파일을 사용하세요.",
     ),
     DocumentGuide(
         name="개인정보수집이용동의서",
@@ -328,9 +343,10 @@ GUIDES: list[DocumentGuide] = [
         online="해당 공고문 첨부파일",
         online_url=None,
         offline="공고 기관 방문",
-        duration="즉시",
+        duration="양식 다운로드는 즉시",
         fee="무료",
-        tip="공고에 첨부된 양식에 서명하면 됩니다. 따로 발급받는 서류가 아닙니다.",
+        preparation_type="template",
+        tip="공고에 첨부된 양식에 필요한 내용을 적고 서명한 뒤 제출하세요.",
     ),
     DocumentGuide(
         name="사업계획서",
@@ -340,6 +356,7 @@ GUIDES: list[DocumentGuide] = [
         offline=None,
         duration="작성 시간 필요",
         fee="무료",
+        preparation_type="self_written",
         tip="공고에 지정 양식이 있으면 반드시 그 양식을 써야 합니다. 자유 양식이면 지원 목적·사업 내용·기대 효과를 담으세요.",
     ),
 ]

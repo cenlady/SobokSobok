@@ -67,6 +67,67 @@ def test_exact_business_plan_question_uses_verified_guide_without_vector_search(
     vector_search.assert_not_called()
 
 
+def test_loan_application_form_is_explained_as_template_with_user_wording():
+    row = SimpleNamespace(
+        document_name="신청서식",
+        guide_text="신청서식 — 발급 서류가 아니라 공고 양식을 내려받아 직접 작성합니다.",
+    )
+
+    resolution = prep_rag.resolve_document_guide_question(
+        _Db([row]),
+        "융자신청서에 대해 설명해줘",
+        model_mode="cloud",
+    )
+
+    assert resolution is not None
+    assert resolution.document_names == ("신청서식",)
+    assert resolution.answer.startswith("융자신청서는 기관에서 발급받는 서류가 아니라")
+    assert "• 양식 받는 곳: 해당 공고문 첨부파일" in resolution.answer
+    assert "• 준비 방법: 공고에 첨부된 양식을 그대로 작성해 주세요." in resolution.answer
+    assert "작성 시간은 별도" in resolution.answer
+    assert "신청서식은" not in resolution.answer
+    assert "• 방문:" not in resolution.answer
+    assert "공고 기관에서 준비하거나 발급받는" not in resolution.answer
+
+
+def test_document_guide_output_depends_on_preparation_type():
+    issued = prep_rag.resolve_document_guide_question(
+        _Db(
+            [
+                SimpleNamespace(
+                    document_name="사업자등록증명",
+                    guide_text="사업자등록증명 — 국세청에서 발급합니다.",
+                )
+            ]
+        ),
+        "사업자등록증은 어디서 발급해?",
+        model_mode="cloud",
+    )
+    owned = prep_rag.resolve_document_guide_question(
+        _Db([SimpleNamespace(document_name="신분증", guide_text="신분증 — 본인 소지")]),
+        "신분증은 어떻게 준비해?",
+        model_mode="cloud",
+    )
+    consent = prep_rag.resolve_document_guide_question(
+        _Db(
+            [
+                SimpleNamespace(
+                    document_name="개인정보수집이용동의서",
+                    guide_text="공고 양식에 서명합니다.",
+                )
+            ]
+        ),
+        "개인정보 수집·이용 동의서는 어디서 받아?",
+        model_mode="cloud",
+    )
+
+    assert issued is not None and "사업자등록증은 국세청에서 발급받는 서류" in issued.answer
+    assert owned is not None and "신분증은 새로 발급받기보다 현재 가지고 있는 것" in owned.answer
+    assert "준비 가능한 종류" in owned.answer
+    assert consent is not None and "기관에서 발급받는 서류가 아니라" in consent.answer
+    assert "양식 받는 곳" in consent.answer
+
+
 def test_unknown_document_word_uses_prep_vector_fallback(monkeypatch):
     row = SimpleNamespace(
         document_name="표준재무제표증명",
