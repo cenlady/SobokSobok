@@ -7,7 +7,11 @@
 
 import pytest
 
-from app.services.document_names import canonicalize
+from app.services.document_names import (
+    canonicalize,
+    find_canonical_name_matches_in_text,
+    find_canonical_names_in_text,
+)
 
 
 class TestBulletStripping:
@@ -115,3 +119,25 @@ class TestCanonicalMapping:
 class TestNoDuplicates:
     def test_같은_서류가_두_번_나오면_한_번만_돌려준다(self):
         assert canonicalize("사업자등록증, 사업자등록증 사본") == ["사업자등록증명"]
+
+
+class TestNaturalLanguageDocumentNameSearch:
+    def test_질문_문장_안의_사업계획서를_찾는다(self):
+        assert find_canonical_names_in_text("사업계획서에 대해 설명해줘") == ["사업계획서"]
+
+    def test_별칭도_표준_서류명으로_찾는다(self):
+        assert find_canonical_names_in_text("사업자등록증은 어디서 발급해?") == ["사업자등록증명"]
+
+    def test_질문에_쓴_이름과_내부_표준명을_함께_돌려준다(self):
+        assert find_canonical_name_matches_in_text("융자신청서에 대해 설명해줘") == [
+            ("융자신청서", "신청서식")
+        ]
+        assert find_canonical_name_matches_in_text(
+            "개인정보 수집·이용 동의서는 어디서 받아?"
+        ) == [("개인정보 수집·이용 동의서", "개인정보수집이용동의서")]
+
+    def test_허용된_서류만_찾는다(self):
+        assert find_canonical_names_in_text(
+            "사업계획서와 사업자등록증을 준비해야 해",
+            allowed_names={"사업계획서"},
+        ) == ["사업계획서"]

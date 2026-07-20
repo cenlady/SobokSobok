@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 
 # ── 항목을 쪼개는 구분자 ─────────────────────────────────────────────
 #
@@ -333,3 +334,76 @@ def _is_document_name(name: str) -> bool:
 def canonical_key(name: str) -> str:
     """정규화된 이름을 매핑 키로 바꾼다(공백 무시)."""
     return _CANONICAL.get(name.replace(" ", ""), _CANONICAL.get(name, name))
+
+
+def find_canonical_names_in_text(
+    text: str,
+    *,
+    allowed_names: Collection[str] | None = None,
+) -> list[str]:
+    """자연어 문장 안에 포함된 알려진 서류명을 표준명으로 반환한다.
+
+    ``canonicalize``는 공고에서 추출한 서류명 한 항목을 정리하는 함수라서
+    ``사업계획서에 대해 설명해줘`` 같은 질문 전체를 넣으면 문장으로 판단해
+    버린다. 채팅에서는 문장 안의 별칭을 먼저 찾은 뒤 같은 표준명으로 모아야 한다.
+
+    ``동의서``처럼 너무 짧고 범용적인 별칭은 오탐을 만들 수 있으므로, 짧은
+    이름은 그 자체가 표준명일 때만 허용한다.
+    """
+    return [
+        canonical
+        for _matched_name, canonical in find_canonical_name_matches_in_text(
+            text,
+            allowed_names=allowed_names,
+        )
+    ]
+
+
+def find_canonical_name_matches_in_text(
+    text: str,
+    *,
+    allowed_names: Collection[str] | None = None,
+) -> list[tuple[str, str]]:
+    """질문에 실제로 쓰인 서류명과 내부 표준명을 함께 반환한다.
+
+    내부 검색에는 ``신청서식`` 같은 표준명이 필요하지만 사용자 답변에는
+    ``융자신청서``처럼 질문에서 사용한 이름을 그대로 보여줘야 한다.
+    """
+    normalized_text = _match_key(text)
+    if not normalized_text:
+        return []
+
+    allowed = set(allowed_names) if allowed_names is not None else None
+    original_text = (text or "").lower()
+    matches: list[tuple[int, int, int, int, str, str]] = []
+    for order, (alias, canonical) in enumerate(_CANONICAL.items()):
+        if allowed is not None and canonical not in allowed:
+            continue
+
+        alias_key = _match_key(alias)
+        canonical_key_value = _match_key(canonical)
+        if not alias_key:
+            continue
+        if len(alias_key) < 4 and alias_key != canonical_key_value:
+            continue
+
+        start = normalized_text.find(alias_key)
+        if start >= 0:
+            # 같은 정규화 키라면 사용자가 실제로 입력한 띄어쓰기·구두점 형태를 우선한다.
+            surface_priority = 0 if alias.lower() in original_text else 1
+            matches.append((start, -len(alias_key), surface_priority, order, alias, canonical))
+
+    matches.sort()
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for _start, _negative_length, _surface_priority, _order, alias, canonical in matches:
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append((alias, canonical))
+    return result
+
+
+def _match_key(value: str) -> str:
+    """띄어쓰기와 구두점 차이를 무시하는 서류명 검색 키."""
+    return re.sub(r"[^0-9a-z가-힣]", "", (value or "").lower())
