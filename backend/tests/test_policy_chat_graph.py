@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from app.models.chat import ChatSession
@@ -35,6 +36,7 @@ def _retrieval(query: str, *, response_mode: str = "answer"):
 def _patch_common(monkeypatch):
     monkeypatch.setattr(chat_graph, "build_recommendation_follow_up_answer", Mock(return_value=None))
     monkeypatch.setattr(chat_graph, "build_focused_attribute_answer", Mock(return_value=None))
+    monkeypatch.setattr(chat_graph, "resolve_document_guide_question", Mock(return_value=None))
     monkeypatch.setattr(chat_graph, "record_chat_turn", Mock())
     monkeypatch.setattr(
         chat_graph,
@@ -98,6 +100,87 @@ def test_policy_detail_chat_uses_parent_documents_and_keeps_context(monkeypatch)
     assert session.active_policy_id == policy_id
     document_retrieve.assert_called_once()
     chat_graph.record_chat_turn.assert_called_once()
+
+
+def test_main_chat_document_question_uses_prep_guide_before_policy_search(monkeypatch):
+    _patch_common(monkeypatch)
+    session = _session(active_policy_id=uuid.uuid4())
+    monkeypatch.setattr(
+        chat_graph,
+        "resolve_document_guide_question",
+        Mock(
+            return_value=SimpleNamespace(
+                answer="사업계획서는 신청자가 직접 작성하는 문서예요.",
+                document_names=("사업계획서",),
+                exact=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        chat_graph,
+        "retrieve_policy_chunk_sources",
+        Mock(side_effect=AssertionError("서류 가이드를 찾으면 정책 청크를 검색하면 안 됩니다.")),
+    )
+    monkeypatch.setattr(
+        chat_graph,
+        "generate_chat_answer",
+        Mock(side_effect=AssertionError("검증된 서류 가이드 답변에 LLM을 호출하면 안 됩니다.")),
+    )
+
+    response = chat_graph.run_policy_chat(
+        db=object(),
+        query="사업계획서에 대해 설명해줘",
+        limit=6,
+        requested_policy_id=None,
+        selected_policy_id=None,
+        session=session,
+        recent_messages=[],
+        model_mode="cloud",
+    )
+
+    assert response["answer"] == "사업계획서는 신청자가 직접 작성하는 문서예요."
+    assert response["intent_tags"] == ["document_guide", "documents"]
+    assert response["sources"] == []
+    assert session.active_policy_id is None
+    chat_graph.record_chat_turn.assert_called_once()
+
+
+def test_policy_detail_document_question_keeps_policy_requirements_as_sources(monkeypatch):
+    _patch_common(monkeypatch)
+    policy_id = uuid.uuid4()
+    session = _session()
+    monkeypatch.setattr(
+        chat_graph,
+        "resolve_document_guide_question",
+        Mock(
+            return_value=SimpleNamespace(
+                answer="사업계획서는 신청자가 직접 작성하는 문서예요.",
+                document_names=("사업계획서",),
+                exact=True,
+            )
+        ),
+    )
+    policy_retrieval = _retrieval("사업계획서에 대해 설명해줘")
+    document_retrieve = Mock(return_value=policy_retrieval)
+    monkeypatch.setattr(chat_graph, "retrieve_policy_document_sources", document_retrieve)
+
+    response = chat_graph.run_policy_chat(
+        db=object(),
+        query="사업계획서에 대해 설명해줘",
+        limit=6,
+        requested_policy_id=policy_id,
+        selected_policy_id=None,
+        session=session,
+        recent_messages=[],
+        model_mode="local",
+    )
+
+    assert "신청자가 직접 작성하는 문서" in response["answer"]
+    assert "아래 공고 근거의 제출 서류 내용" in response["answer"]
+    assert response["sources"] == policy_retrieval["sources"]
+    assert response["context_policy_id"] == str(policy_id)
+    assert session.active_policy_id == policy_id
+    document_retrieve.assert_called_once()
 
 
 def test_out_of_scope_route_skips_llm(monkeypatch):

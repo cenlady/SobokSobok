@@ -390,6 +390,8 @@ def test_policy_scope_allows_detail_context_and_policy_domain_terms():
     assert is_out_of_policy_scope("그 정책 말고 오늘 점심 뭐 먹지?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("단발 가능?", policy_id=policy_id) is True
     assert is_out_of_policy_scope("신청 기간 알려줘", policy_id=None) is False
+    assert is_out_of_policy_scope("사업계획서에 대해 설명해줘", policy_id=None) is False
+    assert is_out_of_policy_scope("카페 사업계획서 작성 방법 알려줘", policy_id=None) is False
 
 
 @pytest.mark.parametrize(

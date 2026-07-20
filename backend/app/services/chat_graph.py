@@ -22,6 +22,7 @@ from app.services.chat_rag import (
     retrieve_policy_document_sources,
     resolve_session_policy_context,
 )
+from app.services.prep_rag import resolve_document_guide_question
 from app.services.policy_title_matcher import resolve_policy_title_from_db
 
 
@@ -66,6 +67,45 @@ def _resolve_request(state: PolicyChatState) -> Dict[str, Any]:
                 "sources": [],
             },
             "answer": follow_up_answer,
+        }
+
+    document_guide = resolve_document_guide_question(
+        state["db"],
+        state["query"],
+        model_mode=state.get("model_mode"),
+    )
+    if document_guide is not None:
+        # 상세 화면이나 사용자가 직접 선택한 공고가 있으면 공고의 구비 서류
+        # 원문도 근거 카드로 유지한다. 가이드 답변은 검증된 prep_vectors만 쓴다.
+        context_policy_id = state.get("requested_policy_id") or state.get("selected_policy_id")
+        sources: List[Dict[str, Any]] = []
+        if context_policy_id is not None:
+            policy_response = retrieve_policy_document_sources(
+                db=state["db"],
+                query=state["query"],
+                limit=state.get("limit"),
+                policy_id=context_policy_id,
+            )
+            sources = policy_response.get("sources") or []
+
+        answer = document_guide.answer
+        if sources:
+            answer += (
+                "\n\n선택한 공고에 지정 양식이나 추가 작성 조건이 있을 수 있어요. "
+                "아래 공고 근거의 제출 서류 내용도 함께 확인해 주세요."
+            )
+        return {
+            "context_policy_id": context_policy_id,
+            "recommendation_follow_up": False,
+            "response_data": {
+                "query": state["query"],
+                "expanded_query": state["query"],
+                "intent_tags": ["document_guide", "documents"],
+                "response_mode": "answer",
+                "candidates": [],
+                "sources": sources,
+            },
+            "answer": answer,
         }
 
     return {

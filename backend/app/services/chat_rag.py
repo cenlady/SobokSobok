@@ -22,6 +22,7 @@ from app.core.rag_utils import (
 )
 from app.models.chat import ChatMessage, ChatSession, PolicyChunk
 from app.models.normalized_policy import NormalizedPolicy, PolicyDocument
+from app.services.prep_rag import is_document_guide_question
 
 
 DOCUMENT_TYPE_INTENTS: Dict[str, List[str]] = {
@@ -54,7 +55,27 @@ DOCUMENT_TYPE_SECTION_LABELS: Dict[str, str] = {
 
 KEYWORD_INTENTS: List[Tuple[str, Tuple[str, ...]]] = [
     ("eligibility", ("지원대상", "지원 대상", "신청대상", "신청 대상", "대상자", "자격", "요건", "누가", "누구", "받을 수", "가능", "소상공인", "중소기업")),
-    ("requirements", ("제출서류", "구비서류", "필요서류", "첨부서류", "서류", "증빙")),
+    (
+        "requirements",
+        (
+            "제출서류",
+            "구비서류",
+            "필요서류",
+            "첨부서류",
+            "서류",
+            "증빙",
+            "계획서",
+            "신청서",
+            "증명서",
+            "증명원",
+            "확인서",
+            "동의서",
+            "신고서",
+            "등본",
+            "초본",
+            "등록증",
+        ),
+    ),
     ("application", ("신청", "접수", "온라인", "방문", "우편", "이메일", "제출")),
     ("deadline", ("마감", "기간", "접수기간", "신청기간", "시작일", "종료일")),
     ("contact", ("문의", "연락처", "전화", "담당자", "접수처", "기관")),
@@ -1934,6 +1955,7 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     has_detail_context_signal = policy_id is not None and any(
         keyword in normalized for keyword in DETAIL_CONTEXT_KEYWORDS
     )
+    has_document_guide_signal = is_document_guide_question(normalized)
 
     # 일상 주제와 정책 단어가 섞이면, 구체적인 정책 수단이나 사업 맥락까지
     # 있어야 정책 질문으로 인정한다. "점심 정책 추천"처럼 정책 단어만 붙여
@@ -1941,12 +1963,18 @@ def is_out_of_policy_scope(query: str, *, policy_id: Optional[uuid.UUID] = None)
     if has_out_of_scope_signal:
         if has_out_of_scope_override:
             return True
-        if not has_policy_request_signal:
+        if not has_policy_request_signal and not has_document_guide_signal:
             return True
-        if not (has_specific_policy_signal or has_business_context_signal):
+        if not (
+            has_specific_policy_signal
+            or has_business_context_signal
+            or has_document_guide_signal
+        ):
             return True
 
     if has_detail_context_signal:
+        return False
+    if has_document_guide_signal:
         return False
     if has_specific_policy_signal or has_policy_topic_anchor:
         return False
