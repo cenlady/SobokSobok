@@ -69,6 +69,11 @@ class RecommendationPreviewResponse(BaseModel):
     status_counts: dict[Literal["eligible", "needs_review", "near_match"], int] = Field(
         default_factory=lambda: {"eligible": 0, "needs_review": 0, "near_match": 0}
     )
+    # 추천 적합도와 별개로, 화면에서 신청 일정 기준으로 결과를 나눌 때 쓴다.
+    # period: 날짜가 하나 이상 있음 / ongoing: 상시 접수 / unknown: 기간 확인 필요
+    schedule_counts: dict[Literal["period", "ongoing", "unknown"], int] = Field(
+        default_factory=lambda: {"period": 0, "ongoing": 0, "unknown": 0}
+    )
     vector_used: bool
     profile_warnings: list[str] = Field(default_factory=list)
     results: list[RecommendationResult]

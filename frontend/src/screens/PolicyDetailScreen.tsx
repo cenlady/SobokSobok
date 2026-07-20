@@ -14,12 +14,13 @@ import {
   FileText,
   Download,
 } from 'lucide-react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import AddToCalendarButton from '../components/AddToCalendarButton'
 import BottomNav from '../components/BottomNav'
 import { API_BASE_URL, apiFetch } from '../lib/api'
 import { formatPeriod, getDeadlineInfo } from '../lib/deadline'
 import { cleanPolicyText, truncateAtSentence } from '../lib/text'
+import { getPolicyLabels } from '../lib/policyLabels'
 import { Button, IconButton, Notice, Panel, ScreenHeader, StatusBadge } from '../components/ui'
 import { useSavedPolicies, useProfile } from '../lib/storage'
 import { buildRecommendationRequest } from '../lib/recommend'
@@ -51,6 +52,7 @@ function requestExplanation(policyId: string, requestBody: unknown) {
 }
 
 export default function PolicyDetailScreen() {
+  const location = useLocation()
   const { policyId } = useParams()
   const navigate = useNavigate()
   const { has, toggle } = useSavedPolicies()
@@ -143,6 +145,14 @@ export default function PolicyDetailScreen() {
   const applicationMethodText = formatApplicationMethods(policy.application_methods)
   const contactText = formatContactPoints(policy.contact_points)
   const eligibilityText = formatEligibility(policy.eligibility)
+  const supportTypeLabels = getPolicyLabels({ support_type: policy.support_type })
+  const navigationState = location.state as {
+    recommendation?: { rank_score?: unknown }
+  } | null
+  const recommendationScore =
+    typeof navigationState?.recommendation?.rank_score === 'number'
+      ? Math.round(navigationState.recommendation.rank_score)
+      : null
 
   const targetApplyUrl = policy.apply_url
     ? /^https?:\/\//i.test(policy.apply_url)
@@ -196,8 +206,21 @@ export default function PolicyDetailScreen() {
             label="기간"
             value={formatPeriod(policy) ?? getDeadlineInfo(policy).label}
           />
-          {policy.support_type && (
-            <InfoLine icon={Tag} label="유형" value={policy.support_type} />
+          {supportTypeLabels.length > 0 && (
+            <div className="flex items-start gap-3">
+              <Tag size={18} className="mt-0.5 flex-shrink-0 text-brand" />
+              <span className="w-12 flex-shrink-0 text-sm text-muted">유형</span>
+              <div className="flex min-w-0 flex-wrap gap-1.5">
+                {supportTypeLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded-md border border-line bg-surface px-2 py-1 text-xs font-semibold text-ink"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
           )}
         </Panel>
 
@@ -218,6 +241,7 @@ export default function PolicyDetailScreen() {
                   eligibilityStatus={explanation.eligibility_status}
                   preferenceMatch={explanation.preference_match}
                   confidence={explanation.confidence}
+                  score={recommendationScore}
                 />
                 <p className="text-[15px] font-semibold leading-relaxed text-ink">
                   {explanation.summary}
@@ -530,10 +554,12 @@ function MatchVerdict({
   eligibilityStatus,
   preferenceMatch,
   confidence,
+  score,
 }: {
   eligibilityStatus: RecommendationExplanationResponse['eligibility_status']
   preferenceMatch: RecommendationExplanationResponse['preference_match']
   confidence: RecommendationExplanationResponse['confidence']
+  score: number | null
 }) {
   const config = {
     eligible: {
@@ -570,6 +596,11 @@ function MatchVerdict({
       {preferenceLabel && (
         <span className="rounded-full bg-line/60 px-2.5 py-1 text-xs font-bold text-muted">
           {preferenceLabel}
+        </span>
+      )}
+      {score !== null && (
+        <span className="rounded-full bg-primary-soft px-2.5 py-1 text-xs font-bold text-primary">
+          추천 {score}점
         </span>
       )}
       <span className="text-[13px] font-medium text-muted">{config.description}</span>

@@ -11,6 +11,7 @@ from app.schemas.recommend import (
     RecommendationPreviewResponse,
     RecommendationProfileRequest,
     RecommendationExplanationResponse,
+    RecommendationResult,
 )
 from app.services.recommend import (
     explain_policy_recommendation,
@@ -24,6 +25,36 @@ from app.services.chat_rag import (
 )
 
 router = APIRouter()
+
+
+def _schedule_kind(item: RecommendationResult) -> Literal["period", "ongoing", "unknown"]:
+    """Classify application timing without conflating unknown dates with always-open policies."""
+    if item.apply_start is not None or item.apply_end is not None:
+        return "period"
+    if item.status == "open":
+        return "ongoing"
+    return "unknown"
+
+
+def _matches_recommendation_query(item: RecommendationResult, query: str | None) -> bool:
+    """Search the same user-facing policy fields used by the policy list."""
+    normalized_query = (query or "").strip().casefold()
+    if not normalized_query:
+        return True
+
+    searchable_text = "\n".join(
+        part
+        for part in (
+            item.title,
+            item.summary,
+            item.organization,
+            item.support_type,
+            item.support_content,
+            *item.reasons,
+        )
+        if part
+    ).casefold()
+    return normalized_query in searchable_text
 
 
 @router.post("/preview", response_model=RecommendationPreviewResponse, summary="프로필 기반 맞춤 정책 추천")
@@ -44,6 +75,11 @@ def preview_recommendations(
         default=["all"],
         description="추천 상태를 하나 이상 선택합니다. 반복 query parameter로 전달합니다.",
     ),
+    schedule: list[Literal["all", "period", "ongoing", "unknown"]] = Query(
+        default=["all"],
+        description="신청 일정 기준 필터입니다. 반복 query parameter로 period·ongoing·unknown을 함께 선택할 수 있습니다.",
+    ),
+    q: str | None = Query(default=None, max_length=200, description="제목·지원 내용 검색어"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -53,7 +89,7 @@ def preview_recommendations(
             detail="정책 추천과 관련된 질문을 입력해 주세요.",
         )
 
-    all_results, vector_used, total_candidates = recommend_policies(
+    all_results, vector_used, _total_candidates = recommend_policies(
         db=db,
         profile=profile,
         # 상태별 필터와 페이지네이션은 동일한 전체 순위에서 적용해야
@@ -61,16 +97,28 @@ def preview_recommendations(
         limit=1000,
         model_mode=get_user_model_mode(current_user, "recommendation"),
     )
+    searched_results = [item for item in all_results if _matches_recommendation_query(item, q)]
     status_counts = {
-        "eligible": sum(item.match_status == "eligible" for item in all_results),
-        "needs_review": sum(item.match_status == "needs_review" for item in all_results),
-        "near_match": sum(item.match_status == "near_match" for item in all_results),
+        "eligible": sum(item.match_status == "eligible" for item in searched_results),
+        "needs_review": sum(item.match_status == "needs_review" for item in searched_results),
+        "near_match": sum(item.match_status == "near_match" for item in searched_results),
     }
+    schedule_counts = {
+        "period": sum(_schedule_kind(item) == "period" for item in searched_results),
+        "ongoing": sum(_schedule_kind(item) == "ongoing" for item in searched_results),
+        "unknown": sum(_schedule_kind(item) == "unknown" for item in searched_results),
+    }
+    selected_schedules = set(schedule)
+    schedule_results = (
+        searched_results
+        if not selected_schedules or "all" in selected_schedules
+        else [item for item in searched_results if _schedule_kind(item) in selected_schedules]
+    )
     selected_statuses = set(status)
     filtered_results = (
-        all_results
+        schedule_results
         if not selected_statuses or "all" in selected_statuses
-        else [item for item in all_results if item.match_status in selected_statuses]
+        else [item for item in schedule_results if item.match_status in selected_statuses]
     )
     results = filtered_results[skip : skip + limit]
     profile_warnings = profile_validation_warnings(profile)
@@ -98,13 +146,14 @@ def preview_recommendations(
         )
     return RecommendationPreviewResponse(
         chat_session_id=chat_session.id if chat_session else None,
-        total_candidates=total_candidates,
+        total_candidates=len(searched_results),
         filtered_candidates=len(filtered_results),
         returned=len(results),
         skip=skip,
         limit=limit,
         has_next=skip + len(results) < len(filtered_results),
         status_counts=status_counts,
+        schedule_counts=schedule_counts,
         vector_used=vector_used,
         profile_warnings=profile_warnings,
         results=results,

@@ -6,11 +6,13 @@ const SUPPORT_TYPE_LABELS: Record<string, string> = {
   현물: '현물 지원',
   융자: '융자',
   보조금: '보조금',
+  기술지원: '기술 지원',
 }
 
 function getSupportTypeLabels(value: string) {
   const tokens = value
-    .replace(/기타\(([^)]*)\)/g, ' $1 ')
+    .replace(/\*+/g, ' ')
+    .replace(/기타\s*\(([^)]*)\)/g, ' $1 ')
     .split(/[,/|·;\s]+/)
     .map((token) => token.trim())
     .filter(Boolean)

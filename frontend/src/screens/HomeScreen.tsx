@@ -11,7 +11,7 @@ import {
   StatusBadge,
   TagList,
 } from '../components/ui'
-import { getKstTodayLabel, localDateKey, toDateKey } from '../lib/calendar'
+import { getKstTodayLabel, localDateKey } from '../lib/calendar'
 import { getDeadlineInfo, formatPeriod } from '../lib/deadline'
 import { TODAY } from '../lib/format'
 import { getPolicyLabels } from '../lib/policyLabels'
@@ -173,38 +173,16 @@ export default function HomeScreen() {
       .sort((a, b) => a.date.localeCompare(b.date) || (a.time ?? '').localeCompare(b.time ?? ''))
   }, [googleEvents, todayKey])
 
-  const upcomingSavedPolicies = useMemo(() => {
-    return policies
-      .filter((p) => {
-        const key = toDateKey(p.apply_end)
-        return Boolean(key && key >= todayKey)
-      })
-      .sort((a, b) => (toDateKey(a.apply_end) || '').localeCompare(toDateKey(b.apply_end) || ''))
-  }, [policies, todayKey])
-
-  const hasUpcomingPolicies = upcomingGoogleEvents.length > 0 || upcomingSavedPolicies.length > 0
-
   // AI 코치 타깃 결정
-  // 1) 미래 날짜(selected >= todayKey)를 클릭했고 오늘부터 선택 날짜 사이에 정책이 포함된 경우:
-  //    -> 해당 기간 내 정책 공고들을 묶어서 통합 AI 코칭 (공통 서류 일괄 발급 + 마감순 타임라인)
-  // 2) 날짜 미선택, 과거 날짜, 또는 선택 기간 내 정책이 없는 경우:
-  //    -> 가장 가까운 미래 마감 정책 1개만 단일 코칭
+  // 소복소복으로 구글 캘린더에 등록한 정책 일정만 안내 대상으로 삼는다.
+  // 1) 미래 날짜를 클릭했고 오늘부터 선택 날짜 사이에 등록 일정이 있으면 통합 코칭
+  // 2) 그 외에는 가장 가까운 등록 일정 한 건을 단일 코칭
   const resolvedCoachTarget = useMemo<{ policyIds: string[]; targetDate: string; isMulti: boolean } | null>(() => {
-    if (!hasUpcomingPolicies) return null
+    if (upcomingGoogleEvents.length === 0) return null
 
     if (selected >= todayKey) {
       const googleEvsInRange = upcomingGoogleEvents.filter((ev) => ev.date <= selected && Boolean(ev.policy_id))
-      const savedPoliciesInRange = upcomingSavedPolicies.filter((p) => {
-        const key = toDateKey(p.apply_end)
-        return Boolean(key && key <= selected)
-      })
-
-      const inRangePolicyIds = Array.from(
-        new Set([
-          ...googleEvsInRange.map((ev) => ev.policy_id!),
-          ...savedPoliciesInRange.map((p) => p.policy_id),
-        ]),
-      )
+      const inRangePolicyIds = Array.from(new Set(googleEvsInRange.map((ev) => ev.policy_id!)))
 
       if (inRangePolicyIds.length > 0) {
         return {
@@ -215,17 +193,9 @@ export default function HomeScreen() {
       }
     }
 
-    if (upcomingGoogleEvents.length > 0) {
-      const nearest = upcomingGoogleEvents[0]
-      return { policyIds: [nearest.policy_id!], targetDate: nearest.date, isMulti: false }
-    }
-    if (upcomingSavedPolicies.length > 0) {
-      const nearest = upcomingSavedPolicies[0]
-      return { policyIds: [nearest.policy_id], targetDate: toDateKey(nearest.apply_end)!, isMulti: false }
-    }
-
-    return null
-  }, [hasUpcomingPolicies, selected, todayKey, upcomingGoogleEvents, upcomingSavedPolicies])
+    const nearest = upcomingGoogleEvents[0]
+    return { policyIds: [nearest.policy_id!], targetDate: nearest.date, isMulti: false }
+  }, [selected, todayKey, upcomingGoogleEvents])
 
   const handleCoachTimeline = async () => {
     if (googleEventsError) {
@@ -233,7 +203,10 @@ export default function HomeScreen() {
       return
     }
 
-    if (!resolvedCoachTarget || resolvedCoachTarget.policyIds.length === 0) return
+    if (!resolvedCoachTarget || resolvedCoachTarget.policyIds.length === 0) {
+      alert('캘린더에 등록한 소복소복 정책 일정이 없어요. 정책 카드에서 일정을 등록한 뒤 다시 안내받아 보세요.')
+      return
+    }
     if (loadingCoach) return
 
     setCoachGuide(null)
@@ -456,15 +429,13 @@ export default function HomeScreen() {
         <Button variant="secondary" full onClick={() => navigate('/policies')}>
           <Compass size={16} /> 다른 정책 더 찾아보기
         </Button>
-        <Button onClick={handleCoachTimeline} disabled={loadingCoach || !hasUpcomingPolicies} full>
+        <Button onClick={handleCoachTimeline} disabled={loadingCoach} full>
           {loadingCoach ? (
             <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
           ) : (
             <CalendarDays size={16} />
           )}
-          {!hasUpcomingPolicies
-            ? '안내 가능한 남은 정책 일정이 없습니다'
-            : '신청 일정 안내 받기'}
+          신청 일정 안내 받기
         </Button>
       </div>
 

@@ -65,6 +65,7 @@ export interface RecommendationResult {
   support_type?: string | null
   support_content?: string | null
   apply_url?: string | null
+  apply_start?: string | null
   apply_end?: string | null
   /** 상시 접수(open)와 기간 확인 필요(notice)를 가른다 */
   status?: string | null
@@ -90,6 +91,7 @@ export interface RecommendationPreviewResponse {
   limit: number
   has_next: boolean
   status_counts: Record<'eligible' | 'needs_review' | 'near_match', number>
+  schedule_counts: Record<'period' | 'ongoing' | 'unknown', number>
   vector_used: boolean
   profile_warnings: string[]
   results: RecommendationResult[]

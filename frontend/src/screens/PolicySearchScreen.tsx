@@ -11,15 +11,15 @@ import type { RecommendationPreviewResponse, SavedPolicy } from '../types'
 type Tab = 'recommend' | 'saved' | 'all'
 type AllSort = 'deadline' | 'latest'
 type AllStatus = 'available' | 'all'
-type RecommendationStatus = 'eligible' | 'needs_review' | 'near_match'
+type RecommendationSchedule = 'period' | 'ongoing' | 'unknown'
 
 const ALL_PAGE_SIZE = 12
 const RECOMMENDATION_PAGE_SIZE = ALL_PAGE_SIZE
 const ALL_SIDO_OPTIONS = ['전체', ...Object.keys(REGION_MAP)]
-const RECOMMENDATION_FILTERS: { key: RecommendationStatus; label: string }[] = [
-  { key: 'eligible', label: '바로 확인 가능' },
-  { key: 'needs_review', label: '조건 확인 필요' },
-  { key: 'near_match', label: '유사 정책' },
+const RECOMMENDATION_SCHEDULE_FILTERS: { key: RecommendationSchedule; label: string }[] = [
+  { key: 'period', label: '기간 있는 공고' },
+  { key: 'unknown', label: '기간 확인 필요' },
+  { key: 'ongoing', label: '상시 접수' },
 ]
 
 // 추천을 기본 진입 탭으로 둔다. 앱의 핵심 가치이고, '정책 찾기'를 눌렀을 때
@@ -62,11 +62,10 @@ export default function PolicySearchScreen() {
     filtered: number
     returned: number
     hasNext: boolean
-    statusCounts: RecommendationPreviewResponse['status_counts']
+    scheduleCounts: RecommendationPreviewResponse['schedule_counts']
   } | null>(null)
-  // 기본값으로 '바로 확인 가능'('eligible') 상태를 선택해 둔다. 아무 상태도 선택하지 않으면
-  // 전체 추천을 보여주며, 여러 상태를 동시에 선택하면 선택한 상태들의 합집합을 한 목록으로 보여준다.
-  const [recFilters, setRecFilters] = useState<RecommendationStatus[]>(['eligible'])
+  // 아무 기간 필터도 선택하지 않으면 전체 추천을 보여준다.
+  const [recSchedules, setRecSchedules] = useState<RecommendationSchedule[]>([])
   const [recPage, setRecPage] = useState(0)
   const [recPageInput, setRecPageInput] = useState('1')
   const [profileWarnings, setProfileWarnings] = useState<string[]>([])
@@ -78,7 +77,7 @@ export default function PolicySearchScreen() {
   const [allLoading, setAllLoading] = useState(false)
   const [allError, setAllError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState('')
-  const [allQuery, setAllQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [allCategory, setAllCategory] = useState('')
   const [allSido, setAllSido] = useState('')
   const [allStatus, setAllStatus] = useState<AllStatus>('available')
@@ -100,11 +99,12 @@ export default function PolicySearchScreen() {
       skip: String(recPage * RECOMMENDATION_PAGE_SIZE),
       limit: String(RECOMMENDATION_PAGE_SIZE),
     })
-    if (recFilters.length === 0) {
-      params.set('status', 'all')
+    if (recSchedules.length === 0) {
+      params.set('schedule', 'all')
     } else {
-      recFilters.forEach((filter) => params.append('status', filter))
+      recSchedules.forEach((schedule) => params.append('schedule', schedule))
     }
+    if (searchQuery) params.set('q', searchQuery)
     try {
       const data = await apiFetch<RecommendationPreviewResponse>(
         `/api/v1/recommend/preview?${params.toString()}`,
@@ -115,7 +115,7 @@ export default function PolicySearchScreen() {
         filtered: data.filtered_candidates,
         returned: data.returned,
         hasNext: data.has_next,
-        statusCounts: data.status_counts,
+        scheduleCounts: data.schedule_counts,
       })
       setProfileWarnings(data.profile_warnings || [])
       setRecommendations(
@@ -124,6 +124,7 @@ export default function PolicySearchScreen() {
           title: item.title,
           summary: item.summary,
           support_type: item.support_type,
+          apply_start: item.apply_start,
           apply_end: item.apply_end,
           status: item.status,
           rank_score: item.rank_score,
@@ -140,7 +141,7 @@ export default function PolicySearchScreen() {
     } finally {
       setRecLoading(false)
     }
-  }, [profile, recFilters, recPage])
+  }, [profile, recPage, recSchedules, searchQuery])
 
   const loadAll = useCallback(async () => {
     setAllLoading(true)
@@ -151,7 +152,7 @@ export default function PolicySearchScreen() {
       status: allStatus,
       sort: allSort,
     })
-    if (allQuery) params.set('q', allQuery)
+    if (searchQuery) params.set('q', searchQuery)
     if (allCategory) params.set('category', allCategory)
     if (allSido) params.set('sido', allSido)
 
@@ -183,7 +184,7 @@ export default function PolicySearchScreen() {
     } finally {
       setAllLoading(false)
     }
-  }, [allCategory, allPage, allQuery, allSido, allSort, allStatus])
+  }, [allCategory, allPage, allSido, allSort, allStatus, searchQuery])
 
   useEffect(() => {
     setRecPageInput(String(recPage + 1))
@@ -206,6 +207,7 @@ export default function PolicySearchScreen() {
   }
 
   const savedCards: PolicyCardData[] = [...saved]
+    .filter((policy) => matchesPolicySearch(policy, searchQuery))
     .filter((policy) => !savedCategory || policy.categories?.includes(savedCategory))
     .filter(
       (policy) =>
@@ -245,18 +247,18 @@ export default function PolicySearchScreen() {
   const runPolicySearch = () => {
     const query = searchInput.trim()
     setSearchInput(query)
-    setAllQuery(query)
+    setSearchQuery(query)
     setAllMeta(null)
+    setRecPage(0)
     setAllPage(0)
-    setTab('all')
   }
 
   const clearPolicySearch = () => {
     setSearchInput('')
-    setAllQuery('')
+    setSearchQuery('')
     setAllMeta(null)
+    setRecPage(0)
     setAllPage(0)
-    setTab('all')
   }
 
   return (
@@ -337,7 +339,9 @@ export default function PolicySearchScreen() {
               <div className="flex items-center justify-between gap-3">
                 <p className="text-sm font-semibold text-ink">
                   {recMeta
-                    ? `${recMeta.total}개 후보 중 ${recMeta.filtered}개 정책`
+                    ? searchQuery
+                      ? `추천 검색 결과 ${recMeta.filtered}개`
+                      : `맞춤 추천 ${recMeta.filtered}개`
                     : '맞춤 정책을 확인하고 있어요'}
                 </p>
                 <button
@@ -348,12 +352,17 @@ export default function PolicySearchScreen() {
                   <RefreshCw size={16} className={recLoading ? 'animate-spin' : ''} />
                 </button>
               </div>
+              {searchQuery && (
+                <p className="mt-1 line-clamp-1 text-xs font-medium text-muted">
+                  검색어 ‘{searchQuery}’
+                </p>
+              )}
 
-              <p className="mt-2.5 text-xs font-semibold text-muted">추천 상태</p>
+              <p className="mt-2.5 text-xs font-semibold text-muted">신청 기간</p>
               <div className="mt-1.5 grid grid-cols-3 gap-1.5">
-                {RECOMMENDATION_FILTERS.map((filter) => {
-                  const count = recMeta?.statusCounts[filter.key]
-                  const active = recFilters.includes(filter.key)
+                {RECOMMENDATION_SCHEDULE_FILTERS.map((filter) => {
+                  const count = recMeta?.scheduleCounts[filter.key]
+                  const active = recSchedules.includes(filter.key)
                   return (
                     <CategoryChip
                       key={filter.key}
@@ -361,11 +370,10 @@ export default function PolicySearchScreen() {
                       active={active}
                       label={`${filter.label}${count === undefined ? '' : ` ${count}`}`}
                       onClick={() => {
-                        const status = filter.key
-                        setRecFilters((current) =>
-                          current.includes(status)
-                            ? current.filter((selected) => selected !== status)
-                            : [...current, status],
+                        setRecSchedules((current) =>
+                          current.includes(filter.key)
+                            ? current.filter((selected) => selected !== filter.key)
+                            : [...current, filter.key],
                         )
                         setRecPage(0)
                       }}
@@ -399,9 +407,11 @@ export default function PolicySearchScreen() {
               {!recLoading && !recError && recommendations.length === 0 && (
                 <InfoBox
                   message={
-                    recFilters.length > 0
-                      ? '선택한 분류에 해당하는 추천 정책이 없어요. 다른 분류를 선택해보세요.'
-                      : '조건에 맞는 정책을 찾지 못했어요. 마이페이지에서 정보를 수정해보세요.'
+                    searchQuery
+                      ? '추천 정책에서 검색 결과가 없어요. 검색어를 줄이거나 다른 표현으로 찾아보세요.'
+                      : recSchedules.length > 0
+                        ? '선택한 신청 기간 분류에 맞는 맞춤 정책이 없어요. 다른 분류를 선택해보세요.'
+                        : '조건에 맞는 정책을 찾지 못했어요. 마이페이지에서 정보를 수정해보세요.'
                   }
                 />
               )}
@@ -426,7 +436,14 @@ export default function PolicySearchScreen() {
         {tab === 'saved' && (
           <div className="space-y-3">
             <div className="surface-panel p-3">
-              <p className="text-sm font-semibold text-ink">저장한 정책 {savedCards.length}개</p>
+              <p className="text-sm font-semibold text-ink">
+                {searchQuery ? `저장한 정책 검색 결과 ${savedCards.length}개` : `저장한 정책 ${savedCards.length}개`}
+              </p>
+              {searchQuery && (
+                <p className="mt-1 line-clamp-1 text-xs font-medium text-muted">
+                  검색어 ‘{searchQuery}’
+                </p>
+              )}
               <p className="mt-2.5 text-xs font-semibold text-muted">지원 분야</p>
               <div className="mt-1.5 grid grid-cols-4 gap-1.5">
                 <CategoryChip
@@ -498,7 +515,13 @@ export default function PolicySearchScreen() {
               />
             )}
             {!savedLoading && saved.length > 0 && savedCards.length === 0 && (
-              <InfoBox message="선택한 조건으로 저장한 정책이 없어요. 다른 필터를 선택해보세요." />
+              <InfoBox
+                message={
+                  searchQuery
+                    ? '저장한 정책에서 검색 결과가 없어요. 검색어를 줄이거나 다른 표현으로 찾아보세요.'
+                    : '선택한 조건으로 저장한 정책이 없어요. 다른 필터를 선택해보세요.'
+                }
+              />
             )}
             {savedCards.length > 0 && (
               <div className="surface-panel divide-y divide-line overflow-hidden">
@@ -520,7 +543,7 @@ export default function PolicySearchScreen() {
           <div className="space-y-3">
             <div className="surface-panel p-3">
               <p className="text-sm font-semibold text-ink">
-                {allQuery
+                {searchQuery
                   ? allMeta
                     ? `검색 결과 ${allMeta.total}개`
                     : '검색 결과를 확인하고 있어요'
@@ -528,9 +551,9 @@ export default function PolicySearchScreen() {
                     ? `${allMeta.total}개 정책`
                     : '전체 정책'}
               </p>
-              {allQuery && (
+              {searchQuery && (
                 <p className="mt-1 line-clamp-1 text-xs font-medium text-muted">
-                  검색어 ‘{allQuery}’
+                  검색어 ‘{searchQuery}’
                 </p>
               )}
 
@@ -626,7 +649,7 @@ export default function PolicySearchScreen() {
             {!allLoading && !allError && all.length === 0 && (
               <InfoBox
                 message={
-                  allQuery
+                  searchQuery
                     ? '검색 결과가 없어요. 검색어를 줄이거나 다른 표현으로 찾아보세요.'
                     : '조건에 맞는 정책이 없어요. 다른 분야나 지역을 선택해보세요.'
                 }
@@ -662,6 +685,17 @@ function RefetchOnTab({ tab, onSavedTab }: { tab: Tab; onSavedTab: () => void })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab])
   return null
+}
+
+function matchesPolicySearch(policy: SavedPolicy, query: string) {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  if (!normalizedQuery) return true
+
+  return [policy.title, policy.summary, policy.organization, policy.support_type]
+    .filter((value): value is string => Boolean(value))
+    .join('\n')
+    .toLocaleLowerCase()
+    .includes(normalizedQuery)
 }
 
 function InfoBox({ message }: { message: string }) {
