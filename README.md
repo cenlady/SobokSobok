@@ -1,206 +1,280 @@
-# SobokSobok
+<div align="center">
+  <img src="./frontend/src/assets/sobok-assistant-bot.png" width="150" alt="소복소복 AI 도우미" />
 
-소상공인 지원사업 공고를 수집하고, 사용자에게 정책/혜택 정보를 제공하기 위한 서비스입니다.
+  <h1>소복소복 (SobokSobok)</h1>
 
-## 현재 제공 기능
+  <p>
+    <strong>흩어진 소상공인 지원정책을 한곳에 모아,<br />
+    발견부터 신청 준비까지 함께하는 맞춤형 정책 도우미</strong>
+  </p>
 
-- 소상공인24·SEMAS·Gov24 정책 수집, 첨부파일 본문 추출, 공통 정책 스키마 정규화
-- 사업장 프로필 기반 정책 추천과 저장한 정책의 마감일 캘린더 표시
-- 전체 정책 벡터 검색, 정책 선택 후 부모 문서 기반 후속 질문, SSE 스트리밍 채팅
-- Google Calendar 일정 등록·조회와 실제 정책 마감일 기반 AI 신청 준비 코칭
-- 제출 서류 로컬 파싱, 정책 요건 대조, 자주 쓰는 서류의 발급 가이드 검색
-- 챗봇·추천·정책 요약·캘린더 코치·서류검토별 cloud/local 모델 선택
+  <p>
+    <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19" />
+    <img src="https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 6" />
+    <img src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+    <img src="https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL pgvector" />
+    <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
+  </p>
 
-신규 온보딩의 활동지역 기본값은 `서울특별시 전체`입니다. `전체`는 특정 구로 제한하지
-않는다는 뜻이며, 저장 시 시도는 `서울특별시`, 시군구는 제한 없음으로 처리합니다.
+  <p>
+    <a href="#-서비스-화면">서비스 화면</a> ·
+    <a href="#-주요-기능">주요 기능</a> ·
+    <a href="#-서비스-구조">서비스 구조</a> ·
+    <a href="#-빠른-시작">빠른 시작</a> ·
+    <a href="#-프로젝트-구조">프로젝트 구조</a>
+  </p>
+</div>
 
-## 실행 방법
+---
 
-### 0. 사전 준비
+## 소복소복은
 
-- **Docker Desktop** 실행 중일 것
-- **Node.js 20+**
-- 로컬 AI 또는 서류검토를 사용할 PC에서는 **Ollama** 실행 중 + 모델 2개 설치
+소상공인 지원사업은 여러 기관에 흩어져 있고, 공고마다 표현 방식도 달라 나에게 맞는
+정책을 찾고 제출 서류와 마감일을 관리하기 어렵습니다.
 
-```bash
-ollama pull bge-m3        # 로컬 검색 + 서류검토 임베딩 (1024차원)
-ollama pull exaone3.5     # 로컬 챗/추천/캘린더 코치 + 서류검토 진단
-ollama list               # 두 개 다 보이면 OK
+소복소복은 **소상공인24, 소상공인시장진흥공단(SEMAS), 정부24**의 정책 공고를 수집하고
+하나의 형식으로 정리합니다. 사용자의 사업장 정보에 맞는 정책을 추천하고, 근거가 있는
+AI 답변과 일정·서류 관리 기능으로 실제 신청 준비까지 이어 줍니다.
+
+## 📱 서비스 화면
+
+<table>
+  <tr>
+    <th align="center">내 정책 달력</th>
+    <th align="center">맞춤 정책 추천</th>
+    <th align="center">제출 서류 검토</th>
+  </tr>
+  <tr>
+    <td>
+      <img src="./docs/images/soboksobok-home.png" alt="저장한 정책의 마감일을 보여주는 소복소복 홈 화면" />
+    </td>
+    <td>
+      <img src="./docs/images/soboksobok-policies.png" alt="사용자 조건에 맞는 지원정책 추천 화면" />
+    </td>
+    <td>
+      <img src="./docs/images/soboksobok-review.png" alt="정책을 선택하고 제출 서류를 검토하는 화면" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">저장한 정책과 마감일을 한눈에</td>
+    <td align="center">사업장 조건에 맞는 정책과 추천 이유</td>
+    <td align="center">요구 서류 대조와 누락 항목 확인</td>
+  </tr>
+</table>
+
+## ✨ 주요 기능
+
+| 기능 | 설명 |
+| --- | --- |
+| **정책 통합 수집** | 여러 공공기관의 공고와 첨부파일을 주기적으로 수집하고 공통 스키마로 정규화합니다. |
+| **맞춤 정책 추천** | 지역, 업종, 사업장 규모 등 사용자 프로필을 바탕으로 신청 가능한 정책과 추천 이유를 제공합니다. |
+| **정책 AI 상담** | 전체 정책을 검색하거나 선택한 정책의 원문을 근거로 후속 질문에 답합니다. 답변은 SSE로 실시간 스트리밍됩니다. |
+| **마감일 캘린더** | 저장한 정책의 실제 접수 마감일을 관리하고 Google Calendar와 연동합니다. |
+| **AI 신청 코치** | 정책 마감일, 필요한 준비 기간, 개인 일정을 조합해 단계별 신청 준비 일정을 제안합니다. |
+| **제출 서류 검토** | 업로드한 서류를 로컬에서 파싱한 뒤 정책 요구사항과 대조하고, 누락 항목과 발급 방법을 안내합니다. |
+| **클라우드·로컬 AI 선택** | 챗봇, 추천, 요약, 일정 코치, 서류 검토별로 OpenAI 또는 Ollama를 선택할 수 있습니다. |
+
+## 🔄 이용 흐름
+
+```text
+Google 로그인
+  → 사업장 프로필 등록
+  → 맞춤 정책 탐색·저장
+  → 정책 상세 확인 및 AI 상담
+  → 마감 일정 등록
+  → 제출 서류 검토와 신청 준비
 ```
 
-> 기본 사용자 설정은 `클라우드 AI(OpenAI)`입니다. 다만 서류검토는 개인정보 보호를
-> 위해 기본적으로 Ollama만 사용하므로, 서류검토 기능에는 Ollama가 필요합니다.
+## 🏗 서비스 구조
 
-### 1. `.env` 만들기
+```mermaid
+flowchart TB
+    subgraph Sources["공공 정책 데이터"]
+        SBIZ["소상공인24"]
+        SEMAS["SEMAS"]
+        GOV["정부24"]
+    end
+
+    subgraph Pipeline["데이터 파이프라인"]
+        Crawler["정책·첨부파일 수집"]
+        Extract["첨부파일 본문 추출"]
+        Normalize["정책 공통 스키마 정규화"]
+        Embed["용도별 이중 임베딩"]
+        Crawler --> Extract --> Normalize --> Embed
+    end
+
+    subgraph Backend["FastAPI 백엔드"]
+        API["REST API · SSE"]
+        Services["추천 · RAG 상담 · 서류 검토 · 일정 코치"]
+        API <--> Services
+    end
+
+    subgraph Data["데이터 저장소"]
+        DB[("PostgreSQL + pgvector")]
+        Files[("첨부파일 스토리지")]
+    end
+
+    Web["React Web"] <--> API
+    SBIZ --> Crawler
+    SEMAS --> Crawler
+    GOV --> Crawler
+    Embed --> DB
+    Extract --> Files
+    DB <--> Services
+    Files <--> Services
+    AI["OpenAI / Ollama"] <--> Services
+    Google["Google OAuth / Calendar"] <--> API
+```
+
+정책 원문과 용도별 벡터는 PostgreSQL에 함께 저장합니다. 클라우드와 로컬 임베딩은
+서로 다른 컬럼으로 관리해 모델별 차원이 섞이지 않으며, 변경되거나 누락된 데이터만
+증분 갱신합니다.
+
+## 🛠 기술 스택
+
+| 영역 | 기술 |
+| --- | --- |
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, React Router |
+| Backend | Python, FastAPI, SQLAlchemy, LangGraph |
+| Database | PostgreSQL 16, pgvector |
+| AI / RAG | OpenAI, Ollama, 이중 임베딩 검색, SSE Streaming |
+| External | Google OAuth 2.0, Google Calendar API |
+| Infrastructure | Docker Compose, Nginx |
+
+## 🚀 빠른 시작
+
+### 1. 사전 준비
+
+- Docker Desktop
+- Google OAuth 클라이언트
+- 기본 클라우드 AI를 사용할 경우 OpenAI API 키
+- 로컬 AI 또는 로컬 서류 검토를 사용할 경우 [Ollama](https://ollama.com/)
+
+로컬 AI를 사용한다면 먼저 모델을 준비합니다.
 
 ```bash
+ollama pull bge-m3
+ollama pull exaone3.5
+```
+
+### 2. 저장소 및 환경변수 설정
+
+```bash
+git clone https://github.com/cenlady/SobokSobok.git
+cd SobokSobok
 cp .env.example .env
 ```
 
-**`.env`에 키를 채워 넣으세요. 값은 팀장에게 받으세요.** (`.env`는 커밋 금지)
+Windows PowerShell에서는 마지막 명령 대신 아래 명령을 사용합니다.
 
-| 키 | 없으면 |
+```powershell
+Copy-Item .env.example .env
+```
+
+생성한 `.env`에서 다음 주요 값을 설정합니다.
+
+| 환경변수 | 용도 |
 | --- | --- |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | **로그인이 안 돼 앱을 아예 못 씁니다** |
-| `OPENAI_API_KEY` | 기본 클라우드 AI와 정책 정규화가 동작하지 않습니다 |
-| `GEMINI_API_KEY` | `.env`에서 Gemini provider를 선택한 기능만 동작하지 않습니다 |
+| `DB_PASSWORD` | 로컬 PostgreSQL 비밀번호 |
+| `GOOGLE_CLIENT_ID` | Google 로그인 클라이언트 ID |
+| `GOOGLE_CLIENT_SECRET` | Google 로그인 클라이언트 시크릿 |
+| `OPENAI_API_KEY` | 클라우드 AI와 기본 정책 정규화 |
+| `GOV24_SERVICE_KEY` | 정부24 OpenAPI 수집(선택) |
 
-### AI 모델 선택과 기본값
+Google Cloud Console의 승인된 리디렉션 URI에는 다음 주소를 등록해야 합니다.
 
-마이페이지의 `AI 기능 설정`에서 기능별로 `클라우드 AI` 또는 `로컬 AI`를 선택할 수 있습니다.
-
-| 기능 | 기본/클라우드 AI | 로컬 AI | 비고 |
-| --- | --- | --- | --- |
-| 챗봇 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
-| 정책 추천 설명 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
-| 정책 상세 요약 | OpenAI `gpt-4o-mini` | Ollama `exaone3.5` | 사용자 프로필 선택 적용 |
-| 정책 정규화 | OpenAI `gpt-5.4-nano` | `.env`로 변경 가능 | 사용자와 무관한 배치 작업 |
-| 캘린더 AI 코치 | OpenAI `gpt-5-mini` | Ollama `exaone3.5` | 캘린더 CRUD에는 LLM 미사용 |
-| 서류검토 | OpenAI `gpt-5.4-mini` | Ollama `exaone3.5` | 프로필 기본값은 로컬, 파일 파싱은 항상 로컬 |
-
-챗봇·추천·서류 요건·서류 발급 가이드 검색은 사용자 선택을 즉시 바꿀 수 있도록 두 임베딩을 모두 저장합니다.
-OpenAI `text-embedding-3-small` 1536차원과 Ollama `bge-m3` 1024차원은 각각 별도
-pgvector 컬럼에 저장되며 같은 컬럼에 섞이지 않습니다. 기능별 상세 변수와 변경 가능한
-모델 예시는 [`.env.example`](./.env.example)의 주석을 확인하세요.
-
-각 테이블은 `embedding_openai`와 `embedding_ollama`만 사용하며 레거시 `embedding` 컬럼은
-사용하지 않습니다. 크롤러는 시작 직후와 매 수집 주기마다 원문·모델·벡터 상태를 비교해
-신규·변경·누락 데이터만 임베딩합니다. 값이 같으면 OpenAI/Ollama 호출을 하지 않습니다.
-
-### 채팅과 캘린더 동작 원칙
-
-- 전체 정책 채팅은 사용자 모드와 같은 벡터 컬럼으로 후보를 검색합니다. 정책이 선택된
-  후속 질문은 임베딩 검색 대신 해당 정책의 `policy_documents` 부모 문서를 읽습니다.
-- 일반 응답과 SSE 스트리밍 응답은 같은 정책 문맥·후보 선택·집중 속성 답변 로직을 사용합니다.
-- 캘린더 코치는 `normalized_policies.apply_end`를 실제 마감일로 고정합니다. 선택적인
-  `target_date`는 오늘부터 실제 마감일까지의 준비 완료 목표일로만 허용합니다.
-- Google Calendar의 정상적인 일정 0건과 권한·통신·시간 초과 오류를 구분합니다. 조회 실패를
-  빈 일정으로 바꿔 AI에게 전달하지 않습니다.
-- 캘린더 코치는 사용자 cloud/local 설정에 맞는 `prep_vectors` 발급 가이드와 같은 모드의
-  채팅 모델을 사용합니다. 캘린더 일정 등록·조회 자체에는 LLM을 사용하지 않습니다.
-
-```bash
-docker compose up -d --build --force-recreate api crawler
+```text
+http://localhost:8000/api/v1/auth/google/callback
 ```
 
-자동 작업을 기다리지 않고 증분 작업을 수동 실행할 때도 기본값은 변경분 처리입니다.
+모든 설정값과 기능별 모델 변경 방법은 [`.env.example`](./.env.example)을 참고하세요.
 
-```bash
-docker compose exec api python -m app.jobs.embed_policy_chunks_once
-docker compose exec api python -m app.jobs.build_rec_vectors_once
-docker compose exec api python -m app.jobs.build_review_vectors_once
-docker compose exec api python -m app.jobs.build_prep_vectors_once
-```
-
-채팅 청크 전체 재생성은 `embed_policy_chunks_once --force`, 검토 벡터 전체 재생성은
-`build_review_vectors_once --rebuild`처럼 명시적으로 요청할 때만 수행합니다.
-
-개발 DB를 새 스키마로 완전히 다시 만들 때는 코드 변경 후 `docker compose down -v`를
-실행합니다. 이 명령은 회원·정책·채팅을 포함한 PostgreSQL 데이터를 모두 삭제합니다.
-
-### 2. 백엔드 (Docker)
+### 3. 실행
 
 ```bash
 docker compose up -d --build
 ```
 
-- `--build`는 **필수**입니다. `Dockerfile`이 코드를 이미지에 굽기 때문에(`COPY app ./app`),
-  `docker compose restart`로는 새 코드가 반영되지 않습니다.
-- **`.env`를 수정했다면** 컨테이너를 다시 만들어야 합니다. 환경변수는 컨테이너 생성 시점에
-  주입되므로 `restart`로는 갱신되지 않습니다.
+| 서비스 | 주소 |
+| --- | --- |
+| Web | [http://localhost:5173](http://localhost:5173) |
+| API | [http://localhost:8000](http://localhost:8000) |
+| Swagger | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| PostgreSQL | `localhost:5431` |
+
+상태와 로그는 다음 명령으로 확인할 수 있습니다.
 
 ```bash
-docker compose up -d --force-recreate api
+docker compose ps
+docker compose logs -f api
+docker compose logs -f crawler
 ```
 
-확인:
+종료할 때는 데이터베이스 볼륨을 유지하는 아래 명령을 사용합니다.
 
 ```bash
-curl http://localhost:8000/          # {"message": "Welcome to soboksobok API"}
+docker compose down
 ```
 
-- API 문서: http://localhost:8000/docs
-- 스키마 마이그레이션은 **서버 기동 시 자동**으로 돕니다. 별도 명령이 없습니다.
+## 💻 프론트엔드 로컬 개발
 
-### 3. 프론트엔드
+백엔드 서비스를 Docker로 실행한 뒤 Vite 개발 서버를 별도로 사용할 수 있습니다.
 
 ```bash
+docker compose up -d --build db api crawler
 cd frontend
 npm install
 npm run dev
 ```
 
-- **반드시 포트 5173에서 떠야 합니다.** 구글 로그인 콜백이 `http://localhost:5173/auth/callback`
-  으로 돌아오기 때문입니다. 다른 포트면 로그인이 끊깁니다.
-- 5173이 이미 쓰이고 있으면 Vite가 5174로 넘어갑니다. 그 경우 기존 프로세스를 먼저 종료하세요.
+Google 로그인 콜백을 위해 프론트엔드는 `5173` 포트를 사용해야 합니다.
 
-👉 **http://localhost:5173**
-
-### 4. 첫 진입 흐름
-
-```
-로그인 화면 → Google로 시작하기 → 구글 동의
-  → 온보딩 (프로필 입력)  ← 신규 계정은 반드시 거칩니다
-  → 홈 (달력)
-```
-
-### 5. 변경사항 검증
-
-백엔드 전체 테스트는 현재 소스를 API 이미지에 마운트해 실행합니다.
+## 🧪 테스트
 
 ```bash
+# Backend
 docker compose run --rm -T -v ./backend:/app api python -m pytest -q
-```
 
-프론트엔드는 정적 검사와 프로덕션 빌드를 모두 확인합니다.
-
-```bash
+# Frontend
 cd frontend
 npm run lint
 npm run build
 ```
 
----
-
-## 구글 로그인이 안 될 때
-
-| 증상 | 원인 | 해결 |
-| --- | --- | --- |
-| 로그인 버튼을 눌러도 아무 일 없음 | `.env`에 `GOOGLE_CLIENT_ID`/`SECRET`이 비어 있음 | 값을 채우고 `docker compose up -d --force-recreate api` |
-| 동의 후 **JSON 화면**이 뜸 | 옛 코드 (콜백이 JSON을 반환) | 최신 브랜치를 받고 `docker compose up -d --build` |
-| 동의 후 500 에러 | `users` 테이블에 구글 토큰 컬럼이 없음 | 최신 브랜치를 받고 `docker compose up -d --build` (기동 시 자동 패치) |
-| `redirect_uri_mismatch` | 구글 콘솔 설정 문제 | 콘솔에 `http://localhost:8000/api/v1/auth/google/callback` 등록 확인 |
-| 동의 후 빈 화면 | 프론트가 5173이 아님 | 5173으로 다시 띄우기 |
-
-**진단 명령**
-
-```bash
-# 구글 키가 컨테이너에 주입됐는지
-docker compose exec api python -c "from app.core.config import settings; print('ID:', bool(settings.GOOGLE_CLIENT_ID), '/ SECRET:', bool(settings.GOOGLE_CLIENT_SECRET))"
-
-# 로그인 URL이 정상 생성되는지 (500이면 키 문제)
-curl http://localhost:8000/api/v1/auth/google/login-url
-```
-
-## 로그가 보고 싶을 때
-
-```bash
-docker compose logs -f api        # 백엔드
-docker compose logs -f crawler    # 크롤러
-```
-
-모델 호출은 다음처럼 한 줄 메타데이터로 출력됩니다.
+## 📁 프로젝트 구조
 
 ```text
-model_call service=api feature=chat task=chat stage=answer_generation provider=openai model=gpt-5.4-mini source=app.services.chat_rag:generate_chat_answer input_type=text input_count=1 input_chars=1820 output_chars=420 result_count=1 dimensions=- latency_ms=812 status=success retry_count=0 error_type=-
+SobokSobok/
+├── frontend/                 # React 웹 애플리케이션
+│   └── src/
+│       ├── components/       # 공통 UI
+│       ├── lib/              # API·인증·유틸리티
+│       └── screens/          # 로그인, 정책, 채팅, 서류 검토 화면
+├── backend/                  # FastAPI 애플리케이션
+│   └── app/
+│       ├── api/              # REST·SSE 엔드포인트
+│       ├── crawlers/         # 기관별 정책 수집기
+│       ├── jobs/             # 수집·정규화·임베딩 작업
+│       ├── models/           # 데이터베이스 모델
+│       └── services/         # 추천, RAG, 서류 검토 로직
+├── docker-compose.yml        # 전체 서비스 실행 환경
+└── .env.example              # 환경변수 예시
 ```
 
-프롬프트·응답 원문·벡터·API 키·토큰·원본 파일명은 로그에 기록하지 않습니다.
+## 🤖 AI와 개인정보 처리
 
-### AI 호출 실패 처리
+- 서류 파일의 텍스트 추출은 AI 모드와 관계없이 로컬에서 수행합니다.
+- 서류 검토를 클라우드 모드로 선택하면 파싱된 내용이 외부 AI API로 전달될 수 있습니다.
+- 모델 호출 로그에는 프롬프트·응답 원문·벡터·API 키·원본 파일명을 기록하지 않습니다.
+- 기능별 클라우드·로컬 AI 설정은 마이페이지에서 변경할 수 있습니다.
 
-- 채팅/추천 설명/캘린더 AI 코치는 모델 연결 실패 시 임의의 정적 답변으로 대체하지 않습니다.
-- 연결 실패는 HTTP 502, 설정 오류는 503, 시간 초과는 504로 응답하며 `error_code`와 안전한 한국어 안내를 함께 반환합니다.
-- 비동기 서류검토 실패는 폴링 응답의 `review_status=failed`, `error_code`, `summary`로 확인합니다. SDK 오류 원문이나 개인정보는 저장·응답하지 않습니다.
-- `LLM_REQUEST_TIMEOUT_SECONDS`와 `LLM_EMBEDDING_TIMEOUT_SECONDS`로 공통 제한시간을 조정할 수 있습니다. 정규화와 서류검토는 각각 `NORMALIZE_LLM_TIMEOUT_SECONDS`, `REVIEW_LLM_TIMEOUT_SECONDS`가 우선합니다.
-- Google Calendar 권한 오류는 401/403, 외부 API 연결 실패는 502, 시간 초과는 504로 응답합니다. 오류가 발생한 캘린더를 일정 0건으로 처리하지 않습니다.
+## 📚 더 알아보기
+
+- [백엔드·크롤러 상세 가이드](./backend/README.md)
+- [프론트엔드 개발 가이드](./frontend/README.md)
+
+---
+
+<div align="center">
+  <strong>소상공인의 좋은 기회가 조용히 묻히지 않도록, 소복소복.</strong>
+</div>
